@@ -1,0 +1,18 @@
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.log
+*.pid
+logs/
+reports/
+
+# Local runtime data: clients, settings, cookies, browser state, uploads.
+data/
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
