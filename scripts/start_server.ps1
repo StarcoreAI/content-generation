@@ -92,38 +92,15 @@ try {
 catch {
     Write-Host "WMI start failed, falling back to clean ProcessStartInfo: $($_.Exception.Message)"
 
-    $psi = [System.Diagnostics.ProcessStartInfo]::new()
-    $psi.FileName = $python
-    $psi.Arguments = "-u `"$app`""
+    $outLog = Join-Path $logs "server.out.log"
+    $errLog = Join-Path $logs "server.err.log"
+
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = "cmd.exe"
+    $psi.Arguments = "/c start `"GEO Agent`" /min `"$python`" -u `"$app`""
     $psi.WorkingDirectory = $root
     $psi.UseShellExecute = $false
     $psi.CreateNoWindow = $true
-
-    $psi.EnvironmentVariables.Clear()
-    $pathValue = [System.Environment]::GetEnvironmentVariable("Path", "Process")
-    if (-not $pathValue) {
-        $pathValue = [System.Environment]::GetEnvironmentVariable("PATH", "Process")
-    }
-
-    $envMap = @{
-        "Path" = $pathValue
-        "SystemRoot" = $env:SystemRoot
-        "WINDIR" = $env:WINDIR
-        "TEMP" = $env:TEMP
-        "TMP" = $env:TMP
-        "USERPROFILE" = $env:USERPROFILE
-        "APPDATA" = $env:APPDATA
-        "LOCALAPPDATA" = $env:LOCALAPPDATA
-        "COMSPEC" = $env:COMSPEC
-        "PYTHONUTF8" = "1"
-        "PYTHONIOENCODING" = "utf-8"
-    }
-
-    foreach ($key in $envMap.Keys) {
-        if ($envMap[$key]) {
-            $psi.EnvironmentVariables[$key] = [string]$envMap[$key]
-        }
-    }
 
     $process = [System.Diagnostics.Process]::Start($psi)
     $createdPid = [int]$process.Id

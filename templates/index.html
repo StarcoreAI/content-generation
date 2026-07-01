@@ -144,11 +144,11 @@ tr:hover td{background:rgba(109,92,247,.02)}
 #toast.err{border-color:rgba(248,113,113,.4);color:#991b1b}
 
 /* Probe tag */
-.probe-item{display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.7);border:1.5px solid var(--border2);border-radius:var(--r-sm);margin-bottom:6px}
-.probe-num{font-size:10px;font-weight:900;color:var(--text3);min-width:22px}
-.probe-q{flex:1;font-size:12px;color:var(--text)}
-.probe-del{background:none;border:none;color:var(--text3);cursor:pointer;padding:2px 6px;border-radius:6px;font-size:16px;line-height:1}
-.probe-del:hover{color:var(--red)}
+.question-item{display:flex;align-items:center;gap:8px;padding:8px 10px;background:rgba(255,255,255,.7);border:1.5px solid var(--border2);border-radius:var(--r-sm);margin-bottom:6px}
+.question-num{font-size:10px;font-weight:900;color:var(--text3);min-width:22px}
+.question-text{flex:1;font-size:12px;color:var(--text)}
+.question-del{background:none;border:none;color:var(--text3);cursor:pointer;padding:2px 6px;border-radius:6px;font-size:16px;line-height:1}
+.question-del:hover{color:var(--red)}
 
 /* Article card */
 .article-card{background:rgba(255,255,255,.85);border:1.5px solid var(--border2);border-radius:var(--r);padding:14px;margin-bottom:10px;transition:box-shadow .15s}
@@ -249,7 +249,6 @@ tr:hover td{background:rgba(109,92,247,.02)}
   <div class="t-div"></div>
   <div class="t-nav">
     <div class="t-ni on" onclick="navTo('dashboard',this)">总览</div>
-    <div class="t-ni" onclick="navTo('probe',this)">探针问题</div>
     <div class="t-ni" onclick="navTo('groups',this)">问题组</div>
     <div class="t-ni" onclick="navTo('intel',this)">引用情报</div>
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
@@ -262,7 +261,8 @@ tr:hover td{background:rgba(109,92,247,.02)}
     <select class="t-sel" id="globalClient" onchange="onClientChange()">
       <option value="">— 选择客户 —</option>
     </select>
-    <select class="t-sel" id="globalPlatform" onchange="onPlatformChange()" title="切换爬取平台" style="min-width:100px">
+    <select class="t-sel" id="globalPlatform" onchange="onPlatformChange()" title="切换数据视图和默认爬取范围" style="min-width:126px">
+      <option value="all">全部平台</option>
       <option value="doubao">🤖 豆包</option>
       <option value="deepseek">🔍 DeepSeek</option>
       <option value="yuanbao">💎 元宝</option>
@@ -286,7 +286,6 @@ tr:hover td{background:rgba(109,92,247,.02)}
   </div>
   <div class="s-sec">核心功能</div>
   <div class="s-nav on" onclick="navTo('dashboard',this)"><i class="ti ti-layout-dashboard"></i>数据总览</div>
-  <div class="s-nav" onclick="navTo('probe',this)"><i class="ti ti-bulb"></i>探针问题</div>
   <div class="s-nav" onclick="navTo('groups',this)"><i class="ti ti-folder"></i>问题组管理</div>
   <div class="s-nav" onclick="navTo('intel',this)"><i class="ti ti-radar"></i>引用情报<span class="s-pip" style="background:var(--pri)">核心</span></div>
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
@@ -406,7 +405,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
 <!-- ═══ 问题组管理 ═══ -->
 <div class="page" id="page-groups">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>问题组管理</em></div><div class="pg-sub">按主题分组管理探针问题，爬取时可按组一次性执行</div></div>
+    <div><div class="pg-title">✦ <em>问题组管理</em></div><div class="pg-sub">按主题分组管理手动录入的问题，爬取时可按组一次性执行</div></div>
     <button class="btn btn-p btn-sm" onclick="showCreateGroup()">+ 新建问题组</button>
   </div>
 
@@ -434,19 +433,22 @@ tr:hover td{background:rgba(109,92,247,.02)}
         <div class="card-sub" id="groupDetailDesc"></div>
       </div>
       <div class="acts">
-        <button class="btn btn-o btn-sm" onclick="genGroupQuestions()">
-          <span class="spin" id="spGroupGen" style="display:none"></span>AI生成问题
-        </button>
         <button class="btn btn-p btn-sm" onclick="addManualQuestion()">+ 手动添加</button>
         <button class="btn btn-p btn-sm" onclick="saveGroupQuestions()">保存</button>
       </div>
     </div>
-    <div style="margin-bottom:10px;display:flex;gap:10px;align-items:center">
-      <input id="genGrpBrand" placeholder="品牌名" style="width:120px">
-      <input id="genGrpIndustry" placeholder="行业" style="width:120px">
-      <input id="genGrpCount" placeholder="生成数量" type="number" value="10" style="width:80px">
-    </div>
     <div id="groupQuestionList"><div class="empty"><i class="ti ti-list"></i><p>暂无问题</p></div></div>
+    <div style="margin-top:12px;padding:10px 0;border-top:1.5px solid var(--border2)">
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <span style="font-size:11px;color:var(--text3);font-weight:600">平台登录：</span>
+        <button class="btn btn-o btn-sm" id="btnLoginDoubao" onclick="platformLogin('doubao')">🤖 豆包</button>
+        <button class="btn btn-o btn-sm" id="btnLoginDeepseek" onclick="platformLogin('deepseek')">🔍 DeepSeek</button>
+        <button class="btn btn-o btn-sm" id="btnLoginYuanbao" onclick="platformLogin('yuanbao')">💎 元宝</button>
+        <button class="btn btn-o btn-sm" id="btnLoginQwen" onclick="platformLogin('qwen')">🌙 千问</button>
+        <button class="btn btn-o btn-sm" onclick="checkAllLoginStatus()" style="color:var(--text3)">检查状态</button>
+      </div>
+      <div id="platformLoginStatus" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"></div>
+    </div>
     <div style="margin-top:14px;padding-top:14px;border-top:1.5px solid var(--border2);display:flex;gap:10px;align-items:center">
       <button class="btn btn-p" id="btnCrawlGroup" onclick="crawlByGroup()">
         <span class="spin" id="spCrawlGroup" style="display:none"></span>
@@ -459,6 +461,13 @@ tr:hover td{background:rgba(109,92,247,.02)}
           <option value="3">3次</option>
           <option value="5">5次</option>
           <option value="10">10次</option>
+        </select>
+      </div>
+      <div>
+        <span style="font-size:11px;color:var(--text2);font-weight:700">爬取范围：</span>
+        <select id="grpPlatformScope" style="width:150px;font-size:11px;padding:4px 6px">
+          <option value="all">所有已登录平台</option>
+          <option value="current">顶部当前平台</option>
         </select>
       </div>
       <span id="grpCrawlStatus" style="font-size:11px;color:var(--text2)"></span>
@@ -622,126 +631,14 @@ tr:hover td{background:rgba(109,92,247,.02)}
   </div>
 </div>
 
-<!-- ═══ 探针问题 ═══ -->
-<div class="page" id="page-probe">
-  <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>探针问题库</em></div><div class="pg-sub">设计用户会向豆包提问的问题，用于监测品牌引用情况</div></div>
-  </div>
-  <div class="card">
-    <div class="card-hd"><span class="card-title">AI 生成探针问题</span></div>
-    <div class="form-row col3">
-      <div class="fld"><label>品牌名称</label><input id="pb-brand" placeholder="如：居泰隆装修"></div>
-      <div class="fld"><label>行业/品类</label><input id="pb-industry" placeholder="如：家装·昆山本地"></div>
-      <div class="fld"><label>优化目标</label><input id="pb-goal" placeholder="如：提升豆包提及率"></div>
-    </div>
-    <div class="form-row col2">
-      <div class="fld"><label>核心卖点</label><input id="pb-selling" placeholder="如：口碑好、价格透明、施工规范"></div>
-      <div class="fld" style="display:flex;align-items:flex-end">
-        <button class="btn btn-p" id="btnGenProbe" onclick="genProbes()" style="width:100%">
-          <span class="spin" id="spProbe" style="display:none"></span> AI 生成20条探针问题
-        </button>
-      </div>
-    </div>
-  </div>
-  <div class="card">
-    <div class="card-hd">
-      <span class="card-title">问题库 <span id="probe-count" style="color:var(--text3);font-size:11px">0 条</span></span>
-      <div class="acts">
-        <button class="btn btn-o btn-sm" onclick="addProbeManual()">+ 手动添加</button>
-        <button class="btn btn-p btn-sm" onclick="saveProbes()">保存问题库</button>
-      </div>
-    </div>
-    <div id="probeList"><div class="empty"><i class="ti ti-list"></i><p>暂无问题，请先生成或手动添加</p></div></div>
-  </div>
-</div>
-
 <!-- ═══ 引用情报 ═══ -->
 <div class="page" id="page-intel">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>豆包引用情报</em></div><div class="pg-sub">录入豆包回答 → AI自动提取引用源 → 深度分析平台偏好规律</div></div>
+    <div><div class="pg-title">✦ <em>AI引用情报</em></div><div class="pg-sub">录入 AI 回答 → 自动提取引用源 → 深度分析平台偏好规律</div></div>
     <div class="acts">
       <button class="btn btn-o btn-sm" onclick="genIntelReport()"><span class="spin" id="spReport" style="display:none"></span>生成偏好报告</button>
     </div>
   </div>
-  <!-- 自动爬取区块 -->
-  <div class="card" style="border:1.5px solid rgba(109,92,247,0.3);background:linear-gradient(135deg,rgba(109,92,247,0.04),rgba(167,139,250,0.04))">
-    <div class="card-hd">
-      <div>
-        <span class="card-title">🤖 自动爬取模式</span>
-        <div class="card-sub">一键自动提问豆包全部探针问题，自动提取引用源、录入分析系统，无需手动操作</div>
-      </div>
-      <div id="loginStatus" style="display:flex;align-items:center;gap:6px;font-size:11px;font-weight:700;color:var(--text3)">
-        <div style="width:8px;height:8px;border-radius:50%;background:#d1d5db"></div>未登录
-      </div>
-    </div>
-    <!-- 爬取配置 -->
-    <div style="display:flex;align-items:center;gap:20px;margin-bottom:14px;padding:12px;background:rgba(255,255,255,0.6);border-radius:var(--r-sm);border:1.5px solid var(--border2);flex-wrap:wrap">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="font-size:12px;font-weight:700;color:#312e81">每题爬取次数</div>
-        <div style="display:flex;gap:6px">
-          <button onclick="setRepeat(1)" id="rep-1" class="btn btn-p btn-sm">1次</button>
-          <button onclick="setRepeat(3)" id="rep-3" class="btn btn-o btn-sm">3次</button>
-          <button onclick="setRepeat(5)" id="rep-5" class="btn btn-o btn-sm">5次</button>
-          <button onclick="setRepeat(10)" id="rep-10" class="btn btn-o btn-sm">10次</button>
-        </div>
-      </div>
-      <div style="width:1px;height:28px;background:var(--border2)"></div>
-      <div style="display:flex;align-items:center;gap:10px">
-        <div style="font-size:12px;font-weight:700;color:#312e81">并行窗口数</div>
-        <div style="display:flex;gap:6px">
-          <button onclick="setParallel(1)" id="par-1" class="btn btn-o btn-sm">1个（慢/稳）</button>
-          <button onclick="setParallel(2)" id="par-2" class="btn btn-p btn-sm">2个（推荐）</button>
-          <button onclick="setParallel(3)" id="par-3" class="btn btn-o btn-sm">3个（快/风险）</button>
-        </div>
-      </div>
-      <div style="font-size:11px;color:var(--text2);margin-left:auto">
-        预计样本：<span id="sampleDisplay" style="color:var(--pink);font-weight:800">--</span> 条 ·
-        预计时间：<span id="timeDisplay" style="color:var(--pri);font-weight:800">--</span>
-      </div>
-    </div>
-    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <span style="font-size:11px;color:var(--text3);font-weight:600">平台登录：</span>
-        <button class="btn btn-o btn-sm" id="btnLoginDoubao" onclick="platformLogin('doubao')">🤖 豆包</button>
-        <button class="btn btn-o btn-sm" id="btnLoginDeepseek" onclick="platformLogin('deepseek')">🔍 DeepSeek</button>
-        <button class="btn btn-o btn-sm" id="btnLoginYuanbao" onclick="platformLogin('yuanbao')">💎 元宝</button>
-        <button class="btn btn-o btn-sm" id="btnLoginQwen" onclick="platformLogin('qwen')">🌙 千问</button>
-        <button class="btn btn-o btn-sm" onclick="checkAllLoginStatus()" style="color:var(--text3)">检查状态</button>
-      </div>
-      <button class="btn btn-p" id="btnCrawl" onclick="startCrawl()">
-        <span class="spin" id="spCrawl" style="display:none"></span>
-        <span id="btnCrawlText">一键爬取 + 自动分析</span>
-      </button>
-    </div>
-    <div id="platformLoginStatus" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"></div>
-    <div id="crawlProgress" style="display:none;margin-top:14px">
-      <!-- 主进度条 -->
-      <div class="crawl-progress-wrap">
-        <div class="crawl-progress-header">
-          <span class="crawl-progress-title" id="crawlStatusText">准备爬取...</span>
-          <span class="crawl-progress-pct" id="crawlPct">0%</span>
-        </div>
-        <div class="crawl-progress-bar-wrap">
-          <div class="crawl-progress-bar" id="crawlBar"></div>
-        </div>
-        <div style="display:flex;justify-content:space-between;font-size:10px;color:var(--text3);margin-bottom:10px">
-          <span id="crawlDoneCount">已完成 0 题</span>
-          <span id="crawlTotalCount">共 0 题</span>
-        </div>
-        <!-- 步骤列表 -->
-        <div class="crawl-step-list" id="crawlStepList"></div>
-      </div>
-      <!-- 批量汇总 -->
-      <div id="batchSummaryBox" style="display:none;padding:14px;background:var(--pri-ll);border-radius:var(--r-sm);margin:12px 0">
-        <div style="font-size:12px;font-weight:800;color:#312e81;margin-bottom:10px">✦ 本次爬取汇总</div>
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px" id="batchSummaryStats"></div>
-        <div style="margin-top:10px;font-size:11px;color:var(--text2);font-weight:700">高频引用平台：<span id="batchTopPlatforms" style="color:var(--pri)"></span></div>
-      </div>
-      <!-- 逐条结果（带彩色平台标签） -->
-      <div id="crawlResults" style="display:flex;flex-direction:column;gap:8px"></div>
-    </div>
-  </div>
-
   <!-- 单日数据分析面板 -->
   <div class="card">
     <div class="card-hd">
@@ -754,21 +651,17 @@ tr:hover td{background:rgba(109,92,247,.02)}
       </div>
     </div>
     <div id="dailyDateList" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
-    <div id="dailyAnalysisResult" style="display:none">
+    <div id="intelDailyAnalysisResult" style="display:none">
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px" id="dailyStats"></div>
       <div class="report-md" id="dailyReport"></div>
     </div>
   </div>
 
-  <div class="info-banner">手动模式：① 从探针问题库选题 → ② 去豆包提问 → ③ 展开豆包「参考了N篇资料」→ ④ 把回答和引用标题/链接粘贴进来 → ⑤ 点击分析</div>
+  <div class="info-banner">手动模式：① 手动输入问题 → ② 去 AI 平台提问 → ③ 展开「参考资料/引用来源」→ ④ 把回答和引用标题/链接粘贴进来 → ⑤ 点击分析</div>
   <div class="card">
     <div class="card-hd"><span class="card-title">录入本次监测数据</span></div>
-    <div class="form-row col2">
-      <div class="fld">
-        <label>选择探针问题</label>
-        <select id="intel-q-sel" onchange="fillIntelQ(this.value)"><option value="">— 从问题库选择 —</option></select>
-      </div>
-      <div class="fld"><label>或手动输入问题</label><input id="intel-question" placeholder="输入向豆包提问的问题"></div>
+    <div class="form-row">
+      <div class="fld"><label>手动输入问题</label><input id="intel-question" placeholder="输入向 AI 平台提问的问题"></div>
     </div>
     <div class="form-row">
       <div class="fld"><label>豆包回答内容（完整粘贴）</label><textarea id="intel-answer" rows="5" placeholder="将豆包的完整回答粘贴到这里..."></textarea></div>
@@ -809,7 +702,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
     </div>
   </div>
   <div class="card" id="intelReportCard" style="display:none">
-    <div class="card-hd"><span class="card-title">✦ 豆包平台偏好洞察报告</span><button class="btn btn-o btn-sm" onclick="copyReport()">复制</button></div>
+    <div class="card-hd"><span class="card-title">✦ AI 平台偏好洞察报告</span><button class="btn btn-o btn-sm" onclick="copyReport()">复制</button></div>
     <div class="report-md" id="intelReportContent"></div>
   </div>
   <div class="card">
@@ -1056,7 +949,6 @@ function navTo(page, el) {
   if (el) el.classList.add('on');
   // page-specific load
   if (page === 'dashboard') loadDashboard();
-  if (page === 'probe') loadProbes();
   if (page === 'intel') loadIntel();
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
@@ -1071,24 +963,20 @@ let currentBrand = '';
 let currentClientName = '';
 let currentIndustry = '';
 let currentGoal = '';
-let currentPlatform = 'doubao';  // 当前爬取平台
-let probeQs = [];
+let currentPlatform = 'all';  // 当前数据视图/默认爬取范围
 const loginPollTimers = {};
+const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
 
 function onPlatformChange() {
   const sel = document.getElementById('globalPlatform');
   currentPlatform = sel.value;
-  const pNames = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
-  // 同步更新爬取按钮文字
-  const crawlBtn = document.getElementById('btnCrawlText');
-  if (crawlBtn) crawlBtn.textContent = `爬取${pNames[currentPlatform]} + 自动分析`;
   // 刷新当前页面数据
   if (document.getElementById('page-daily')?.classList.contains('on')) loadDailyPage();
   if (document.getElementById('page-intel')?.classList.contains('on')) loadIntel();
   if (document.getElementById('page-records')?.classList.contains('on')) loadRawRecords();
   if (document.getElementById('page-dashboard')?.classList.contains('on')) loadDashboard();
   if (document.getElementById('page-dashboard_full')?.classList.contains('on')) loadFullDashboard();
-  toast(`已切换到 ${pNames[currentPlatform]} 数据视图`);
+  toast(`已切换到 ${CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform} 数据视图`);
 }
 let trendChart, platformChart, articleChart, compareChart;
 
@@ -1194,6 +1082,11 @@ function spin(id, on) {
 function disableBtn(id, on) {
   const el = document.getElementById(id);
   if (el) el.disabled = on;
+}
+function escHtml(v) {
+  return String(v ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  }[ch]));
 }
 
 // ── Navigation ────────────────────────────────────────
@@ -1323,84 +1216,7 @@ async function loadDashboard() {
   } else { ra.innerHTML = '<div class="empty"><i class="ti ti-file-text"></i><p>暂无数据</p></div>'; }
 }
 
-// ── Probes ────────────────────────────────────────────
-async function loadProbes() {
-  if (!currentClientId) return;
-  const data = await api('/api/probes/' + currentClientId);
-  probeQs = data.map(p => p.q);
-  renderProbeList();
-}
-function renderProbeList() {
-  const el = document.getElementById('probeList');
-  document.getElementById('probe-count').textContent = probeQs.length + ' 条';
-  if (!probeQs.length) { el.innerHTML = '<div class="empty"><i class="ti ti-list"></i><p>暂无问题</p></div>'; return; }
-  el.innerHTML = probeQs.map((q,i) => `
-    <div class="probe-item">
-      <span class="probe-num">${String(i+1).padStart(2,'0')}</span>
-      <span class="probe-q">${q}</span>
-      <button class="probe-del" onclick="delProbe(${i})">×</button>
-    </div>`).join('');
-}
-function delProbe(i) { probeQs.splice(i,1); renderProbeList(); }
-function addProbeManual() {
-  const q = prompt('请输入探针问题：');
-  if (q?.trim()) { probeQs.push(q.trim()); renderProbeList(); }
-}
-async function genProbes() {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const brand = document.getElementById('pb-brand').value || currentBrand;
-  if (!brand) { toast('请填写品牌名称', 'err'); return; }
-  spin('spProbe',true); disableBtn('btnGenProbe',true);
-  try {
-    const r = await api('/api/probes/'+currentClientId+'/generate','POST',{
-      brand, industry: document.getElementById('pb-industry').value,
-      goal: document.getElementById('pb-goal').value,
-      selling_points: document.getElementById('pb-selling').value
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    probeQs = r.questions;
-    renderProbeList();
-    toast('已生成 ' + r.questions.length + ' 条探针问题 ✦');
-  } finally { spin('spProbe',false); disableBtn('btnGenProbe',false); }
-}
-async function saveProbes() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  await api('/api/probes/'+currentClientId+'/save','POST',{questions: probeQs});
-  toast('问题库已保存 ✦');
-}
-
-// ── 豆包自动爬取 ──────────────────────────────────────
-let repeatCount = 1;
-
-let parallelCount = 2;
-
-function updateEstimate() {
-  const samples = probeQs.length * repeatCount;
-  const secPerQ = 15;  // 每题约15秒（含等待）
-  const totalSec = Math.ceil(samples * secPerQ / parallelCount);
-  const min = Math.ceil(totalSec / 60);
-  document.getElementById('sampleDisplay').textContent = samples + ' 条';
-  document.getElementById('timeDisplay').textContent = min + ' 分钟';
-}
-
-function setRepeat(n) {
-  repeatCount = n;
-  [1,3,5,10].forEach(v => {
-    const btn = document.getElementById('rep-' + v);
-    if (btn) btn.className = v === n ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
-  });
-  updateEstimate();
-}
-
-function setParallel(n) {
-  parallelCount = n;
-  [1,2,3].forEach(v => {
-    const btn = document.getElementById('par-' + v);
-    if (btn) btn.className = v === n ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
-  });
-  updateEstimate();
-}
-
+// ── 平台登录状态 ──────────────────────────────────────
 async function platformLogin(platform) {
   const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
   const pName = platform.charAt(0).toUpperCase() + platform.slice(1);
@@ -1474,166 +1290,11 @@ async function checkAllLoginStatus() {
   if (statusDiv) statusDiv.innerHTML = html;
 }
 function checkLoginStatus() { checkAllLoginStatus(); }
-async function startCrawl() {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  if (!probeQs.length) { toast('请先生成探针问题库', 'err'); return; }
-  const totalSamples = probeQs.length * repeatCount;
-  const estMin = Math.ceil(totalSamples * 0.5);
-  const pName = {doubao:'豆包',deepseek:'DeepSeek',yuanbao:'元宝',qwen:'千问'}[currentPlatform] || currentPlatform;
-  const confirmed = confirm(`平台：${pName}\n将自动爬取 ${probeQs.length} 个问题 × ${repeatCount} 次 = ${totalSamples} 个样本\n预计耗时约 ${estMin} 分钟\n爬取完成后自动录入分析系统，确认开始？`);
-  if (!confirmed) return;
-
-  spin('spCrawl', true);
-  document.getElementById('btnCrawl').disabled = true;
-  document.getElementById('crawlProgress').style.display = 'block';
-  document.getElementById('batchSummaryBox').style.display = 'none';
-  document.getElementById('crawlStatusText').textContent = `正在爬取，共 ${totalSamples} 个样本...`;
-  document.getElementById('crawlBar').style.width = '3%';
-  document.getElementById('crawlPct').textContent = '3%';
-  document.getElementById('crawlTotalCount').textContent = `共 ${probeQs.length} 题`;
-  document.getElementById('crawlDoneCount').textContent = '已完成 0 题';
-  document.getElementById('crawlResults').innerHTML = '';
-  // 初始化步骤列表
-  const stepList = document.getElementById('crawlStepList');
-  stepList.innerHTML = probeQs.map((q, i) => `
-    <div class="crawl-step" id="step-${i}">
-      <div class="crawl-step-dot"></div>
-      <span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${q.slice(0,35)}${q.length>35?'…':''}</span>
-      <span id="step-status-${i}" style="font-size:10px;color:var(--text3);flex-shrink:0">等待中</span>
-    </div>`).join('');
-  // 模拟进度推送（实际爬取在后端，前端用动画提示）
-  let fakeProgress = 3;
-  const progressTimer = setInterval(() => {
-    const done = Math.min(fakeProgress + Math.random() * 3, 92);
-    fakeProgress = done;
-    document.getElementById('crawlBar').style.width = done + '%';
-    document.getElementById('crawlPct').textContent = Math.round(done) + '%';
-    const doneQ = Math.floor(done / 100 * probeQs.length);
-    document.getElementById('crawlDoneCount').textContent = `已完成 ${doneQ} 题`;
-    // 更新步骤状态
-    for (let i = 0; i < probeQs.length; i++) {
-      const stepEl = document.getElementById('step-' + i);
-      const statusEl = document.getElementById('step-status-' + i);
-      if (!stepEl) continue;
-      if (i < doneQ) {
-        stepEl.className = 'crawl-step done';
-        statusEl.textContent = '✓ 完成';
-        statusEl.style.color = 'var(--teal)';
-      } else if (i === doneQ) {
-        stepEl.className = 'crawl-step running';
-        statusEl.textContent = '爬取中...';
-        statusEl.style.color = 'var(--pri)';
-      }
-    }
-  }, 2000);
-
-  try {
-    // 先建立SSE连接监听进度（在发请求之前）
-    const tempSessionId = 'pending_' + Date.now();
-    
-    // 发起爬取请求（较耗时，await等待完成）
-    const crawlPromise = api('/api/platform/crawl', 'POST', {
-      client_id: currentClientId,
-      brand: currentBrand,
-      questions: probeQs,
-      repeat_count: repeatCount,
-      platform: currentPlatform
-    });
-
-    // 稍等后建立SSE（等服务器创建session）
-    await new Promise(r => setTimeout(r, 800));
-    
-    const r = await crawlPromise;
-
-    if (r.error === 'need_login' || r.error === 'cookie_expired') {
-      toast(r.message || `请先在上方登录「${({doubao:'豆包',deepseek:'DeepSeek',yuanbao:'元宝',qwen:'千问'})[currentPlatform]}」平台`, 'err');
-      document.getElementById('crawlProgress').style.display = 'none';
-      checkAllLoginStatus();
-      return;
-    }
-    if (r.error) { toast(r.message || r.error, 'err'); return; }
-
-    document.getElementById('crawlBar').style.width = '100%';
-    document.getElementById('crawlStatusText').innerHTML =
-      `<span style="color:var(--teal);font-weight:800">✦ 完成！</span> ${r.analyzed} 个问题已分析（每题${r.repeat_count}次），失败 ${r.errors} 条`;
-
-    // 显示批量汇总
-    if (r.batch_summary) {
-      const bs = r.batch_summary;
-      document.getElementById('batchSummaryBox').style.display = 'block';
-      document.getElementById('batchSummaryStats').innerHTML = [
-        ['监测问题', bs.total_questions, '个'],
-        ['总样本量', bs.total_samples, '条'],
-        ['品牌提及率', bs.mention_rate, '%'],
-        ['平均GEO评分', bs.avg_geo_score, '分'],
-      ].map(([l,v,u]) => `
-        <div style="text-align:center;padding:8px;background:rgba(255,255,255,.7);border-radius:8px">
-          <div style="font-size:16px;font-weight:900;color:var(--pri)">${v}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
-          <div style="font-size:10px;color:var(--text2);font-weight:700">${l}</div>
-        </div>`).join('');
-      document.getElementById('batchTopPlatforms').textContent =
-        bs.top_platforms.map(p => `${p.platform}(${p.count}次)`).join(' · ');
-    }
-
-    // 逐条结果（带彩色平台标签）
-    // 计算本次提及率
-    const mentionedCount = r.results.filter(res => res.brand_mentioned).length;
-    const mentionRate = r.results.length > 0 ? Math.round(mentionedCount / r.results.length * 100) : 0;
-
-    document.getElementById('crawlResults').innerHTML = r.results.map(res => {
-      const sc = !res.brand_mentioned ? 'var(--red)' : (res.geo_score||0)>=60 ? 'var(--teal)' : 'var(--amber)';
-      const refTags = res.refs ? renderRefTags(res.refs, currentBrand) : `<span class="badge badge-p">${res.main_platform||'--'}</span>`;
-      return `<div style="padding:12px;background:rgba(255,255,255,.85);border:1.5px solid var(--border2);border-radius:var(--r-sm)">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
-          <span style="font-size:12px;font-weight:800;color:#312e81;flex:1">${res.question}</span>
-          ${res.brand_mentioned ? '<span class="badge badge-g">✦ 已提及品牌</span>' : '<span class="badge badge-r">未提及</span>'}
-          <span style="font-weight:900;color:${sc}">GEO ${res.geo_score}</span>
-          <span style="font-size:10px;color:var(--text3)">×${res.sample_count}次样本</span>
-        </div>
-        <div style="display:flex;gap:5px;flex-wrap:wrap;margin-bottom:6px">${refTags}</div>
-        <div style="font-size:11px;color:var(--pri);font-weight:700">${res.suggestion||''}</div>
-      </div>`;
-    }).join('');
-
-    // 在结果顶部插入提及率汇总
-    const summary = document.createElement('div');
-    summary.style.cssText = 'padding:12px 14px;background:linear-gradient(135deg,rgba(244,114,182,.08),rgba(109,92,247,.06));border:1.5px solid rgba(244,114,182,.2);border-radius:var(--r-sm);margin-bottom:10px;display:flex;align-items:center;gap:16px';
-    summary.innerHTML = `
-      <div style="text-align:center">
-        <div style="font-size:22px;font-weight:900;color:var(--pink)">${mentionedCount}<span style="font-size:11px;color:var(--text3)">次</span></div>
-        <div style="font-size:10px;color:var(--text2);font-weight:700">品牌提及次数</div>
-      </div>
-      <div style="width:1px;height:36px;background:var(--border2)"></div>
-      <div style="text-align:center">
-        <div style="font-size:22px;font-weight:900;color:var(--pink)">${mentionRate}<span style="font-size:11px;color:var(--text3)">%</span></div>
-        <div style="font-size:10px;color:var(--text2);font-weight:700">品牌提及率</div>
-      </div>
-      <div style="width:1px;height:36px;background:var(--border2)"></div>
-      <div style="font-size:11px;color:var(--text2);flex:1">
-        共 <b style="color:#312e81">${r.results.length}</b> 个问题·每题 <b style="color:#312e81">${r.repeat_count}</b> 次样本·
-        高频平台：<span style="color:var(--pri);font-weight:800">${(r.batch_summary?.top_platforms||[]).map(p=>p.platform+'('+p.count+'次)').join(' · ')||'--'}</span>
-      </div>`;
-    document.getElementById('crawlResults').prepend(summary);
-
-    toast(`✦ 爬取分析完成！${r.analyzed} 个问题已自动录入系统`);
-    loadIntelTable();
-    loadDashboard();
-    // 自动刷新单日列表
-    loadDailyList();
-
-  } catch(e) {
-    clearInterval(progressTimer);
-    toast('爬取失败：' + e.message, 'err');
-  } finally {
-    spin('spCrawl', false);
-    document.getElementById('btnCrawl').disabled = false;
-  }
-}
 
 // ── 单日数据分析 ──────────────────────────────────────
 async function loadDailyList() {
   if (!currentClientId) return;
-  const r = await api('/api/doubao/daily_list?client_id=' + currentClientId);
+  const r = await api('/api/crawl/daily_list?client_id=' + currentClientId);
   const el = document.getElementById('dailyDateList');
   if (!r.dates?.length) {
     el.innerHTML = '<span style="font-size:11px;color:var(--text3)">暂无历史数据</span>';
@@ -1666,11 +1327,11 @@ async function analyzeDailyData() {
   const date = document.getElementById('dailyDatePicker').value || new Date().toISOString().slice(0,10);
   spin('spDaily', true);
   try {
-    const r = await api('/api/doubao/daily_analyze', 'POST', {
+    const r = await api('/api/crawl/daily_analyze', 'POST', {
       client_id: currentClientId, date
     });
     if (r.error) { toast(r.error, 'err'); return; }
-    const result = document.getElementById('dailyAnalysisResult');
+    const result = document.getElementById('intelDailyAnalysisResult');
     result.style.display = 'block';
     const s = r.stats;
     document.getElementById('dailyStats').innerHTML = [
@@ -1690,18 +1351,9 @@ async function analyzeDailyData() {
 
 // ── 豆包自动爬取 end ──────────────────────────────────
 async function loadIntel() {
-  // fill probe selector
-  const sel = document.getElementById('intel-q-sel');
-  sel.innerHTML = '<option value="">— 从问题库选择 —</option>';
-  probeQs.forEach(q => {
-    const o = document.createElement('option');
-    o.value = q; o.textContent = q.length > 40 ? q.slice(0,40)+'…' : q;
-    sel.appendChild(o);
-  });
   checkAllLoginStatus();
   loadIntelTable();
 }
-function fillIntelQ(q) { if (q) document.getElementById('intel-question').value = q; }
 function parseRefs(raw) {
   return raw.split('\n').filter(l => l.trim()).map(l => {
     const parts = l.split('|').map(s => s.trim());
@@ -2164,65 +1816,6 @@ function renderRefTag(ref, brand) {
 }
 
 // ══════════════════════════════════════════════════════
-// 爬取进度实时推送（SSE）
-// ══════════════════════════════════════════════════════
-let crawlSSE = null;
-
-function startProgressSSE(sessionId) {
-  if (crawlSSE) crawlSSE.close();
-  crawlSSE = new EventSource(`/api/doubao/progress/${sessionId}`);
-  
-  crawlSSE.onmessage = (e) => {
-    try {
-      const data = JSON.parse(e.data);
-      updateCrawlProgress(data);
-    } catch(err) {}
-  };
-  
-  crawlSSE.addEventListener('done', (e) => {
-    crawlSSE.close();
-    crawlSSE = null;
-  });
-  
-  crawlSSE.onerror = () => {
-    if (crawlSSE) crawlSSE.close();
-    crawlSSE = null;
-  };
-}
-
-function updateCrawlProgress(data) {
-  const { current, total, question, status, geo_score, brand_mentioned } = data;
-  const pct = Math.round((current / total) * 100);
-  
-  // 更新进度条
-  document.getElementById('crawlBar').style.width = pct + '%';
-  
-  // 更新文字
-  const statusEl = document.getElementById('crawlStatusText');
-  if (statusEl) {
-    statusEl.innerHTML = `
-      <span style="color:var(--pri);font-weight:800">${current}/${total}</span>
-      <span style="color:var(--text2)"> · 正在处理：${(question||'').slice(0,30)}...</span>
-      <span style="color:var(--text3);font-size:10px"> (${pct}%)</span>`;
-  }
-  
-  // 添加实时结果条目
-  if (status === 'done' && question) {
-    const sc = (geo_score||0)>=60?'var(--teal)':(geo_score||0)>0?'var(--amber)':'var(--red)';
-    const el = document.getElementById('crawlResults');
-    if (el) {
-      const item = document.createElement('div');
-      item.style.cssText = 'padding:8px 12px;background:rgba(255,255,255,.85);border:1.5px solid var(--border2);border-radius:var(--r-sm);display:flex;align-items:center;gap:10px;animation:fi .3s ease';
-      item.innerHTML = `
-        <span style="font-size:18px">${brand_mentioned ? '✅' : '⬜'}</span>
-        <span style="flex:1;font-size:12px;font-weight:700;color:var(--text)">${question.slice(0,40)}${question.length>40?'…':''}</span>
-        <span style="font-weight:900;color:${sc};font-size:13px">GEO ${geo_score||0}</span>`;
-      el.prepend(item);
-    }
-  }
-}
-
-// ══════════════════════════════════════════════════════
 // 问题组管理
 // ══════════════════════════════════════════════════════
 let currentGroupId = '';
@@ -2298,9 +1891,8 @@ async function openGroup(gid) {
   document.getElementById('groupDetailDesc').textContent = g.description || '';
   document.getElementById('groupDetailCard').style.display = 'block';
   document.getElementById('groupDetailCard').scrollIntoView({behavior:'smooth'});
-  document.getElementById('genGrpBrand').value = currentBrand || '';
-  document.getElementById('genGrpIndustry').value = currentIndustry || '';
   renderGroupQuestions();
+  checkAllLoginStatus();
 }
 
 function renderGroupQuestions() {
@@ -2310,117 +1902,162 @@ function renderGroupQuestions() {
     return;
   }
   el.innerHTML = currentGroupQuestions.map((q,i) => `
-    <div class="probe-item">
-      <span class="probe-num">${String(i+1).padStart(2,'0')}</span>
-      <span class="probe-q">${q}</span>
-      <button class="probe-del" onclick="delGroupQ(${i})">×</button>
+    <div class="question-item">
+      <span class="question-num">${String(i+1).padStart(2,'0')}</span>
+      <span class="question-text">${q}</span>
+      <button class="question-del" onclick="delGroupQ(${i})">×</button>
     </div>`).join('');
 }
 
-function delGroupQ(i) {
-  currentGroupQuestions.splice(i, 1);
-  renderGroupQuestions();
+async function persistGroupQuestions(silent=false) {
+  if (!currentGroupId) return false;
+  const r = await api(`/api/groups/${currentClientId}/${currentGroupId}`, 'PUT', {
+    questions: currentGroupQuestions
+  });
+  if (r.error) {
+    toast(r.error || '保存失败', 'err');
+    return false;
+  }
+  if (!silent) toast('问题组已保存 ✦');
+  loadGroups();
+  return true;
 }
 
-function addManualQuestion() {
-  const q = prompt('请输入探针问题：');
+async function delGroupQ(i) {
+  currentGroupQuestions.splice(i, 1);
+  renderGroupQuestions();
+  await persistGroupQuestions(true);
+  toast('问题已删除并保存');
+}
+
+async function addManualQuestion() {
+  const q = prompt('请输入问题：');
   if (q?.trim()) {
     currentGroupQuestions.push(q.trim());
     renderGroupQuestions();
+    await persistGroupQuestions(true);
+    toast('问题已添加并保存 ✦');
   }
 }
 
-async function genGroupQuestions() {
-  if (!currentGroupId) { toast('请先打开一个问题组','err'); return; }
-  const brand = document.getElementById('genGrpBrand').value || currentBrand;
-  if (!brand) { toast('请填写品牌名','err'); return; }
-  spin('spGroupGen', true);
-  try {
-    const groups = await api('/api/groups/' + currentClientId);
-    const g = groups.find(x => x.id === currentGroupId);
-    const r = await api(`/api/groups/${currentClientId}/generate`, 'POST', {
-      brand,
-      industry: document.getElementById('genGrpIndustry').value,
-      goal: currentGoal,
-      group_id: currentGroupId,
-      group_name: g?.name || '',
-      description: g?.description || '',
-      count: parseInt(document.getElementById('genGrpCount').value) || 10
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    r.questions.forEach(q => {
-      if (!currentGroupQuestions.includes(q)) currentGroupQuestions.push(q);
-    });
-    renderGroupQuestions();
-    toast(`已生成 ${r.questions.length} 条问题 ✦`);
-  } finally { spin('spGroupGen', false); }
-}
-
 async function saveGroupQuestions() {
-  if (!currentGroupId) return;
-  await api(`/api/groups/${currentClientId}/${currentGroupId}`, 'PUT', {
-    questions: currentGroupQuestions
-  });
-  toast('问题组已保存 ✦');
-  loadGroups();
+  await persistGroupQuestions(false);
 }
 
-async function crawlByGroup() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  if (!currentGroupId) { toast('请先打开问题组','err'); return; }
-  if (!currentGroupQuestions.length) { toast('该组暂无问题','err'); return; }
-  const repeat = parseInt(document.getElementById('grpRepeat').value) || 1;
-  const total = currentGroupQuestions.length * repeat;
-  if (!confirm(`将爬取 ${currentGroupQuestions.length} 题 × ${repeat} 次 = ${total} 个样本，确认？`)) return;
+async function getLoggedInCrawlPlatforms() {
+  const platforms = await api('/api/platform/list');
+  if (!Array.isArray(platforms)) {
+    throw new Error(platforms?.error || '平台状态获取失败');
+  }
 
-  spin('spCrawlGroup', true);
-  document.getElementById('btnCrawlGroup').disabled = true;
-  document.getElementById('grpCrawlStatus').textContent = `爬取中，共 ${total} 个样本...`;
-  document.getElementById('grpCrawlResult').style.display = 'none';
+  return platforms
+    .filter(p => p.logged_in)
+    .map(p => ({
+      id: p.id,
+      name: p.name || CRAWL_PLATFORM_NAMES[p.id] || p.id
+    }));
+}
+
+async function getTargetCrawlPlatforms(scope='current') {
+  if (scope === 'all' || currentPlatform === 'all') {
+    return getLoggedInCrawlPlatforms();
+  }
+  return [{id: currentPlatform, name: CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform}];
+}
+
+async function getGroupCrawlPlatforms() {
+  const scope = document.getElementById('grpPlatformScope')?.value || 'all';
+  return getTargetCrawlPlatforms(scope);
+}
+
+function buildGroupCrawlTaskInfoHtml(r) {
+  if (!r?.task_id) return '';
+  return `
+    <div style="font-size:11px;color:var(--text2);margin-bottom:10px;line-height:1.7">
+      任务ID：<span style="font-weight:800;color:var(--text)">${escHtml(r.task_id)}</span>
+      ${r.task_report ? `<br>诊断文件：<span style="font-family:monospace;color:var(--text3)">${escHtml(r.task_report)}</span>` : ''}
+    </div>`;
+}
+
+function buildGroupCrawlFailureHtml(items) {
+  if (!items || !items.length) return '';
+  return `
+    <div style="margin-top:10px;border-top:1px solid var(--border2);padding-top:10px">
+      <div style="font-size:11px;font-weight:900;color:var(--red);margin-bottom:6px">失败明细（最多显示 8 条）</div>
+      <div style="display:flex;flex-direction:column;gap:6px">
+        ${items.slice(0, 8).map(item => {
+          const detail = typeof item === 'string' ? {error:item} : item;
+          return `
+            <div style="padding:8px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.18);border-radius:var(--r-sm);font-size:11px;line-height:1.55">
+              <div style="font-weight:800;color:var(--text)">${escHtml(detail.question || '--')}</div>
+              <div style="color:var(--red)">错误：${escHtml(detail.error || detail.message || '未知错误')}${detail.round ? ` · 第 ${escHtml(detail.round)} 次` : ''}</div>
+              ${detail.answer_length !== undefined ? `<div style="color:var(--text3)">回答长度：${escHtml(detail.answer_length)}</div>` : ''}
+              ${detail.answer_tail ? `<div style="color:var(--text3)">回答末尾：${escHtml(detail.answer_tail)}</div>` : ''}
+            </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+}
+
+async function runGroupCrawlForPlatform(platform, repeat) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000);
 
   try {
-    const pNames = {doubao:'豆包',deepseek:'DeepSeek',yuanbao:'元宝',qwen:'千问'};
-    // 爬取请求用超长超时（30分钟），避免长时间爬取被浏览器断开
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30 * 60 * 1000);
-    let r;
-    try {
-      const res = await fetch('/api/platform/crawl', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          client_id: currentClientId,
-          brand: currentBrand,
-          questions: currentGroupQuestions,
-          group_id: currentGroupId,
-          repeat_count: repeat,
-          parallel: 1,
-          platform: currentPlatform
-        }),
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      r = await res.json();
-    } catch(fetchErr) {
-      clearTimeout(timeoutId);
-      if (fetchErr.name === 'AbortError') {
-        toast('爬取超时（30分钟），请减少爬取次数或题目数量', 'err');
-      } else {
-        toast('网络错误：' + fetchErr.message, 'err');
-      }
-      return;
+    const res = await fetch('/api/platform/crawl', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({
+        client_id: currentClientId,
+        brand: currentBrand,
+        questions: currentGroupQuestions,
+        group_id: currentGroupId,
+        repeat_count: repeat,
+        parallel: 1,
+        platform: platform.id
+      }),
+      signal: controller.signal
+    });
+    return await res.json();
+  } catch(fetchErr) {
+    if (fetchErr.name === 'AbortError') {
+      return {
+        error: 'timeout',
+        message: `${platform.name} 爬取超时（30分钟），请减少爬取次数或题目数量`
+      };
     }
-    if (r.error === 'need_login' || r.error === 'cookie_expired') {
-      toast(r.message || `请先登录「${pNames[currentPlatform]}」平台`,'err');
-      checkAllLoginStatus();
-      return;
-    }
-    if (r.error) { toast(r.message || r.error,'err'); return; }
+    return {
+      error: 'network_error',
+      message: `${platform.name} 网络错误：${fetchErr.message}`
+    };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
 
-    document.getElementById('grpCrawlStatus').textContent =
-      `✦ 完成！${r.analyzed} 题已分析，失败 ${r.errors} 条`;
-    document.getElementById('grpCrawlResult').style.display = 'block';
-    document.getElementById('grpCrawlResult').innerHTML = `
+function renderGroupCrawlPlatformResult(platform, r) {
+  const taskInfoHtml = buildGroupCrawlTaskInfoHtml(r);
+  const failureItems = r.error_details || r.details || [];
+  const isLoginError = r.error === 'need_login' || r.error === 'cookie_expired';
+
+  if (isLoginError || r.error) {
+    const message = r.message || (isLoginError ? `请先登录「${platform.name}」平台` : r.error);
+    return `
+      <div style="padding:10px;background:rgba(248,113,113,.08);border:1px solid rgba(248,113,113,.2);border-radius:var(--r-sm);margin-bottom:10px">
+        <div style="display:flex;justify-content:space-between;gap:10px;align-items:center;margin-bottom:6px">
+          <div style="font-size:12px;font-weight:900;color:var(--red)">${escHtml(platform.name)} 爬取失败</div>
+          <span style="font-size:10px;color:var(--red);font-weight:800">${escHtml(r.error || 'error')}</span>
+        </div>
+        <div style="font-size:12px;color:var(--red);font-weight:800;margin-bottom:6px">${escHtml(message)}</div>
+        ${taskInfoHtml}
+        ${buildGroupCrawlFailureHtml(failureItems)}
+      </div>`;
+  }
+
+  return `
+    <div style="padding:10px;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);margin-bottom:10px">
+      <div style="font-size:12px;font-weight:900;color:var(--text);margin-bottom:8px">${escHtml(platform.name)} 爬取完成</div>
+      ${taskInfoHtml}
       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px">
         ${[
           ['总样本', r.total_samples, '条', 'var(--pri)'],
@@ -2428,22 +2065,84 @@ async function crawlByGroup() {
           ['平均GEO', r.batch_summary?.avg_geo_score||'--', '分', 'var(--amber)'],
         ].map(([l,v,u,c])=>`
           <div style="padding:10px;background:var(--pri-ll);border-radius:var(--r-sm);text-align:center">
-            <div style="font-size:18px;font-weight:900;color:${c}">${v}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
+            <div style="font-size:18px;font-weight:900;color:${c}">${escHtml(v)}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
             <div style="font-size:10px;color:var(--text2);font-weight:700">${l}</div>
           </div>`).join('')}
         <div style="padding:10px;background:rgba(244,114,182,.08);border-radius:var(--r-sm);text-align:center;border:1.5px solid rgba(244,114,182,.2)">
           <div style="font-size:18px;font-weight:900;color:var(--pink)">
-            ${r.batch_summary?.mentioned_count||0}<span style="font-size:10px;color:var(--text3)">次</span>
-            <span style="font-size:13px;color:var(--pink);margin-left:4px">/ ${r.batch_summary?.mention_rate||0}%</span>
+            ${escHtml(r.batch_summary?.mentioned_count||0)}<span style="font-size:10px;color:var(--text3)">次</span>
+            <span style="font-size:13px;color:var(--pink);margin-left:4px">/ ${escHtml(r.batch_summary?.mention_rate||0)}%</span>
           </div>
           <div style="font-size:10px;color:var(--text2);font-weight:700">品牌提及</div>
         </div>
       </div>
       <div style="font-size:11px;color:var(--text2)">
-        高频平台：<span style="color:var(--pri);font-weight:800">${(r.batch_summary?.top_platforms||[]).map(p=>p.platform+'('+p.count+'次)').join(' · ') || '--'}</span>
-      </div>`;
-    toast(`✦ 问题组爬取完成，数据已录入记录库`);
+        高频平台：<span style="color:var(--pri);font-weight:800">${(r.batch_summary?.top_platforms||[]).map(p=>escHtml(p.platform)+'('+escHtml(p.count)+'次)').join(' · ') || '--'}</span>
+      </div>
+      ${buildGroupCrawlFailureHtml(r.error_details || [])}
+    </div>`;
+}
+
+async function crawlByGroup() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  if (!currentGroupId) { toast('请先打开问题组','err'); return; }
+  if (!currentGroupQuestions.length) { toast('该组暂无问题','err'); return; }
+  const repeat = parseInt(document.getElementById('grpRepeat').value) || 1;
+  let targetPlatforms = [];
+  try {
+    targetPlatforms = await getGroupCrawlPlatforms();
+  } catch(e) {
+    toast(e.message || '平台状态获取失败', 'err');
+    return;
+  }
+
+  if (!targetPlatforms.length) {
+    toast('暂无已登录平台，请先登录至少一个平台', 'err');
+    return;
+  }
+
+  const total = currentGroupQuestions.length * repeat * targetPlatforms.length;
+  const platformText = targetPlatforms.map(p => p.name).join('、');
+  if (!confirm(`将爬取 ${targetPlatforms.length} 个平台（${platformText}）\n${currentGroupQuestions.length} 题 × ${repeat} 次 × ${targetPlatforms.length} 平台 = ${total} 个样本，确认？`)) return;
+
+  spin('spCrawlGroup', true);
+  document.getElementById('btnCrawlGroup').disabled = true;
+  document.getElementById('grpCrawlStatus').textContent = `爬取中，共 ${targetPlatforms.length} 个平台、${total} 个样本...`;
+  document.getElementById('grpCrawlResult').style.display = 'none';
+
+  try {
+    const resultBlocks = [];
+    let totalAnalyzed = 0;
+    let totalErrors = 0;
+    let failedPlatforms = 0;
+    let hasLoginError = false;
+
+    document.getElementById('grpCrawlResult').style.display = 'block';
+
+    for (const [idx, platform] of targetPlatforms.entries()) {
+      document.getElementById('grpCrawlStatus').textContent =
+        `正在爬取 ${platform.name}（${idx + 1}/${targetPlatforms.length}），预计样本 ${currentGroupQuestions.length * repeat} 条...`;
+      const r = await runGroupCrawlForPlatform(platform, repeat);
+
+      if (r.error) {
+        failedPlatforms += 1;
+        if (r.error === 'need_login' || r.error === 'cookie_expired') hasLoginError = true;
+      } else {
+        totalAnalyzed += Number(r.analyzed || 0);
+        totalErrors += Number(r.errors || 0);
+      }
+
+      resultBlocks.push(renderGroupCrawlPlatformResult(platform, r));
+      document.getElementById('grpCrawlResult').innerHTML = resultBlocks.join('');
+    }
+
+    document.getElementById('grpCrawlStatus').textContent =
+      `✦ 完成！${targetPlatforms.length} 个平台，成功分析 ${totalAnalyzed} 题，失败样本 ${totalErrors} 条${failedPlatforms ? `，异常平台 ${failedPlatforms} 个` : ''}`;
+    toast(failedPlatforms ? '问题组爬取完成，部分平台失败' : '✦ 问题组爬取完成，数据已录入记录库', failedPlatforms ? 'err' : 'ok');
+    if (hasLoginError) checkAllLoginStatus();
     loadDashboard();
+    if (document.getElementById('page-records')?.classList.contains('on')) loadRawRecords();
+    if (document.getElementById('page-daily')?.classList.contains('on')) loadDailyPage();
   } finally {
     spin('spCrawlGroup', false);
     document.getElementById('btnCrawlGroup').disabled = false;
@@ -2510,6 +2209,7 @@ async function loadRawRecords() {
   if (group_id) statsUrl += `&group_id=${group_id}`;
   if (question_filter) statsUrl += `&question=${encodeURIComponent(question_filter)}`;
   if (date) statsUrl += `&date=${date}`;  // 有日期就按日期，没有就全部
+  if (mentioned) statsUrl += `&mentioned_only=${mentioned}`;
   const stats = await api(statsUrl);
   renderPlatformStats(stats);
 
@@ -2578,10 +2278,13 @@ async function loadDeepAnalysis() {
   spin('spDeep', true);
   const group_id = document.getElementById('rec-group-filter')?.value || '';
   const date = document.getElementById('rec-date-filter')?.value || '';
+  const question = document.getElementById('rec-question-filter')?.value || '';
+  const mentioned = document.getElementById('rec-mentioned-filter')?.value || '';
   try {
     const r = await api('/api/raw_records/deep_analyze', 'POST', {
       client_id: currentClientId,
-      platform: currentPlatform, group_id, date
+      platform: currentPlatform, group_id, date, question,
+      mentioned_only: mentioned
     });
     if (r.error) { toast(r.error,'err'); return; }
     const card = document.getElementById('deepAnalysisCard');
@@ -3054,6 +2757,9 @@ async function loadDailyData() {
   if (!currentClientId) return;
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const groupId = document.getElementById('dailyGroupFilter')?.value || '';
+  const analysisResult = document.getElementById('dailyAnalysisResult');
+  if (analysisResult) analysisResult.style.display = 'none';
+  dailyAnalysisData = null;
 
   // 加载记录列表（带问题组过滤）
   const records = await api(`/api/daily/records?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${groupId ? '&group_id='+groupId : ''}`);
@@ -3074,6 +2780,10 @@ async function loadDailyData() {
   const el = document.getElementById('dailyRecordList');
   if (!records.length) {
     el.innerHTML = '<div class="empty"><i class="ti ti-database"></i><p>当日暂无数据</p></div>';
+    window._dailyRecords = [];
+    window._dailyPage = 0;
+    document.getElementById('dailyPlatformBars').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
+    document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     return;
   }
   // 分页懒加载：只渲染前20条，滚动到底自动加载
@@ -3174,9 +2884,10 @@ async function clearDailyData() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const count = document.getElementById('dk-total').textContent;
-  if (!confirm(`确认清空 ${date} 的全部 ${count} 条数据？\n此操作不可恢复！`)) return;
+  const platformLabel = currentPlatform === 'all' ? '全部平台' : (CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform);
+  if (!confirm(`确认清空 ${date}（${platformLabel}）的 ${count} 条数据？\n此操作不可恢复！`)) return;
   const r = await api('/api/daily/records/clear', 'POST', {
-    client_id: currentClientId, date
+    client_id: currentClientId, date, platform: currentPlatform
   });
   if (r.ok) {
     toast(`已清空 ${r.deleted} 条当日数据 喵～`);
@@ -4328,28 +4039,36 @@ async function runSingleTask(task) {
   switchAgentTab('progress');
 
   try {
-    // 调用现有爬取接口
-    const resp = await fetch('/api/doubao/crawl', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({
-        client_id: task.client_id,
-        brand: task.brand,
-        group_id: task.group_id,
-        repeat_count: 1,
-        parallel: 1,
-        platform: currentPlatform
-      })
-    });
-    const d = await resp.json();
+    const platforms = await getTargetCrawlPlatforms('current');
+    if (!platforms.length) throw new Error('暂无已登录平台，请先登录至少一个平台');
+    agentState.taskProgress[key].total = task.question_count * platforms.length;
+    agentState.taskProgress[key].done = 0;
 
-    if (d.session_id) {
-      // 用 SSE 监听进度
-      await listenCrawlProgress(d.session_id, key, task.question_count);
+    for (const [idx, platform] of platforms.entries()) {
+      const resp = await fetch('/api/platform/crawl', {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          client_id: task.client_id,
+          brand: task.brand,
+          group_id: task.group_id,
+          repeat_count: 1,
+          parallel: 1,
+          platform: platform.id
+        })
+      });
+      const d = await resp.json();
+      if (d.error) throw new Error(d.message || d.error);
+
+      if (d.session_id) {
+        await listenCrawlProgress(d.session_id, key, task.question_count, idx * task.question_count);
+      } else {
+        agentState.taskProgress[key].done += task.question_count;
+      }
     }
 
     agentState.taskProgress[key].status = 'done';
-    agentState.taskProgress[key].done = task.question_count;
+    agentState.taskProgress[key].done = agentState.taskProgress[key].total;
   } catch(e) {
     agentState.taskProgress[key].status = 'done';
     agentState.taskProgress[key].error = e.message;
@@ -4357,15 +4076,15 @@ async function runSingleTask(task) {
   renderProgress();
 }
 
-function listenCrawlProgress(sessionId, key, totalQ) {
+function listenCrawlProgress(sessionId, key, totalQ, offset=0) {
   return new Promise((resolve) => {
-    const es = new EventSource(`/api/doubao/progress/${sessionId}`);
+    const es = new EventSource(`/api/crawl/progress/${sessionId}`);
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
         if (data.current !== undefined) {
-          agentState.taskProgress[key].done = data.current;
-          agentState.taskProgress[key].total = data.total || totalQ;
+          agentState.taskProgress[key].done = offset + data.current;
+          agentState.taskProgress[key].total = Math.max(agentState.taskProgress[key].total || 0, offset + (data.total || totalQ));
           renderProgress();
         }
         if (data.done || data.current >= (data.total || totalQ)) {

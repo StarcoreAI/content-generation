@@ -85,6 +85,40 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertEqual(analysis["analysis_mode"], "basic_no_api_key")
         self.assertGreaterEqual(analysis["geo_score"], 20)
 
+    def test_save_raw_record_uses_analysis_mention_flag_and_writes_daily_archive(self):
+        with isolated_app_data() as tmp:
+            record_id = geo_app.save_raw_record(
+                client_id="client-1",
+                group_id="group-1",
+                brand="苏韵汽车音响",
+                question="扬州汽车音响改装哪家好？",
+                round_num=1,
+                answer="苏州有不少汽车音响案例，但这里没有完整品牌名。",
+                search_keywords=[],
+                refs=[{"title": "汽车音响改装指南", "url": "https://example.com", "platform": "示例"}],
+                analysis={
+                    "brand_mentioned": False,
+                    "geo_score": 0,
+                    "main_ref": {"platform": "示例"},
+                },
+                source_platform="deepseek",
+            )
+
+            records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+            self.assertEqual(records[0]["id"], record_id)
+            self.assertFalse(records[0]["brand_mentioned"])
+            self.assertEqual(records[0]["source_platform"], "deepseek")
+
+            loaded = geo_app.load_client_records("client-1", group_id="group-1", platform="deepseek")
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["question"], "扬州汽车音响改装哪家好？")
+
+            all_platform_records = geo_app.load_client_records("client-1", group_id="group-1", platform="all")
+            self.assertEqual(len(all_platform_records), 1)
+
+            day_file = os.path.join(tmp, "raw", "client-1", f"{geo_app.today_str()}.json")
+            self.assertTrue(os.path.exists(day_file))
+
 
 class FlaskApiTests(unittest.TestCase):
     def setUp(self):
@@ -223,6 +257,166 @@ class FlaskApiTests(unittest.TestCase):
             payload = response.get_json()
             self.assertEqual(payload["error"], "need_login")
             self.assertFalse(payload["has_api_key"])
+            self.assertIn("task_id", payload)
+            self.assertTrue(os.path.exists(payload["task_report"]))
+            report = geo_app.load(payload["task_report"], {})
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["error"], "need_login")
+            self.assertEqual(report["brand"], "测试品牌")
+            self.assertEqual(report["questions"], ["测试问题"])
+
+    def test_crawl_uses_group_questions_without_legacy_probe_fallback(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_GROUPS,
+                {
+                    "client-1": [
+                        {
+                            "id": "group-1",
+                            "name": "手动问题组",
+                            "description": "",
+                            "questions": ["手动问题1", "手动问题2"],
+                        }
+                    ]
+                },
+            )
+            geo_app.save(geo_app.F_PROBES, {"client-1": [{"q": "旧问题库问题"}]})
+
+            response = self.client.post(
+                "/api/platform/crawl",
+                json={
+                    "client_id": "client-1",
+                    "brand": "测试品牌",
+                    "group_id": "group-1",
+                    "platform": "qwen",
+                    "repeat_count": 1,
+                    "parallel": 1,
+                },
+            )
+
+            self.assertEqual(response.status_code, 401)
+            report = geo_app.load(response.get_json()["task_report"], {})
+            self.assertEqual(report["questions"], ["手动问题1", "手动问题2"])
+
+    def test_crawl_rejects_missing_group_questions(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_PROBES, {"client-1": [{"q": "旧问题库问题"}]})
+
+            response = self.client.post(
+                "/api/platform/crawl",
+                json={
+                    "client_id": "client-1",
+                    "brand": "测试品牌",
+                    "platform": "qwen",
+                    "repeat_count": 1,
+                    "parallel": 1,
+                },
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("问题组", response.get_json()["error"])
+
+    def test_platform_neutral_daily_list_alias(self):
+        with isolated_app_data():
+            geo_app.save_daily_raw(
+                "client-1",
+                "测试品牌",
+                "测试问题",
+                "测试回答",
+                [],
+                {"geo_score": 0, "main_ref": {}},
+            )
+
+            new_response = self.client.get("/api/crawl/daily_list?client_id=client-1")
+            old_response = self.client.get("/api/doubao/daily_list?client_id=client-1")
+
+            self.assertEqual(new_response.status_code, 200)
+            self.assertEqual(new_response.get_json(), old_response.get_json())
+            self.assertEqual(new_response.get_json()["dates"], [geo_app.today_str()])
+
+    def test_clear_daily_records_respects_source_platform(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-ds",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "deepseek",
+                    },
+                    {
+                        "id": "raw-qwen",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                    },
+                ],
+            )
+
+            response = self.client.post(
+                "/api/daily/records/clear",
+                json={"client_id": "client-1", "date": geo_app.today_str(), "platform": "deepseek"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["deleted"], 1)
+            self.assertEqual(
+                geo_app.load(geo_app.F_RAW_RECORDS, []),
+                [
+                    {
+                        "id": "raw-qwen",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                    }
+                ],
+            )
+
+    def test_clear_daily_records_all_platforms(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-ds",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "deepseek",
+                    },
+                    {
+                        "id": "raw-qwen",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                    },
+                    {
+                        "id": "raw-other-client",
+                        "client_id": "client-2",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                    },
+                ],
+            )
+
+            response = self.client.post(
+                "/api/daily/records/clear",
+                json={"client_id": "client-1", "date": geo_app.today_str(), "platform": "all"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["deleted"], 2)
+            self.assertEqual(
+                geo_app.load(geo_app.F_RAW_RECORDS, []),
+                [
+                    {
+                        "id": "raw-other-client",
+                        "client_id": "client-2",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                    }
+                ],
+            )
 
     def test_crawl_with_unverified_saved_state_returns_cookie_expired_before_crawling(self):
         with isolated_app_data() as tmp:
@@ -253,6 +447,11 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(payload["error"], "cookie_expired")
             self.assertEqual(payload["login_status"], "unknown")
             self.assertTrue(payload["state_file_exists"])
+            self.assertIn("task_id", payload)
+            self.assertTrue(os.path.exists(payload["task_report"]))
+            report = geo_app.load(payload["task_report"], {})
+            self.assertEqual(report["status"], "blocked")
+            self.assertEqual(report["error"], "cookie_expired")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,6 @@
 """
 GEO Agent v2 — 内容投放优化工作台
-模块：客户管理 / 探针问题 / 豆包引用情报 / 平台库 / 内容生产 / 数据看板
+模块：客户管理 / 问题组管理 / AI引用情报 / 平台库 / 内容生产 / 数据看板
 """
 import json, os, re, csv, asyncio, threading
 from datetime import datetime, date
@@ -8,6 +8,9 @@ from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file
 from openai import OpenAI
 import io
+from services import crawl_tasks as crawl_task_store
+from services import records as record_store
+from services.storage import load_json, save_json
 
 app = Flask(__name__)
 APP_VERSION = "2.3"
@@ -25,80 +28,28 @@ F_RAW_RECORDS = f"{D}/raw_records.json"  # 细化版爬取记录
 
 def get_raw_data_dir():
     """获取原始数据存储目录（可由用户自定义）"""
-    s = load(F_SETTINGS, {})
-    custom = s.get("raw_data_path", "").strip()
-    if custom and os.path.isdir(custom):
-        return custom
-    default = os.path.join(D, "raw")
-    os.makedirs(default, exist_ok=True)
-    return default
+    return record_store.get_raw_data_dir(F_SETTINGS, D)
 
 def save_daily_raw(client_id, brand, question, answer, refs, analysis):
     """保存每日原始爬取数据到独立JSON文件，按日期分组"""
-    raw_dir = get_raw_data_dir()
-    today = today_str()
-    # 文件路径：raw/客户ID/2026-06-05.json
-    client_dir = os.path.join(raw_dir, client_id)
-    os.makedirs(client_dir, exist_ok=True)
-    day_file = os.path.join(client_dir, f"{today}.json")
-    # 加载当天已有数据
-    if os.path.exists(day_file):
-        with open(day_file, "r", encoding="utf-8") as f:
-            day_data = json.load(f)
-    else:
-        day_data = {"date": today, "client_id": client_id, "brand": brand, "records": []}
-    # 追加本条记录（包含完整原始数据）
-    day_data["records"].append({
-        "id": uid(),
-        "time": now_str(),
-        "question": question,
-        "answer": answer,          # 完整豆包回答
-        "refs": refs,              # 完整引用源列表
-        "analysis": analysis,      # AI分析结果
-        "ref_count": len(refs),
-        "brand_mentioned": (
-            brand in (answer or "") or
-            (brand[:2] if len(brand) >= 2 else brand) in (answer or "")
-        ),
-        "geo_score": analysis.get("geo_score", 0),
-        "main_platform": analysis.get("main_ref", {}).get("platform", ""),
-    })
-    with open(day_file, "w", encoding="utf-8") as f:
-        json.dump(day_data, f, ensure_ascii=False, indent=2)
-    return day_file
+    return record_store.save_daily_raw(
+        F_SETTINGS, D, client_id, brand, question, answer, refs, analysis,
+        uid, today_str, now_str
+    )
 
 # ── 数据操作 ────────────────────────────────────────────
 def load(path, default):
-    os.makedirs(D, exist_ok=True)
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, ValueError) as e:
-            # JSON损坏时：备份损坏文件，返回默认值，不崩溃
-            import shutil, time
-            bak = path + f".bak_{int(time.time())}"
-            try:
-                shutil.copy2(path, bak)
-                print(f"[警告] {path} JSON损坏，已备份到 {bak}，返回默认值")
-            except:
-                pass
-            return default
-    return default
+    return load_json(path, default)
 
 def save(path, data):
-    os.makedirs(D, exist_ok=True)
-    # 原子写入：先写临时文件再重命名，防止写入中断导致JSON损坏
-    tmp_path = path + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)  # 原子替换
-    except Exception as e:
-        print(f"[警告] 保存 {path} 失败: {e}")
-        if os.path.exists(tmp_path):
-            try: os.remove(tmp_path)
-            except: pass
+    save_json(path, data)
+
+def normalize_platform_filter(platform):
+    """Return None when the UI asks for all crawl platforms."""
+    if not platform or platform == "all":
+        return None
+    return platform
+
 
 def load_client_records(client_id, date=None, group_id=None, platform=None):
     """
@@ -106,22 +57,24 @@ def load_client_records(client_id, date=None, group_id=None, platform=None):
     client_id 为空时强制返回空列表，绝不读取全量数据，防止跨客户串数据。
     platform: 可选，按来源平台过滤（doubao/deepseek/yuanbao/qwen），None=全部
     """
-    if not client_id:
-        return []
-    records = load(F_RAW_RECORDS, [])
-    records = [r for r in records if r.get("client_id") == client_id]
-    if date:
-        records = [r for r in records if r.get("today") == date]
-    if group_id:
-        records = [r for r in records if r.get("group_id") == group_id]
-    if platform:
-        records = [r for r in records if r.get("source_platform", "doubao") == platform]
-    return records
+    return record_store.load_client_records(
+        F_RAW_RECORDS, client_id, date, group_id, normalize_platform_filter(platform)
+    )
 
 
 def today_str(): return date.today().isoformat()
 def now_str(): return datetime.now().strftime("%Y-%m-%d %H:%M")
 def uid(): return datetime.now().strftime("%Y%m%d%H%M%S%f")
+
+def get_crawl_task_dir():
+    return crawl_task_store.get_crawl_task_dir(D)
+
+def save_crawl_task_report(report):
+    """Persist one crawl task summary for later diagnosis."""
+    return crawl_task_store.save_crawl_task_report(D, report, uid, today_str, now_str)
+
+def compact_crawl_failure(raw, meta):
+    return crawl_task_store.compact_crawl_failure(raw, meta)
 
 def calc_geo_score(brand, question, answer, refs, analysis_result=None):
     """
@@ -308,49 +261,7 @@ def del_client(cid):
     return jsonify({"ok": True})
 
 # ══════════════════════════════════════════════════════
-# 模块二：探针问题库
-# ══════════════════════════════════════════════════════
-@app.route("/api/probes/<cid>", methods=["GET"])
-def get_probes(cid):
-    return jsonify(load(F_PROBES, {}).get(cid, []))
-
-@app.route("/api/probes/<cid>/generate", methods=["POST"])
-def gen_probes(cid):
-    d = request.json
-    prompt = f"""你是GEO优化专家。请为以下品牌生成用户会向豆包等AI大模型提问的探针问题库。
-
-品牌：{d['brand']}
-行业：{d.get('industry','')}
-优化目标：{d.get('goal','')}
-卖点：{d.get('selling_points','')}
-
-生成20条探针问题，覆盖：
-- 用户咨询选购/推荐（7条）
-- 用户了解品类知识（6条）
-- 用户比较竞品（4条）
-- 用户搜索本地服务（3条）
-
-要求：问题真实自然，是真实用户问AI的方式，问题里不要出现品牌名。
-只返回JSON数组：["问题1","问题2",...]"""
-    try:
-        questions = ai_json(prompt)
-        probes = load(F_PROBES, {})
-        probes[cid] = [{"id": i, "q": q, "active": True} for i, q in enumerate(questions)]
-        save(F_PROBES, probes)
-        return jsonify({"ok": True, "questions": questions})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/probes/<cid>/save", methods=["POST"])
-def save_probes(cid):
-    d = request.json
-    probes = load(F_PROBES, {})
-    probes[cid] = [{"id": i, "q": q, "active": True} for i, q in enumerate(d["questions"])]
-    save(F_PROBES, probes)
-    return jsonify({"ok": True})
-
-# ══════════════════════════════════════════════════════
-# 模块三：豆包引用情报
+# 模块二：AI引用情报
 # ══════════════════════════════════════════════════════
 @app.route("/api/intel/analyze", methods=["POST"])
 def analyze_intel():
@@ -409,7 +320,7 @@ def analyze_intel():
 @app.route("/api/intel/records", methods=["GET"])
 def get_records():
     cid = request.args.get("client_id","")
-    platform = request.args.get("platform", "")
+    platform = normalize_platform_filter(request.args.get("platform", ""))
     records = load(F_RECORDS, [])
     if cid:
         records = [r for r in records if r.get("client_id") == cid]
@@ -930,60 +841,6 @@ def add_question_to_group(cid, gid):
     save(F_GROUPS, groups)
     return jsonify({"ok": True})
 
-@app.route("/api/groups/<cid>/generate", methods=["POST"])
-def gen_group_questions(cid):
-    """AI生成并直接归入指定问题组"""
-    d = request.json
-    gid = d.get("group_id")
-    clients = load(F_CLIENTS, [])
-    client = next((c for c in clients if c.get("id") == cid), {})
-    brand = (d.get("brand") or client.get("brand") or "").strip()
-    industry = (d.get("industry") or client.get("industry") or "").strip()
-    goal = (d.get("goal") or client.get("goal") or "").strip()
-    group_name = (d.get("group_name") or "").strip()
-    description = (d.get("description") or "").strip()
-    count = max(1, min(int(d.get("count", 10) or 10), 50))
-
-    if (not industry) and (not brand or "测试" in brand or "回归" in brand):
-        industry = "AI搜索优化与企业服务软件"
-    if not goal and industry == "AI搜索优化与企业服务软件":
-        goal = "监测品牌在AI回答中的提及、推荐、引用来源和内容优化机会"
-
-    prompt = f"""你是GEO/AI搜索优化的探针问题设计专家。请为以下客户的问题组生成探针问题。
-
-品牌：{brand}
-行业/品类：{industry}
-GEO优化目标：{goal}
-问题组主题：{group_name}
-组描述：{description}
-生成数量：{count}条
-
-探针问题的用途：拿去问豆包、DeepSeek、元宝、千问等AI平台，观察AI是否会提及、推荐、引用或正确理解该行业/品类里的品牌与内容。
-
-必须满足：
-1. 每个问题都必须强相关于上面的行业/品类、服务场景、用户决策或GEO目标。
-2. 问题要像真实用户会问AI的问题，但不能变成泛生活、医疗、考试、旅游、税务、手机维修等无关问题。
-3. 问题里不要直接出现品牌名，但可以出现行业词、品类词、服务场景、选型指标、竞品比较、内容可信度、AI回答引用等表达。
-4. 覆盖这些角度：选型/推荐、指标/方法、竞品对比、内容建设、引用来源、企业落地、效果评估、风险排查。
-5. 如果品牌名像测试占位名称，也必须严格围绕行业/品类和GEO优化目标生成。
-
-只返回JSON数组：["问题1","问题2",...]"""
-    try:
-        questions = ai_json(prompt)
-        if gid:
-            groups = load(F_GROUPS, {})
-            for g in groups.get(cid, []):
-                if g["id"] == gid:
-                    existing = set(g["questions"])
-                    for q in questions:
-                        if q not in existing:
-                            g["questions"].append(q)
-                            existing.add(q)
-            save(F_GROUPS, groups)
-        return jsonify({"ok": True, "questions": questions})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
 # ══════════════════════════════════════════════════════
 # 细化爬取记录模块
 # ══════════════════════════════════════════════════════
@@ -992,42 +849,24 @@ def save_raw_record(client_id, group_id, brand, question, round_num,
                     answer, search_keywords, refs, analysis,
                     source_platform="doubao"):
     """保存单次爬取的完整原始记录"""
-    records = load(F_RAW_RECORDS, [])
-    record = {
-        "id": uid(),
-        "client_id": client_id,
-        "group_id": group_id,
-        "brand": brand,
-        "question": question,
-        "round": round_num,
-        "crawl_time": now_str(),
-        "today": today_str(),
-        "source_platform": source_platform,    # 爬取来源平台
-        "answer": answer,
-        "search_keywords": search_keywords,
-        "refs": [
-            {
-                "position": i + 1,
-                "title": r.get("title", ""),
-                "url": r.get("url", ""),
-                "platform": r.get("platform", "")
-            }
-            for i, r in enumerate(refs)
-        ],
-        "ref_count": len(refs),
-        "analysis": analysis,
-        "brand_mentioned": (
-            brand in (answer or "") or
-            (brand[:2] if len(brand) >= 2 else brand) in (answer or "")
-        ),
-        "geo_score": analysis.get("geo_score", 0),
-        "main_platform": analysis.get("main_ref", {}).get("platform", "")
-    }
-    records.append(record)
-    save(F_RAW_RECORDS, records)
-    # 同时写入每日文件
-    save_daily_raw(client_id, brand, question, answer, refs, analysis)
-    return record["id"]
+    return record_store.save_raw_record(
+        F_RAW_RECORDS,
+        F_SETTINGS,
+        D,
+        client_id,
+        group_id,
+        brand,
+        question,
+        round_num,
+        answer,
+        search_keywords,
+        refs,
+        analysis,
+        uid,
+        today_str,
+        now_str,
+        source_platform=source_platform,
+    )
 
 @app.route("/api/raw_records", methods=["GET"])
 def get_raw_records():
@@ -1054,6 +893,7 @@ def platform_stats():
     client_id = request.args.get("client_id", "")
     group_id = request.args.get("group_id", "")
     question_filter = request.args.get("question", "")
+    mentioned_only = request.args.get("mentioned_only", "")
     source_platform = request.args.get("platform", "")  # 按爬取平台过滤
     records = load_client_records(client_id, group_id=group_id,
                                   platform=source_platform if source_platform else None)
@@ -1065,6 +905,8 @@ def platform_stats():
     # 按具体问题过滤
     if question_filter:
         records = [r for r in records if question_filter in r.get("question", "")]
+    if mentioned_only == "1":
+        records = [r for r in records if r.get("brand_mentioned")]
 
     platform_cnt = defaultdict(int)
     platform_articles = defaultdict(list)
@@ -1127,12 +969,18 @@ def deep_analyze():
     client_id = d.get("client_id", "")
     group_id = d.get("group_id", "")
     date = d.get("date", "")
+    question = d.get("question", "")
+    mentioned_only = d.get("mentioned_only", "")
     source_platform = d.get("platform", "")  # 按爬取平台过滤
 
     records = load_client_records(client_id, group_id=group_id,
                                   platform=source_platform if source_platform else None)
     if date:
         records = [r for r in records if r.get("today") == date]
+    if question:
+        records = [r for r in records if question in r.get("question", "")]
+    if mentioned_only == "1":
+        records = [r for r in records if r.get("brand_mentioned")]
     if not records:
         return jsonify({"error": "无匹配记录"}), 400
 
@@ -1452,29 +1300,25 @@ def get_daily_records():
     client_id = request.args.get("client_id", "")
     date = request.args.get("date", today_str())
     source_platform = request.args.get("platform", "")
+    group_id = request.args.get("group_id", "")
     result = load_client_records(client_id, date=date,
-                                  platform=source_platform if source_platform else None)
+                                  platform=source_platform if source_platform else None,
+                                  group_id=group_id if group_id else None)
     result.sort(key=lambda x: x.get("crawl_time", ""), reverse=True)
     return jsonify(result)
 
 @app.route("/api/daily/records/<rid>", methods=["DELETE"])
 def delete_daily_record(rid):
     """删除单条爬取记录（用于清理错爬漏爬数据）"""
-    records = load(F_RAW_RECORDS, [])
-    before = len(records)
-    records = [r for r in records if r.get("id") != rid]
-    save(F_RAW_RECORDS, records)
-    return jsonify({"ok": True, "deleted": before - len(records)})
+    deleted = record_store.delete_raw_record(F_RAW_RECORDS, rid)
+    return jsonify({"ok": True, "deleted": deleted})
 
 @app.route("/api/daily/records/batch_delete", methods=["POST"])
 def batch_delete_records():
     """批量删除多条记录"""
     ids = set(request.json.get("ids", []))
-    records = load(F_RAW_RECORDS, [])
-    before = len(records)
-    records = [r for r in records if r.get("id") not in ids]
-    save(F_RAW_RECORDS, records)
-    return jsonify({"ok": True, "deleted": before - len(records)})
+    deleted = record_store.delete_raw_records(F_RAW_RECORDS, ids)
+    return jsonify({"ok": True, "deleted": deleted})
 
 @app.route("/api/daily/records/clear", methods=["POST"])
 def clear_daily_records():
@@ -1482,15 +1326,11 @@ def clear_daily_records():
     d = request.json
     client_id = d.get("client_id", "")
     date = d.get("date", today_str())
+    source_platform = d.get("platform", "")
     if not client_id:
         return jsonify({"error": "缺少client_id"}), 400
-    records = load(F_RAW_RECORDS, [])
-    before = len(records)
-    records = [r for r in records
-               if not (r.get("client_id") == client_id and r.get("today") == date)]
-    save(F_RAW_RECORDS, records)
-    deleted = before - len(records)
-    return jsonify({"ok": True, "deleted": deleted, "date": date})
+    deleted = record_store.clear_client_day_records(F_RAW_RECORDS, client_id, date, source_platform)
+    return jsonify({"ok": True, "deleted": deleted, "date": date, "platform": source_platform})
 
 @app.route("/api/daily/ref_stats", methods=["GET"])
 def daily_ref_stats():
@@ -2104,7 +1944,7 @@ def platform_login():
     pname = CRAWL_PLATFORMS[platform]["name"]
     return jsonify({"ok": True, "message": f"浏览器已打开，请在窗口中完成 {pname} 登录"})
 
-# 兼容旧接口
+# 兼容旧登录接口
 @app.route("/api/doubao/login", methods=["POST"])
 def doubao_login():
     return platform_login()
@@ -2168,7 +2008,7 @@ def basic_brand_analysis_without_api(brand, question, answer, refs):
 
 @app.route("/api/platform/crawl", methods=["POST"])
 @app.route("/api/doubao/crawl", methods=["POST"])  # 兼容旧接口
-def doubao_crawl():
+def platform_crawl():
     """
     多平台批量爬取（增强版）：
     - 支持 doubao / deepseek / yuanbao / qwen 四个平台
@@ -2192,7 +2032,7 @@ def doubao_crawl():
     if not client_id or not brand:
         return jsonify({"error": "缺少客户信息"}), 400
 
-    # 优先从问题组获取问题
+    # 问题必须来自问题组或前端显式传入；旧问题库不再参与主流程。
     if not selected_questions:
         if group_id:
             groups = load(F_GROUPS, {})
@@ -2202,11 +2042,26 @@ def doubao_crawl():
             if target_group:
                 selected_questions = target_group["questions"]
                 print(f"从问题组「{target_group['name']}」获取 {len(selected_questions)} 条问题")
-        if not selected_questions:
-            probes = load(F_PROBES, {})
-            selected_questions = [p["q"] for p in probes.get(client_id, [])]
     if not selected_questions:
-        return jsonify({"error": "该客户暂无探针问题，请先生成问题库或创建问题组"}), 400
+        return jsonify({"error": "该问题组暂无问题，请先在问题组中手动添加问题"}), 400
+
+    task_id = uid()
+    task_report = {
+        "task_id": task_id,
+        "status": "running",
+        "started_at": now_str(),
+        "client_id": client_id,
+        "brand": brand,
+        "group_id": group_id,
+        "platform": source_platform,
+        "question_count": len(selected_questions),
+        "repeat_count": repeat_count,
+        "parallel": parallel,
+        "questions": selected_questions,
+        "success": [],
+        "failures": [],
+        "analysis_errors": [],
+    }
 
     settings = get_settings()
     has_api_key = bool(settings.get("api_key"))
@@ -2214,12 +2069,22 @@ def doubao_crawl():
     login_status = get_platform_login_status(source_platform)
     if not login_status["logged_in"]:
         error_code = "need_login" if login_status["status"] == "missing" else "cookie_expired"
+        task_report.update({
+            "status": "blocked",
+            "finished_at": now_str(),
+            "error": error_code,
+            "message": login_status["message"],
+            "login_status": login_status,
+        })
+        task_path = save_crawl_task_report(task_report)
         return jsonify({
             "error": error_code,
             "message": login_status["message"],
             "login_status": login_status["status"],
             "state_file_exists": login_status["state_file_exists"],
             "has_api_key": has_api_key,
+            "task_id": task_id,
+            "task_report": task_path,
         }), 401
 
     # 生成本次爬取的session_id，用于SSE进度推送
@@ -2248,11 +2113,33 @@ def doubao_crawl():
         )
     except TimeoutError as e:
         loop.close()
-        return jsonify({"error": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。"}), 400
+        task_report.update({
+            "status": "failed",
+            "finished_at": now_str(),
+            "error": "captcha_timeout",
+            "message": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
+        })
+        task_path = save_crawl_task_report(task_report)
+        return jsonify({
+            "error": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
+            "task_id": task_id,
+            "task_report": task_path,
+        }), 400
     except Exception as e:
         loop.close()
         print(f"爬取异常: {e}")
-        return jsonify({"error": f"爬取过程发生错误: {str(e)}"}), 500
+        task_report.update({
+            "status": "failed",
+            "finished_at": now_str(),
+            "error": "crawl_exception",
+            "message": str(e),
+        })
+        task_path = save_crawl_task_report(task_report)
+        return jsonify({
+            "error": f"爬取过程发生错误: {str(e)}",
+            "task_id": task_id,
+            "task_report": task_path,
+        }), 500
     finally:
         try:
             loop.close()
@@ -2263,33 +2150,80 @@ def doubao_crawl():
         err = crawl_result.get("error", "") if crawl_result else ""
         if err == "need_login":
             mark_login_status(source_platform, "expired", "登录状态已失效，请重新登录")
-            return jsonify({"error": "need_login", "message": "请先登录平台"}), 401
+            task_report.update({
+                "status": "blocked",
+                "finished_at": now_str(),
+                "error": "need_login",
+                "message": "请先登录平台",
+            })
+            task_path = save_crawl_task_report(task_report)
+            return jsonify({"error": "need_login", "message": "请先登录平台", "task_id": task_id, "task_report": task_path}), 401
         if err == "cookie_expired":
             mark_login_status(source_platform, "expired", "登录状态已过期，请重新登录")
-            return jsonify({"error": "cookie_expired", "message": "登录状态已失效，请重新登录后再爬取"}), 401
-        return jsonify({"error": crawl_result.get("error", "爬取失败") if crawl_result else "爬取失败"}), 500
+            task_report.update({
+                "status": "blocked",
+                "finished_at": now_str(),
+                "error": "cookie_expired",
+                "message": "登录状态已失效，请重新登录后再爬取",
+            })
+            task_path = save_crawl_task_report(task_report)
+            return jsonify({"error": "cookie_expired", "message": "登录状态已失效，请重新登录后再爬取", "task_id": task_id, "task_report": task_path}), 401
+        error_msg = crawl_result.get("error", "爬取失败") if crawl_result else "爬取失败"
+        task_report.update({
+            "status": "failed",
+            "finished_at": now_str(),
+            "error": error_msg,
+            "message": error_msg,
+        })
+        task_path = save_crawl_task_report(task_report)
+        return jsonify({"error": error_msg, "task_id": task_id, "task_report": task_path}), 500
 
     # 过滤掉 cookie_expired 的结果，已保存的正常继续处理
     valid_results = []
     result_errors = []
+    crawl_failures = []
     for raw, meta in zip(crawl_result["results"], expanded_questions):
         raw_error = raw.get("error")
         if raw_error:
             result_errors.append(raw_error)
+            crawl_failures.append(compact_crawl_failure(raw, meta))
         if raw_error == "cookie_expired":
             print(f"  跳过 cookie 失效题目: {meta['question'][:30]}")
         elif raw.get("ok"):
             valid_results.append((raw, meta))
+        elif not raw_error:
+            crawl_failures.append(compact_crawl_failure(raw, meta))
     
     if not valid_results and crawl_result.get("success", 0) == 0:
+        task_report.update({
+            "status": "failed",
+            "finished_at": now_str(),
+            "error": "crawl_failed",
+            "message": "本次爬取没有获得有效结果",
+            "failures": crawl_failures,
+            "raw_result": {
+                "total": crawl_result.get("total"),
+                "success": crawl_result.get("success"),
+            },
+        })
+        task_path = save_crawl_task_report(task_report)
         if "cookie_expired" in result_errors or "need_login" in result_errors:
             mark_login_status(source_platform, "expired", "登录状态已过期，请重新登录")
-            return jsonify({"error": "cookie_expired", "message": "登录状态中途失效，请重新登录后继续爬取"}), 401
+            return jsonify({
+                "error": "cookie_expired",
+                "message": "登录状态中途失效，请重新登录后继续爬取",
+                "task_id": task_id,
+                "task_report": task_path,
+                "error_details": crawl_failures,
+            }), 401
         return jsonify({
             "error": "crawl_failed",
             "message": "本次爬取没有获得有效结果",
             "details": result_errors[:10],
             "results": crawl_result.get("results", [])[:10],
+            "task_id": task_id,
+            "task_report": task_path,
+            "error_details": crawl_failures,
         }), 500
 
     # 按问题分组，汇总多次爬取结果
@@ -2421,8 +2355,26 @@ def doubao_crawl():
     # 推送完成事件
     crawl_sessions[session_id]["events"].append({"status": "finished"})
 
+    error_details = crawl_failures + errors
+    task_report.update({
+        "status": "completed" if not error_details else "completed_with_errors",
+        "finished_at": now_str(),
+        "session_id": session_id,
+        "analysis_mode": "ai" if has_api_key else "basic_no_api_key",
+        "total_samples": len(crawl_result["results"]),
+        "analyzed": len(saved),
+        "errors": len(error_details),
+        "success": saved,
+        "failures": crawl_failures,
+        "analysis_errors": errors,
+        "batch_summary": batch_summary,
+    })
+    task_path = save_crawl_task_report(task_report)
+
     return jsonify({
         "ok": True,
+        "task_id": task_id,
+        "task_report": task_path,
         "session_id": session_id,
         "analysis_mode": "ai" if has_api_key else "basic_no_api_key",
         "has_api_key": has_api_key,
@@ -2431,15 +2383,16 @@ def doubao_crawl():
         "repeat_count": repeat_count,
         "total_samples": len(crawl_result["results"]),
         "analyzed": len(saved),
-        "errors": len(errors),
+        "errors": len(error_details),
         "results": saved,
         "batch_summary": batch_summary,
-        "error_details": errors
+        "error_details": error_details
     })
 
 
-@app.route("/api/doubao/daily", methods=["GET"])
-def get_daily_data():
+@app.route("/api/crawl/daily", methods=["GET"])
+@app.route("/api/doubao/daily", methods=["GET"])  # 兼容旧接口
+def get_crawl_daily_data():
     """查询指定日期的原始爬取数据"""
     client_id = request.args.get("client_id", "")
     date_str = request.args.get("date", today_str())
@@ -2454,8 +2407,9 @@ def get_daily_data():
         data = json.load(f)
     return jsonify({**data, "exists": True, "file_path": day_file})
 
-@app.route("/api/doubao/daily_list", methods=["GET"])
-def list_daily_files():
+@app.route("/api/crawl/daily_list", methods=["GET"])
+@app.route("/api/doubao/daily_list", methods=["GET"])  # 兼容旧接口
+def list_crawl_daily_files():
     """列出某客户所有有数据的日期"""
     client_id = request.args.get("client_id", "")
     if not client_id:
@@ -2471,8 +2425,9 @@ def list_daily_files():
     ], reverse=True)
     return jsonify({"dates": dates, "path": client_dir, "total": len(dates)})
 
-@app.route("/api/doubao/daily_analyze", methods=["POST"])
-def analyze_daily():
+@app.route("/api/crawl/daily_analyze", methods=["POST"])
+@app.route("/api/doubao/daily_analyze", methods=["POST"])  # 兼容旧接口
+def analyze_crawl_daily():
     """对指定日期的原始数据一键生成AI分析报告"""
     d = request.json
     client_id = d.get("client_id", "")
@@ -2571,7 +2526,8 @@ from flask import Response, stream_with_context
 # 全局进度存储
 crawl_sessions = {}
 
-@app.route("/api/doubao/progress/<session_id>")
+@app.route("/api/crawl/progress/<session_id>")
+@app.route("/api/doubao/progress/<session_id>")  # 兼容旧接口
 def crawl_progress(session_id):
     """SSE：实时推送爬取进度"""
     def generate():

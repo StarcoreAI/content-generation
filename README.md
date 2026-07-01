@@ -29,7 +29,7 @@ http://localhost:5000
 
 - `使用说明.md`: product usage guide
 - `工程化说明.md`: development, testing, and local operations
-- `接手文档.md`: current project handoff notes and roadmap
+- `接手文档.md`: project understanding guide for handoff and onboarding
 
 ## Sensitive Local Data
 
