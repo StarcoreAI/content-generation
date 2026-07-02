@@ -14,6 +14,8 @@ from services.storage import load_json, save_json
 
 app = Flask(__name__)
 APP_VERSION = "2.3"
+NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen"}
+crawl_run_lock = threading.Lock()
 
 # ── 数据文件路径 ────────────────────────────────────────
 D = "data"
@@ -51,6 +53,31 @@ def normalize_platform_filter(platform):
     return platform
 
 
+def should_use_node_crawler(platform):
+    """
+    Route crawler execution through the external Node crawler bridge.
+
+    Default: use the external Node crawler for supported production platforms.
+    Override examples:
+    - GEO_NODE_CRAWLER_PLATFORMS=doubao     -> only doubao uses Node
+    - GEO_NODE_CRAWLER_PLATFORMS=doubao,qwen -> doubao and qwen use Node
+    - GEO_NODE_CRAWLER_PLATFORMS=all        -> all default platforms use Node
+    - GEO_NODE_CRAWLER_PLATFORMS=none       -> use Python crawlers for all platforms
+    """
+    raw = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+    if raw is None:
+        return platform in NODE_CRAWLER_DEFAULT_PLATFORMS
+
+    normalized = raw.strip().lower()
+    if normalized in {"", "none", "off", "false", "0", "python"}:
+        return False
+    if normalized == "all":
+        return platform in NODE_CRAWLER_DEFAULT_PLATFORMS
+
+    requested = {p.strip() for p in normalized.split(",") if p.strip()}
+    return platform in requested
+
+
 def load_client_records(client_id, date=None, group_id=None, platform=None):
     """
     严格按 client_id 过滤爬取记录的唯一入口。
@@ -68,6 +95,9 @@ def uid(): return datetime.now().strftime("%Y%m%d%H%M%S%f")
 
 def get_crawl_task_dir():
     return crawl_task_store.get_crawl_task_dir(D)
+
+def build_node_output_dir(data_dir, task_id, platform):
+    return os.path.abspath(os.path.join(data_dir, "tasks", "node", task_id, platform))
 
 def save_crawl_task_report(report):
     """Persist one crawl task summary for later diagnosis."""
@@ -132,6 +162,32 @@ def calc_geo_score(brand, question, answer, refs, analysis_result=None):
         score += min((brand_count - 1) * 2, 5)
 
     return max(0, min(100, score))
+
+
+def extract_brand_snippet(answer, brand, radius=45):
+    value = answer or ""
+    if not brand or brand not in value:
+        return ""
+    idx = value.find(brand)
+    start = max(0, idx - radius)
+    end = min(len(value), idx + len(brand) + radius)
+    return value[start:end].strip()
+
+
+def calibrate_analysis_brand_mention(brand, question, answer, refs, analysis):
+    """
+    Keep summary records consistent with raw records: full brand mention is
+    determined by the answer body, not by AI inference alone.
+    """
+    result = dict(analysis or {})
+    mentioned_in_answer = bool(brand and brand in (answer or ""))
+    result["brand_mentioned"] = mentioned_in_answer
+    if mentioned_in_answer and not result.get("brand_snippet"):
+        result["brand_snippet"] = extract_brand_snippet(answer, brand)
+    if not mentioned_in_answer:
+        result["brand_snippet"] = ""
+    result["geo_score"] = calc_geo_score(brand, question, answer, refs, result)
+    return result
 
 
 # ── AI 调用 ─────────────────────────────────────────────
@@ -2009,6 +2065,18 @@ def basic_brand_analysis_without_api(brand, question, answer, refs):
 @app.route("/api/platform/crawl", methods=["POST"])
 @app.route("/api/doubao/crawl", methods=["POST"])  # 兼容旧接口
 def platform_crawl():
+    if not crawl_run_lock.acquire(blocking=False):
+        return jsonify({
+            "error": "crawl_busy",
+            "message": "已有爬取任务进行中，请稍后再试。当前版本为了避免多人同时爬取导致平台登录态冲突和数据写入冲突，一次只允许一个爬取任务运行。",
+        }), 409
+    try:
+        return platform_crawl_impl()
+    finally:
+        crawl_run_lock.release()
+
+
+def platform_crawl_impl():
     """
     多平台批量爬取（增强版）：
     - 支持 doubao / deepseek / yuanbao / qwen 四个平台
@@ -2065,6 +2133,8 @@ def platform_crawl():
 
     settings = get_settings()
     has_api_key = bool(settings.get("api_key"))
+    use_node_crawler = should_use_node_crawler(source_platform)
+    task_report["crawler_engine"] = "node" if use_node_crawler else "python"
     from base_crawler import get_platform_login_status, mark_login_status
     login_status = get_platform_login_status(source_platform)
     if not login_status["logged_in"]:
@@ -2091,12 +2161,6 @@ def platform_crawl():
     session_id = str(uuid_lib.uuid4())
     crawl_sessions[session_id] = {"events": []}
 
-    import asyncio
-    crawler_mod = get_crawler_module(source_platform)
-    crawl_batch_async = crawler_mod.crawl_batch_async
-    if os.name == "nt":
-        asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
-
     # 展开问题列表：每题重复 repeat_count 次
     expanded_questions = []
     for q in selected_questions:
@@ -2104,47 +2168,115 @@ def platform_crawl():
             expanded_questions.append({"question": q, "round": i + 1})
 
     # 执行爬取
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        crawl_result = loop.run_until_complete(
-            crawl_batch_async([item["question"] for item in expanded_questions],
-                             parallel=parallel)
-        )
-    except TimeoutError as e:
-        loop.close()
-        task_report.update({
-            "status": "failed",
-            "finished_at": now_str(),
-            "error": "captcha_timeout",
-            "message": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
-        })
-        task_path = save_crawl_task_report(task_report)
-        return jsonify({
-            "error": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
-            "task_id": task_id,
-            "task_report": task_path,
-        }), 400
-    except Exception as e:
-        loop.close()
-        print(f"爬取异常: {e}")
-        task_report.update({
-            "status": "failed",
-            "finished_at": now_str(),
-            "error": "crawl_exception",
-            "message": str(e),
-        })
-        task_path = save_crawl_task_report(task_report)
-        return jsonify({
-            "error": f"爬取过程发生错误: {str(e)}",
-            "task_id": task_id,
-            "task_report": task_path,
-        }), 500
-    finally:
+    if use_node_crawler:
+        from services.node_crawler_bridge import NodeCrawlerBridgeError, run_node_crawler
+        node_output_dir = build_node_output_dir(D, task_id, source_platform)
+        os.makedirs(node_output_dir, exist_ok=True)
+        task_report["node_output_dir"] = node_output_dir
         try:
+            try:
+                timeout_s = max(1, int(os.environ.get("GEO_NODE_CRAWLER_TIMEOUT", "1800")))
+            except ValueError:
+                timeout_s = 1800
+            crawl_result = run_node_crawler(
+                source_platform,
+                [item["question"] for item in expanded_questions],
+                timeout_s=timeout_s,
+                output_dir=node_output_dir,
+            )
+        except NodeCrawlerBridgeError as e:
+            print(f"Node爬虫异常: {e}")
+            if "need_login" in str(e):
+                mark_login_status(source_platform, "expired", "Node 爬虫检测到登录状态失效，请重新登录")
+                task_report.update({
+                    "status": "blocked",
+                    "finished_at": now_str(),
+                    "error": "cookie_expired",
+                    "message": "Node 爬虫检测到登录状态失效，请重新登录",
+                })
+                task_path = save_crawl_task_report(task_report)
+                return jsonify({
+                    "error": "cookie_expired",
+                    "message": "Node 爬虫检测到登录状态失效，请重新登录",
+                    "task_id": task_id,
+                    "task_report": task_path,
+                }), 401
+            if "verification_required" in str(e) or "rate limited" in str(e):
+                message = "平台触发验证码或限流，请关闭 VPN/代理、完成平台验证或稍后重试"
+                mark_login_status(source_platform, "expired", message)
+                task_report.update({
+                    "status": "blocked",
+                    "finished_at": now_str(),
+                    "error": "verification_required",
+                    "message": message,
+                })
+                task_path = save_crawl_task_report(task_report)
+                return jsonify({
+                    "error": "verification_required",
+                    "message": message,
+                    "task_id": task_id,
+                    "task_report": task_path,
+                }), 429
+            task_report.update({
+                "status": "failed",
+                "finished_at": now_str(),
+                "error": "node_crawler_exception",
+                "message": str(e),
+            })
+            task_path = save_crawl_task_report(task_report)
+            return jsonify({
+                "error": f"Node爬虫过程发生错误: {str(e)}",
+                "task_id": task_id,
+                "task_report": task_path,
+            }), 500
+    else:
+        import asyncio
+        crawler_mod = get_crawler_module(source_platform)
+        crawl_batch_async = crawler_mod.crawl_batch_async
+        if os.name == "nt":
+            asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            crawl_result = loop.run_until_complete(
+                crawl_batch_async([item["question"] for item in expanded_questions],
+                                 parallel=parallel)
+            )
+        except TimeoutError as e:
             loop.close()
-        except:
-            pass
+            task_report.update({
+                "status": "failed",
+                "finished_at": now_str(),
+                "error": "captcha_timeout",
+                "message": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
+            })
+            task_path = save_crawl_task_report(task_report)
+            return jsonify({
+                "error": "人机验证等待超时，任务已中止。请重新发起爬取，并在弹出验证码时5分钟内完成验证。",
+                "task_id": task_id,
+                "task_report": task_path,
+            }), 400
+        except Exception as e:
+            loop.close()
+            print(f"爬取异常: {e}")
+            task_report.update({
+                "status": "failed",
+                "finished_at": now_str(),
+                "error": "crawl_exception",
+                "message": str(e),
+            })
+            task_path = save_crawl_task_report(task_report)
+            return jsonify({
+                "error": f"爬取过程发生错误: {str(e)}",
+                "task_id": task_id,
+                "task_report": task_path,
+            }), 500
+        finally:
+            try:
+                loop.close()
+            except:
+                pass
 
     if not crawl_result or not crawl_result.get("ok"):
         err = crawl_result.get("error", "") if crawl_result else ""
@@ -2254,12 +2386,16 @@ def platform_crawl():
 
             for i, ans in enumerate(all_answers, 1):
                 combined_answer += f"--- 第{i}次回答 ---\n{ans[:800]}\n\n"
+            full_answer_for_mention = "\n\n".join(all_answers)
 
             # 有 API Key 时做 AI 综合分析；没有时保留原始爬取结果并标记待分析。
             if has_api_key:
                 analysis = analyze_brand_intel(brand, question, combined_answer, all_refs, settings)
             else:
                 analysis = basic_brand_analysis_without_api(brand, question, combined_answer, all_refs)
+            analysis = calibrate_analysis_brand_mention(
+                brand, question, full_answer_for_mention, all_refs, analysis
+            )
             analysis["sample_count"] = len(rounds)  # 记录样本数
 
             # 保存到主分析系统（records.json）
@@ -2376,6 +2512,7 @@ def platform_crawl():
         "task_id": task_id,
         "task_report": task_path,
         "session_id": session_id,
+        "crawler_engine": task_report["crawler_engine"],
         "analysis_mode": "ai" if has_api_key else "basic_no_api_key",
         "has_api_key": has_api_key,
         "message": "" if has_api_key else "未配置 API Key：已跳过 AI 深度分析，仅保存原始回答、引用源和规则评分。",

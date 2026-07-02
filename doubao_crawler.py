@@ -8,7 +8,7 @@ import json
 import os
 import re
 from playwright.async_api import async_playwright
-from base_crawler import mark_login_status, verify_saved_login
+from base_crawler import mark_login_status, save_cookies as save_storage_state, verify_saved_login
 
 import pathlib as _pl
 PLATFORM = "doubao"
@@ -36,7 +36,8 @@ async def load_cookies(context):
 async def check_logged_in(page) -> bool:
     try:
         cur_url = page.url.lower()
-        if any(kw in cur_url for kw in ["login", "passport", "signin", "sign_in"]):
+        cur_url_without_query = cur_url.split("?", 1)[0]
+        if any(kw in cur_url_without_query for kw in ["login", "passport", "signin", "sign_in"]):
             return False
 
         body = await page.evaluate("() => (document.body && document.body.innerText) || ''")
@@ -44,8 +45,6 @@ async def check_logged_in(page) -> bool:
             "请先登录",
             "登录后",
             "受区域限制",
-            "选择使用 Dola",
-            "选择使用Dola",
             "手机号登录",
             "验证码登录",
         ]
@@ -63,6 +62,8 @@ async def check_logged_in(page) -> bool:
             'textarea[placeholder*="发消息"]',
             'textarea[placeholder*="消息"]',
             'textarea[placeholder*="输入"]',
+            '[contenteditable="true"][role="textbox"]',
+            '[contenteditable="true"]',
             'textarea',
         ]:
             el = await page.query_selector(sel)
@@ -663,6 +664,7 @@ async def login_doubao_async():
                 cookies = await context.cookies()
                 with open(COOKIE_FILE, "w", encoding="utf-8") as f:
                     json.dump(cookies, f, ensure_ascii=False, indent=2)
+                await save_storage_state(context, PLATFORM, mark_ok=False)
                 print(f"[豆包] 登录状态已保存（共{len(cookies)}个Cookie），开始复验")
 
                 verified = await verify_saved_login(

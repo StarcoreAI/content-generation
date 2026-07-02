@@ -966,6 +966,16 @@ let currentGoal = '';
 let currentPlatform = 'all';  // 当前数据视图/默认爬取范围
 const loginPollTimers = {};
 const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
+const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'doubao'];
+
+function sortCrawlPlatforms(platforms) {
+  const rank = new Map(CRAWL_PLATFORM_ORDER.map((id, index) => [id, index]));
+  return [...platforms].sort((a, b) => {
+    const aRank = rank.has(a.id) ? rank.get(a.id) : CRAWL_PLATFORM_ORDER.length;
+    const bRank = rank.has(b.id) ? rank.get(b.id) : CRAWL_PLATFORM_ORDER.length;
+    return aRank - bRank;
+  });
+}
 
 function onPlatformChange() {
   const sel = document.getElementById('globalPlatform');
@@ -1264,7 +1274,7 @@ async function platformLogin(platform) {
 function doubaoLogin() { platformLogin('doubao'); }
 
 async function checkAllLoginStatus() {
-  const platforms = ['doubao','deepseek','yuanbao','qwen'];
+  const platforms = CRAWL_PLATFORM_ORDER;
   const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
   const statusDiv = document.getElementById('platformLoginStatus');
   const legacyEl = document.getElementById('loginStatus');
@@ -1950,19 +1960,19 @@ async function getLoggedInCrawlPlatforms() {
     throw new Error(platforms?.error || '平台状态获取失败');
   }
 
-  return platforms
+  return sortCrawlPlatforms(platforms
     .filter(p => p.logged_in)
     .map(p => ({
       id: p.id,
       name: p.name || CRAWL_PLATFORM_NAMES[p.id] || p.id
-    }));
+    })));
 }
 
 async function getTargetCrawlPlatforms(scope='current') {
   if (scope === 'all' || currentPlatform === 'all') {
     return getLoggedInCrawlPlatforms();
   }
-  return [{id: currentPlatform, name: CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform}];
+  return sortCrawlPlatforms([{id: currentPlatform, name: CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform}]);
 }
 
 async function getGroupCrawlPlatforms() {

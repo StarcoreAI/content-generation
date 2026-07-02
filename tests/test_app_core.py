@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from contextlib import contextmanager
+from unittest.mock import patch
 
 import app as geo_app
 import base_crawler
@@ -44,6 +45,37 @@ def isolated_app_data():
 
 
 class CoreFunctionTests(unittest.TestCase):
+    def test_build_node_output_dir_returns_absolute_path_for_relative_data_dir(self):
+        path = geo_app.build_node_output_dir("data", "task-1", "qwen")
+        self.assertTrue(os.path.isabs(path))
+        self.assertTrue(path.endswith(os.path.join("data", "tasks", "node", "task-1", "qwen")))
+
+    def test_should_use_node_crawler_env_flag(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        try:
+            os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            self.assertTrue(geo_app.should_use_node_crawler("doubao"))
+            self.assertTrue(geo_app.should_use_node_crawler("deepseek"))
+            self.assertTrue(geo_app.should_use_node_crawler("yuanbao"))
+            self.assertTrue(geo_app.should_use_node_crawler("qwen"))
+
+            os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "none"
+            self.assertFalse(geo_app.should_use_node_crawler("doubao"))
+            self.assertFalse(geo_app.should_use_node_crawler("qwen"))
+
+            os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "doubao, qwen"
+            self.assertTrue(geo_app.should_use_node_crawler("doubao"))
+            self.assertTrue(geo_app.should_use_node_crawler("qwen"))
+            self.assertFalse(geo_app.should_use_node_crawler("deepseek"))
+
+            os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "all"
+            self.assertTrue(geo_app.should_use_node_crawler("yuanbao"))
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
     def test_calc_geo_score_requires_brand_in_answer(self):
         score = geo_app.calc_geo_score(
             "测试品牌",
@@ -84,6 +116,24 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertEqual(analysis["analysis_status"], "pending_api")
         self.assertEqual(analysis["analysis_mode"], "basic_no_api_key")
         self.assertGreaterEqual(analysis["geo_score"], 20)
+
+    def test_calibrate_analysis_uses_full_brand_mention_from_answer(self):
+        analysis = geo_app.calibrate_analysis_brand_mention(
+            "苏韵汽车音响",
+            "扬州汽车音响改装升级哪家好",
+            "第三个可以看苏韵汽车音响，调音比较细。",
+            [{"title": "苏韵汽车音响案例", "url": "https://example.com"}],
+            {
+                "brand_mentioned": False,
+                "brand_rank": 3,
+                "brand_sentiment": "positive",
+                "brand_snippet": "",
+            },
+        )
+
+        self.assertTrue(analysis["brand_mentioned"])
+        self.assertIn("苏韵汽车音响", analysis["brand_snippet"])
+        self.assertGreater(analysis["geo_score"], 0)
 
     def test_save_raw_record_uses_analysis_mention_flag_and_writes_daily_archive(self):
         with isolated_app_data() as tmp:
@@ -452,6 +502,274 @@ class FlaskApiTests(unittest.TestCase):
             report = geo_app.load(payload["task_report"], {})
             self.assertEqual(report["status"], "blocked")
             self.assertEqual(report["error"], "cookie_expired")
+
+    def test_crawl_rejects_when_global_lock_is_busy(self):
+        acquired = geo_app.crawl_run_lock.acquire(blocking=False)
+        self.assertTrue(acquired)
+        try:
+            response = self.client.post(
+                "/api/platform/crawl",
+                json={
+                    "client_id": "client-1",
+                    "brand": "测试品牌",
+                    "questions": ["测试问题"],
+                    "platform": "qwen",
+                    "repeat_count": 1,
+                    "parallel": 1,
+                },
+            )
+        finally:
+            geo_app.crawl_run_lock.release()
+
+        self.assertEqual(response.status_code, 409)
+        payload = response.get_json()
+        self.assertEqual(payload["error"], "crawl_busy")
+        self.assertIn("已有爬取任务进行中", payload["message"])
+
+    def test_crawl_uses_node_bridge_when_platform_flag_enabled(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        try:
+            with isolated_app_data() as tmp:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "qwen"
+                geo_app.save(
+                    os.path.join(tmp, "qwen_state.json"),
+                    {
+                        "cookies": [
+                            {"name": "session", "value": "abc", "domain": ".qianwen.com", "path": "/"}
+                        ],
+                        "origins": [],
+                    },
+                )
+                base_crawler.mark_login_status("qwen", "ok", "登录状态已保存")
+
+                calls = []
+
+                def fake_run_node_crawler(platform, questions, **kwargs):
+                    calls.append({"platform": platform, "questions": questions, "kwargs": kwargs})
+                    return {
+                        "ok": True,
+                        "platform": platform,
+                        "total": len(questions),
+                        "success": len(questions),
+                        "results": [
+                            {
+                                "ok": True,
+                                "question": questions[0],
+                                "answer": "测试品牌可以作为候选之一，具体需要结合实际评估。",
+                                "refs": [
+                                    {
+                                        "title": "测试品牌参考文章",
+                                        "url": "https://www.sohu.com/a/123",
+                                        "platform": "搜狐",
+                                    }
+                                ],
+                                "error": "",
+                            }
+                        ],
+                    }
+
+                with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler):
+                    response = self.client.post(
+                        "/api/platform/crawl",
+                        json={
+                            "client_id": "client-1",
+                            "brand": "测试品牌",
+                            "questions": ["测试问题"],
+                            "platform": "qwen",
+                            "repeat_count": 1,
+                            "parallel": 1,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["crawler_engine"], "node")
+                self.assertEqual(calls[0]["platform"], "qwen")
+                self.assertEqual(calls[0]["questions"], ["测试问题"])
+                self.assertIn("output_dir", calls[0]["kwargs"])
+                self.assertTrue(os.path.isabs(calls[0]["kwargs"]["output_dir"]))
+                self.assertTrue(calls[0]["kwargs"]["output_dir"].endswith(os.path.join("tasks", "node", payload["task_id"], "qwen")))
+
+                records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+                self.assertEqual(len(records), 1)
+                self.assertEqual(records[0]["source_platform"], "qwen")
+                self.assertEqual(records[0]["question"], "测试问题")
+                self.assertEqual(records[0]["refs"][0]["platform"], "搜狐")
+
+                report = geo_app.load(payload["task_report"], {})
+                self.assertEqual(report["crawler_engine"], "node")
+                self.assertEqual(report["node_output_dir"], calls[0]["kwargs"]["output_dir"])
+                self.assertEqual(report["status"], "completed")
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
+    def test_crawl_summary_uses_full_answer_for_brand_mention(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        brand = "\u6d4b\u8bd5\u54c1\u724c"
+        question = "\u6d4b\u8bd5\u95ee\u9898"
+        answer = ("x" * 850) + brand + "\u5728\u7b54\u6848\u540e\u6bb5\u88ab\u63d0\u5230"
+        try:
+            with isolated_app_data() as tmp:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "qwen"
+                geo_app.save(
+                    os.path.join(tmp, "qwen_state.json"),
+                    {
+                        "cookies": [
+                            {"name": "session", "value": "abc", "domain": ".qianwen.com", "path": "/"}
+                        ],
+                        "origins": [],
+                    },
+                )
+                base_crawler.mark_login_status("qwen", "ok", "\u767b\u5f55\u72b6\u6001\u5df2\u4fdd\u5b58")
+
+                def fake_run_node_crawler(platform, questions, **kwargs):
+                    return {
+                        "ok": True,
+                        "platform": platform,
+                        "total": 1,
+                        "success": 1,
+                        "results": [
+                            {
+                                "ok": True,
+                                "question": questions[0],
+                                "answer": answer,
+                                "refs": [],
+                                "error": "",
+                            }
+                        ],
+                    }
+
+                with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler):
+                    response = self.client.post(
+                        "/api/platform/crawl",
+                        json={
+                            "client_id": "client-1",
+                            "brand": brand,
+                            "questions": [question],
+                            "platform": "qwen",
+                            "repeat_count": 1,
+                            "parallel": 1,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertTrue(payload["results"][0]["brand_mentioned"])
+
+                report = geo_app.load(payload["task_report"], {})
+                self.assertTrue(report["success"][0]["brand_mentioned"])
+                self.assertEqual(report["batch_summary"]["mentioned_count"], 1)
+
+                raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+                self.assertEqual(len(raw_records), 1)
+                self.assertTrue(raw_records[0]["brand_mentioned"])
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
+    def test_node_bridge_need_login_marks_platform_expired(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        try:
+            with isolated_app_data() as tmp:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "doubao"
+                geo_app.save(
+                    os.path.join(tmp, "doubao_state.json"),
+                    {
+                        "cookies": [
+                            {"name": "session", "value": "abc", "domain": ".doubao.com", "path": "/"}
+                        ],
+                        "origins": [],
+                    },
+                )
+                base_crawler.mark_login_status("doubao", "ok", "登录状态已保存")
+
+                from services.node_crawler_bridge import NodeCrawlerBridgeError
+
+                with patch(
+                    "services.node_crawler_bridge.run_node_crawler",
+                    side_effect=NodeCrawlerBridgeError("Node crawler failed: need_login: login action detected"),
+                ):
+                    response = self.client.post(
+                        "/api/platform/crawl",
+                        json={
+                            "client_id": "client-1",
+                            "brand": "测试品牌",
+                            "questions": ["测试问题"],
+                            "platform": "doubao",
+                            "repeat_count": 1,
+                            "parallel": 1,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 401)
+                payload = response.get_json()
+                self.assertEqual(payload["error"], "cookie_expired")
+                self.assertIn("task_report", payload)
+
+                status = base_crawler.get_platform_login_status("doubao")
+                self.assertFalse(status["logged_in"])
+                self.assertEqual(status["status"], "expired")
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
+    def test_node_bridge_verification_required_returns_rate_limited(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        try:
+            with isolated_app_data() as tmp:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "doubao"
+                geo_app.save(
+                    os.path.join(tmp, "doubao_state.json"),
+                    {
+                        "cookies": [
+                            {"name": "session", "value": "abc", "domain": ".doubao.com", "path": "/"}
+                        ],
+                        "origins": [],
+                    },
+                )
+                base_crawler.mark_login_status("doubao", "ok", "登录状态已保存")
+
+                from services.node_crawler_bridge import NodeCrawlerBridgeError
+
+                with patch(
+                    "services.node_crawler_bridge.run_node_crawler",
+                    side_effect=NodeCrawlerBridgeError(
+                        "Node crawler failed: doubao verification_required: rate limited"
+                    ),
+                ):
+                    response = self.client.post(
+                        "/api/platform/crawl",
+                        json={
+                            "client_id": "client-1",
+                            "brand": "测试品牌",
+                            "questions": ["测试问题"],
+                            "platform": "doubao",
+                            "repeat_count": 1,
+                            "parallel": 1,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 429)
+                payload = response.get_json()
+                self.assertEqual(payload["error"], "verification_required")
+                self.assertIn("task_report", payload)
+
+                status = base_crawler.get_platform_login_status("doubao")
+                self.assertFalse(status["logged_in"])
+                self.assertEqual(status["status"], "expired")
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
 
 
 if __name__ == "__main__":
