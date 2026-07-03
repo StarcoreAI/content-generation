@@ -29,6 +29,7 @@ def save_json(path, data):
         with open(tmp_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
         os.replace(tmp_path, path)
+        return True
     except Exception as e:
         print(f"[警告] 保存 {path} 失败: {e}")
         if os.path.exists(tmp_path):
@@ -36,3 +37,4 @@ def save_json(path, data):
                 os.remove(tmp_path)
             except Exception:
                 pass
+        return False

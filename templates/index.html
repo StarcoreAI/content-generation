@@ -261,13 +261,6 @@ tr:hover td{background:rgba(109,92,247,.02)}
     <select class="t-sel" id="globalClient" onchange="onClientChange()">
       <option value="">— 选择客户 —</option>
     </select>
-    <select class="t-sel" id="globalPlatform" onchange="onPlatformChange()" title="切换数据视图和默认爬取范围" style="min-width:126px">
-      <option value="all">全部平台</option>
-      <option value="doubao">🤖 豆包</option>
-      <option value="deepseek">🔍 DeepSeek</option>
-      <option value="yuanbao">💎 元宝</option>
-      <option value="qwen">🌙 千问</option>
-    </select>
     <div class="t-bell"><i class="ti ti-bell" style="font-size:15px;color:#a78bfa"></i><div class="t-bell-dot"></div></div>
     <button class="t-btn" onclick="navTo('clients',null)">+ 客户管理</button>
   </div>
@@ -314,14 +307,18 @@ tr:hover td{background:rgba(109,92,247,.02)}
     <div><div class="pg-title">✦ <em>当日数据整理</em></div>
     <div class="pg-sub">查看今日爬取数据，删除错误记录，统计引用源，一键进入深度分析</div></div>
     <div class="acts">
-      <input type="date" id="dailyDate" onchange="loadDailyData()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
+      <input type="date" id="dailyDate" onchange="resetDailyTaskFilter();loadDailyData()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
       <button class="btn btn-danger btn-sm" onclick="clearDailyData()" title="清空当日所有爬取记录">
         🗑 清空当日数据
       </button>
-      <select id="dailyGroupFilter" onchange="loadDailyData()"
-        style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white;color:var(--text1);max-width:160px">
-        <option value="">全部问题组</option>
-      </select>
+      <span data-fixed-scope="daily-group"
+        style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white;color:var(--text2);font-weight:800;white-space:nowrap">
+        全部问题组
+      </span>
+      <span data-fixed-scope="daily-task"
+        style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white;color:var(--text2);font-weight:800;white-space:nowrap">
+        今日全部
+      </span>
       <button class="btn btn-p btn-sm" id="btnDailyAnalyze" onclick="startDailyAnalyze()">
         <span class="spin" id="spDailyAnalyze" style="display:none"></span>
         🔍 深度分析
@@ -347,6 +344,18 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div class="kpi-n" style="color:var(--amber)" id="dk-refs">--</div><div class="kpi-lbl">总引用文章数</div></div>
   </div>
 
+  <!-- 证据层洞察 -->
+  <div class="two-col">
+    <div class="card">
+      <div class="card-hd"><span class="card-title">AI 平台分类</span><span style="font-size:11px;color:var(--text3)" id="dailyAiPlatformNote"></span></div>
+      <div id="dailyAiPlatformCompare"><div class="empty"><i class="ti ti-layout-grid"></i><p>加载中...</p></div></div>
+    </div>
+    <div class="card">
+      <div class="card-hd"><span class="card-title">竞品/门店提及</span><span style="font-size:11px;color:var(--text3)">AI识别的品牌/竞品实体</span></div>
+      <div id="dailyEntityMentions"><div style="color:var(--text3);font-size:12px">暂无数据</div></div>
+    </div>
+  </div>
+
   <!-- 引用源统计 -->
   <div class="two-col">
     <div class="card">
@@ -357,6 +366,14 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
       <div id="dailyTopArticles"><div class="empty"><i class="ti ti-file-text"></i><p>加载中...</p></div></div>
     </div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">优质竞品宣传文章（人工挑选）</span>
+      <span style="font-size:11px;color:var(--text3)" id="dailyCompetitorArticleNote">基于竞品榜第1和第3名筛选</span>
+    </div>
+    <div id="dailyCompetitorArticles"><div style="color:var(--text3);font-size:12px">暂无候选文章</div></div>
   </div>
 
   <!-- 数据列表（可删除） -->
@@ -463,12 +480,11 @@ tr:hover td{background:rgba(109,92,247,.02)}
           <option value="10">10次</option>
         </select>
       </div>
-      <div>
-        <span style="font-size:11px;color:var(--text2);font-weight:700">爬取范围：</span>
-        <select id="grpPlatformScope" style="width:150px;font-size:11px;padding:4px 6px">
-          <option value="all">所有已登录平台</option>
-          <option value="current">顶部当前平台</option>
-        </select>
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+        <span style="font-size:11px;color:var(--text2);font-weight:700">爬取平台：</span>
+        <button class="btn btn-o btn-sm" id="grpPlatformModeContract" onclick="setGroupPlatformMode('contract')" title="使用客户管理中的合同平台">客户配置</button>
+        <button class="btn btn-o btn-sm" id="grpPlatformModeCustom" onclick="setGroupPlatformMode('custom')" title="临时自由选择本次爬取平台">自由选择</button>
+        <div id="grpPlatformChoices" style="display:flex;gap:8px;flex-wrap:wrap"></div>
       </div>
       <span id="grpCrawlStatus" style="font-size:11px;color:var(--text2)"></span>
     </div>
@@ -514,6 +530,12 @@ tr:hover td{background:rgba(109,92,247,.02)}
         <select id="rec-mentioned-filter" onchange="loadRawRecords()" style="font-size:11px;padding:5px 8px;width:100px">
           <option value="">全部</option>
           <option value="1">已提及</option>
+        </select>
+      </div>
+      <div class="fld" style="margin-bottom:0;min-width:180px">
+        <label>任务批次</label>
+        <select id="rec-task-filter" onchange="loadRawRecords()" style="font-size:11px;padding:5px 8px;width:100%">
+          <option value="">全部批次</option>
         </select>
       </div>
       <div style="align-self:flex-end">
@@ -719,7 +741,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">多主题 × 多平台矩阵批量生成文章草稿，审核后手动发布</div></div>
+    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">客户资料全量参考 × 运营意见多轮生成</div></div>
   </div>
   <!-- 深度分析导入提示 -->
   <div id="ct-import-banner" style="display:none;padding:10px 14px;background:linear-gradient(135deg,rgba(109,92,247,.08),rgba(244,114,182,.06));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm);margin-bottom:14px;font-size:12px;font-weight:700;color:var(--pri)"></div>
@@ -735,83 +757,37 @@ tr:hover td{background:rgba(109,92,247,.02)}
     <div id="materialList"><div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / docx</div></div>
   </div>
 
-  <!-- 发文模板库 -->
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">📝 发文模板库</span><div class="card-sub">上传行业通用软文模板，深度分析时自动融合生成各平台专属模板</div></div>
-      <label class="btn btn-o btn-sm" style="cursor:pointer">
-        上传模板
-        <input type="file" id="templateUploadContent" accept=".txt,.md" style="display:none" onchange="uploadTemplateFromContent(this)">
-      </label>
-    </div>
-    <div id="templateListContent"><div style="font-size:11px;color:var(--text3)">暂未上传模板，支持 .txt / .md 格式</div></div>
-  </div>
-
-  <!-- 智能主题生成 -->
-  <div class="card">
-    <div class="card-hd">
-      <div><span class="card-title">💡 智能主题生成</span><div class="card-sub">基于高频引用文章规律，AI一键生成覆盖泛推荐场景的主题</div></div>
-      <div class="acts">
-        <select id="topicCount" style="font-size:11px;padding:5px 8px;width:80px">
-          <option value="10">10个</option>
-          <option value="15">15个</option>
-          <option value="20">20个</option>
-        </select>
-        <button class="btn btn-p btn-sm" id="btnGenTopics" onclick="genSmartTopics()">
-          <span class="spin" id="spGenTopics" style="display:none"></span>智能生成主题
-        </button>
-      </div>
-    </div>
-    <!-- 用户自定义指令输入框 -->
-    <div style="margin-bottom:4px">
-      <div style="font-size:11px;font-weight:700;color:var(--text2);margin-bottom:5px">
-        自定义生成要求
-        <span style="font-size:10px;color:var(--text3);font-weight:400;margin-left:6px">留空则按默认逻辑生成</span>
-      </div>
-      <input id="topicInstruction" placeholder="如：侧重老房翻新场景、多生成避坑类主题、聚焦高端别墅装修、包含预算相关词..." style="font-size:11px;padding:8px 12px;border-radius:var(--r-sm);border:1.5px solid var(--border);width:100%;background:rgba(255,255,255,.9)">
-    </div>
-    <div id="smartTopicList" style="display:none">
-      <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px" id="smartTopicTags"></div>
-      <div class="acts">
-        <button class="btn btn-p btn-sm" onclick="useAllTopics()">全部导入主题栏</button>
-        <button class="btn btn-o btn-sm" onclick="document.getElementById('smartTopicList').style.display='none'">收起</button>
-      </div>
-    </div>
-  </div>
-
-  <div class="card">
-    <div class="card-hd"><span class="card-title">批量生产配置</span></div>
-    <div class="form-row col2">
-      <div class="fld"><label>文章主题（每行一个主题）</label><textarea id="ct-topics" rows="4" placeholder="2026昆山装修公司推荐排行&#10;昆山装修避坑指南&#10;昆山整装半包哪家好"></textarea></div>
-      <div class="fld"><label>选择目标平台（可多选）</label><div id="ct-platform-checks" style="display:flex;flex-direction:column;gap:6px;padding:8px;background:rgba(255,255,255,.9);border:1.5px solid var(--border);border-radius:var(--r-sm);min-height:96px"></div></div>
-    </div>
-    <div class="form-row col2">
-      <div class="fld"><label>品牌名称</label><input id="ct-brand" placeholder="如：居泰隆装修"></div>
-      <div class="fld"><label>核心卖点</label><input id="ct-selling" placeholder="如：口碑好、价格透明"></div>
+      <div><span class="card-title">优质样例文章</span><div class="card-sub">可粘贴运营认可的样例链接，也可从当天高频引用 Top20 中选择</div></div>
+      <button class="btn btn-o btn-sm" onclick="loadContentTop20Samples()">刷新 Top20</button>
     </div>
     <div class="form-row">
-      <div class="fld"><label>参考内容规律（来自引用情报，选填）</label><input id="ct-pattern" placeholder="如：列表式推荐、包含具体数据、标题含年份+地名"></div>
+      <div class="fld"><label>样例文章链接（每行一个）</label><textarea id="contentSampleLinks" rows="3" placeholder="https://example.com/article-a&#10;https://example.com/article-b"></textarea></div>
+    </div>
+    <div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:8px">当天高频引用 Top20</div>
+    <div id="contentTop20Samples"><div style="font-size:11px;color:var(--text3)">选择客户后自动加载当天 Top20</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用当前客户的全部资料，并带上本客户历史生成内容</div></div>
+    </div>
+    <div class="form-row">
+      <div class="fld"><label>运营修改意见 / 生成要求</label><textarea id="contentOpinion" rows="7" placeholder="例如：写一篇面向扬州车主的汽车音响升级宣传文章，语气自然一点，重点写施工流程、调音能力和到店体验。"></textarea></div>
     </div>
     <div style="display:flex;align-items:center;gap:12px">
-      <button class="btn btn-p" id="btnBatch" onclick="batchGenerate()">
-        <span class="spin" id="spBatch" style="display:none"></span> 批量生成
+      <button class="btn btn-p" id="btnContentGenerate" onclick="generateContentArticle()">
+        <span class="spin" id="spContentGenerate" style="display:none"></span> 生成文章
       </button>
-      <span style="font-size:11px;color:var(--text3)" id="batchStatus"></span>
+      <span style="font-size:11px;color:var(--text3)" id="contentGenerateStatus"></span>
     </div>
   </div>
   <div class="card">
     <div class="card-hd">
-      <span class="card-title">文章草稿列表 <span id="article-count" style="color:var(--text3);font-size:11px"></span></span>
-      <div class="acts">
-        <select id="art-filter" onchange="loadArticles()" style="width:100px;font-size:11px;padding:5px 8px">
-          <option value="">全部状态</option>
-          <option value="pending">待审核</option>
-          <option value="approved">已通过</option>
-          <option value="rejected">已拒绝</option>
-        </select>
-      </div>
+      <span class="card-title">生成结果 <span id="content-article-count" style="color:var(--text3);font-size:11px"></span></span>
     </div>
-    <div id="articleList"><div class="empty"><i class="ti ti-writing"></i><p>暂无文章，请先生成</p></div></div>
+    <div id="contentArticleList"><div class="empty"><i class="ti ti-writing"></i><p>暂无文章，请先生成</p></div></div>
   </div>
 </div>
 
@@ -902,6 +878,12 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div class="fld"><label>行业/品类</label><input id="cl-industry" placeholder="如：家装·昆山本地"></div>
       <div class="fld"><label>GEO优化目标</label><input id="cl-goal" placeholder="如：提升豆包提及率至80%"></div>
     </div>
+    <div class="form-row">
+      <div class="fld">
+        <label>合同约定爬取平台</label>
+        <div id="cl-platforms" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+      </div>
+    </div>
     <button class="btn btn-p btn-sm" onclick="addClient()">添加客户</button>
   </div>
   <div class="card">
@@ -963,7 +945,9 @@ let currentBrand = '';
 let currentClientName = '';
 let currentIndustry = '';
 let currentGoal = '';
-let currentPlatform = 'all';  // 当前数据视图/默认爬取范围
+let currentPlatform = 'all';  // 数据页固定汇总全部平台
+let currentClientPlatforms = [];
+let groupPlatformMode = 'contract';
 const loginPollTimers = {};
 const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
 const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'doubao'];
@@ -977,16 +961,57 @@ function sortCrawlPlatforms(platforms) {
   });
 }
 
-function onPlatformChange() {
-  const sel = document.getElementById('globalPlatform');
-  currentPlatform = sel.value;
-  // 刷新当前页面数据
-  if (document.getElementById('page-daily')?.classList.contains('on')) loadDailyPage();
-  if (document.getElementById('page-intel')?.classList.contains('on')) loadIntel();
-  if (document.getElementById('page-records')?.classList.contains('on')) loadRawRecords();
-  if (document.getElementById('page-dashboard')?.classList.contains('on')) loadDashboard();
-  if (document.getElementById('page-dashboard_full')?.classList.contains('on')) loadFullDashboard();
-  toast(`已切换到 ${CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform} 数据视图`);
+function normalizeContractPlatforms(platforms) {
+  const allowed = new Set(CRAWL_PLATFORM_ORDER);
+  const selected = Array.isArray(platforms) ? platforms.filter(p => allowed.has(p)) : [];
+  return sortCrawlPlatforms(selected.map(id => ({id, name: CRAWL_PLATFORM_NAMES[id] || id}))).map(p => p.id);
+}
+
+function platformCheckboxHtml(id, checked=false, prefix='platform') {
+  const label = CRAWL_PLATFORM_NAMES[id] || id;
+  return `<label style="display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:800;color:var(--text2);padding:5px 9px;border:1.5px solid var(--border);border-radius:999px;background:white">
+    <input type="checkbox" data-platform-choice="${prefix}" value="${escHtml(id)}" ${checked ? 'checked' : ''} style="width:auto">
+    ${escHtml(label)}
+  </label>`;
+}
+
+function getCheckedPlatformIds(prefix) {
+  return [...document.querySelectorAll(`input[data-platform-choice="${prefix}"]:checked`)].map(el => el.value);
+}
+
+function renderContractPlatformChoices(containerId, selectedIds, prefix) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  const selected = new Set(normalizeContractPlatforms(selectedIds));
+  el.innerHTML = CRAWL_PLATFORM_ORDER.map(id => platformCheckboxHtml(id, selected.has(id), prefix)).join('');
+}
+
+function renderGroupPlatformChoices() {
+  const el = document.getElementById('grpPlatformChoices');
+  if (!el) return;
+  const platforms = groupPlatformMode === 'custom'
+    ? CRAWL_PLATFORM_ORDER
+    : normalizeContractPlatforms(currentClientPlatforms);
+  const contractBtn = document.getElementById('grpPlatformModeContract');
+  const customBtn = document.getElementById('grpPlatformModeCustom');
+  if (contractBtn && customBtn) {
+    contractBtn.className = groupPlatformMode === 'contract' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+    customBtn.className = groupPlatformMode === 'custom' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+  }
+  if (!platforms.length) {
+    el.innerHTML = '<span style="font-size:11px;color:var(--red);font-weight:800">请先在客户管理配置合同平台</span>';
+    return;
+  }
+  el.innerHTML = platforms.map(id => platformCheckboxHtml(id, true, 'group-crawl')).join('');
+}
+
+function setGroupPlatformMode(mode) {
+  groupPlatformMode = mode === 'custom' ? 'custom' : 'contract';
+  renderGroupPlatformChoices();
+}
+
+function getSelectedGroupCrawlPlatformIds() {
+  return normalizeContractPlatforms(getCheckedPlatformIds('group-crawl'));
 }
 let trendChart, platformChart, articleChart, compareChart;
 
@@ -1113,6 +1138,7 @@ async function loadClientsDropdown() {
     o.dataset.brand = c.brand; o.dataset.name = c.name;
     o.dataset.industry = c.industry || '';
     o.dataset.goal = c.goal || '';
+    o.dataset.platforms = JSON.stringify(c.contract_platforms || []);
     if (c.id === cur) o.selected = true;
     sel.appendChild(o);
   });
@@ -1125,6 +1151,10 @@ function onClientChange() {
   currentClientName = opt?.dataset?.name || '';
   currentIndustry = opt?.dataset?.industry || '';
   currentGoal = opt?.dataset?.goal || '';
+  try { currentClientPlatforms = normalizeContractPlatforms(JSON.parse(opt?.dataset?.platforms || '[]')); }
+  catch { currentClientPlatforms = []; }
+  renderGroupPlatformChoices();
+  resetDailyTaskFilter();
   loadDashboard();
   loadDailyGroupFilter();  // 切换客户时刷新问题组筛选器
   // 如果当前在当日整理页面，自动刷新数据+模板
@@ -1143,6 +1173,7 @@ function onClientChange() {
 async function loadClients() {
   const clients = await api('/api/clients');
   const el = document.getElementById('clientList');
+  renderContractPlatformChoices('cl-platforms', ['deepseek'], 'new-client');
   if (!clients.length) { el.innerHTML = '<div class="empty"><i class="ti ti-users"></i><p>暂无客户</p></div>'; return; }
   el.innerHTML = clients.map(c => `
     <div style="display:flex;align-items:center;gap:12px;padding:12px;background:rgba(255,255,255,.7);border-radius:var(--r-sm);margin-bottom:8px;border:1.5px solid var(--border2)">
@@ -1151,6 +1182,11 @@ async function loadClients() {
         <div style="font-size:13px;font-weight:800;color:#312e81">${c.brand}</div>
         <div style="font-size:11px;color:var(--text2)">${c.name} · ${c.industry}</div>
         <div style="font-size:10px;color:var(--text3);margin-top:2px">目标：${c.goal || '未设定'}</div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px">
+          <span style="font-size:10px;color:var(--text3);font-weight:800">合同平台</span>
+          ${CRAWL_PLATFORM_ORDER.map(id => platformCheckboxHtml(id, (c.contract_platforms || []).includes(id), `client-${c.id}`)).join('')}
+          <button class="btn btn-o btn-sm" onclick="saveClientPlatforms('${c.id}')">保存平台</button>
+        </div>
       </div>
       <span class="badge badge-p">${c.created}</span>
       <button class="btn btn-danger" onclick="delClient('${c.id}')">删除</button>
@@ -1160,14 +1196,29 @@ async function addClient() {
   const name = document.getElementById('cl-name').value.trim();
   const brand = document.getElementById('cl-brand').value.trim();
   if (!name || !brand) { toast('请填写客户名和品牌名', 'err'); return; }
+  const contract_platforms = normalizeContractPlatforms(getCheckedPlatformIds('new-client'));
+  if (!contract_platforms.length) { toast('请至少选择一个合同平台', 'err'); return; }
   await api('/api/clients','POST',{
     name, brand,
     industry: document.getElementById('cl-industry').value,
-    goal: document.getElementById('cl-goal').value
+    goal: document.getElementById('cl-goal').value,
+    contract_platforms
   });
   toast('客户已添加 ✦');
   ['cl-name','cl-brand','cl-industry','cl-goal'].forEach(id => document.getElementById(id).value = '');
   loadClients(); loadClientsDropdown();
+}
+async function saveClientPlatforms(id) {
+  const contract_platforms = normalizeContractPlatforms(getCheckedPlatformIds(`client-${id}`));
+  if (!contract_platforms.length) { toast('请至少选择一个合同平台', 'err'); return; }
+  await api('/api/clients/'+id, 'PUT', {contract_platforms});
+  toast('合同平台已保存');
+  await loadClientsDropdown();
+  if (id === currentClientId) {
+    currentClientPlatforms = contract_platforms;
+    renderGroupPlatformChoices();
+  }
+  loadClients();
 }
 async function delClient(id) {
   if (!confirm('确认删除？')) return;
@@ -1452,21 +1503,143 @@ function copyReport() {
 }
 
 // ── Content ───────────────────────────────────────────
+let contentTop20Articles = [];
+
 async function loadContent() {
   loadMaterials();
-  loadTemplatesForContent();
-  const platforms = await api('/api/platforms');
-  const checks = document.getElementById('ct-platform-checks');
-  if (!platforms.length) {
-    checks.innerHTML = '<span style="font-size:11px;color:var(--text3)">请先在「平台库」添加平台</span>';
-  } else {
-    checks.innerHTML = platforms.map(p => `
-      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:12px;font-weight:700;color:var(--text)">
-        <input type="checkbox" value="${p.id}" style="width:auto;accent-color:var(--pri)"> ${p.name}
-      </label>`).join('');
+  loadContentTop20Samples();
+  loadContentGenerations();
+}
+
+function getContentSampleLinks() {
+  const raw = document.getElementById('contentSampleLinks')?.value || '';
+  return raw.split(/\n|,|，|\s+/).map(x => x.trim()).filter(Boolean);
+}
+
+function getSelectedContentTopArticles() {
+  return Array.from(document.querySelectorAll('#contentTop20Samples input[type="checkbox"]:checked'))
+    .map(cb => contentTop20Articles[parseInt(cb.value, 10)])
+    .filter(Boolean)
+    .map(a => ({
+      title: a.title || '',
+      url: a.url || '',
+      platform: a.platform || '',
+      count: a.count || 0
+    }));
+}
+
+function getLocalDateString() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
+}
+
+async function loadContentTop20Samples() {
+  const el = document.getElementById('contentTop20Samples');
+  if (!el) return;
+  contentTop20Articles = [];
+  if (!currentClientId) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">请先选择客户</div>';
+    return;
   }
-  document.getElementById('ct-brand').value = currentBrand || '';
-  loadArticles();
+  el.innerHTML = '<div style="font-size:11px;color:var(--text3)">加载中...</div>';
+  try {
+    const date = document.getElementById('dailyDate')?.value || getLocalDateString();
+    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=all`);
+    contentTop20Articles = (stats.top_articles || []).slice(0, 20);
+    if (!contentTop20Articles.length) {
+      el.innerHTML = '<div style="font-size:11px;color:var(--text3)">当天暂无高频引用文章</div>';
+      return;
+    }
+    el.innerHTML = contentTop20Articles.map((a, i) => `
+      <label style="display:grid;grid-template-columns:20px 24px 1fr auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border2);cursor:pointer">
+        <input type="checkbox" value="${i}" style="width:auto;accent-color:var(--pri)">
+        <span style="width:22px;height:22px;border-radius:7px;background:var(--pri-ll);color:var(--pri);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center">${i+1}</span>
+        <span style="min-width:0">
+          <span style="font-size:11px;font-weight:700;color:#312e81;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.title || '')}">${escHtml(a.title || '未命名文章')}</span>
+          <span style="font-size:10px;color:var(--text3)">${escHtml(a.platform || '未知平台')}${a.url ? ` · ${escHtml(a.url)}` : ''}</span>
+        </span>
+        <span style="font-size:11px;font-weight:800;color:var(--pri)">×${escHtml(a.count || 0)}</span>
+      </label>`).join('');
+  } catch(e) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--red)">Top20 加载失败</div>';
+  }
+}
+
+async function generateContentArticle() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const opinionEl = document.getElementById('contentOpinion');
+  const opinion = opinionEl.value.trim();
+  if (!opinion) { toast('请先填写运营意见','err'); return; }
+  spin('spContentGenerate', true);
+  disableBtn('btnContentGenerate', true);
+  const statusEl = document.getElementById('contentGenerateStatus');
+  statusEl.textContent = 'deepseek-pro 生成中，请稍候...';
+  try {
+    const r = await api('/api/content/generate', 'POST', {
+      client_id: currentClientId,
+      opinion,
+      sample_links: getContentSampleLinks(),
+      selected_articles: getSelectedContentTopArticles()
+    });
+    if (r.error) { toast(r.error, 'err'); return; }
+    opinionEl.value = '';
+    renderContentGenerations(r.articles || []);
+    statusEl.textContent = `已生成：${r.article?.title || '新文章'}`;
+    toast('文章生成成功 ✦');
+  } finally {
+    spin('spContentGenerate', false);
+    disableBtn('btnContentGenerate', false);
+  }
+}
+async function loadContentGenerations() {
+  const el = document.getElementById('contentArticleList');
+  if (!currentClientId) {
+    if (el) el.innerHTML = '<div class="empty"><i class="ti ti-writing"></i><p>请先选择客户</p></div>';
+    return;
+  }
+  const r = await api('/api/content/generations?client_id=' + currentClientId);
+  if (r.error) { toast(r.error, 'err'); return; }
+  renderContentGenerations(r.articles || []);
+}
+function renderContentGenerations(articles) {
+  const countEl = document.getElementById('content-article-count');
+  if (countEl) countEl.textContent = articles.length + ' 篇';
+  const el = document.getElementById('contentArticleList');
+  if (!el) return;
+  if (!articles.length) {
+    el.innerHTML = '<div class="empty"><i class="ti ti-writing"></i><p>暂无文章，请先生成</p></div>';
+    return;
+  }
+  window._contentGenerationCache = articles;
+  el.innerHTML = articles.map(a => `
+    <div class="article-card">
+      <div class="article-title">${a.title || '未命名文章'}</div>
+      <div class="article-meta">
+        <span class="badge badge-p">${a.model || 'deepseek-pro'}</span>
+        <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
+        <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
+        <span style="font-size:10px;color:var(--text3)">${a.created_at || ''}</span>
+      </div>
+      <div class="article-summary">${(a.content || '').slice(0, 160)}${(a.content || '').length > 160 ? '...' : ''}</div>
+      <div class="article-acts">
+        <button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button>
+        <button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button>
+      </div>
+    </div>`).join('');
+}
+function viewContentGeneration(id) {
+  const a = (window._contentGenerationCache || []).find(x => x.id === id);
+  if (!a) return;
+  const win = window.open('','_blank','width=760,height=680');
+  win.document.write(`<html><head><title>${a.title || '生成文章'}</title><style>body{font-family:sans-serif;padding:30px;line-height:1.8;max-width:760px;margin:auto}h1{font-size:20px;margin-bottom:12px}pre{white-space:pre-wrap;font-family:inherit}</style></head><body><h1>${a.title || '生成文章'}</h1><pre>${a.content || ''}</pre></body></html>`);
+}
+function copyContentGeneration(id) {
+  const a = (window._contentGenerationCache || []).find(x => x.id === id);
+  if (!a) return;
+  navigator.clipboard.writeText(a.content || '').then(() => toast('文章已复制 ✦'));
 }
 async function batchGenerate() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
@@ -1902,6 +2075,7 @@ async function openGroup(gid) {
   document.getElementById('groupDetailCard').style.display = 'block';
   document.getElementById('groupDetailCard').scrollIntoView({behavior:'smooth'});
   renderGroupQuestions();
+  renderGroupPlatformChoices();
   checkAllLoginStatus();
 }
 
@@ -1969,15 +2143,17 @@ async function getLoggedInCrawlPlatforms() {
 }
 
 async function getTargetCrawlPlatforms(scope='current') {
-  if (scope === 'all' || currentPlatform === 'all') {
-    return getLoggedInCrawlPlatforms();
-  }
-  return sortCrawlPlatforms([{id: currentPlatform, name: CRAWL_PLATFORM_NAMES[currentPlatform] || currentPlatform}]);
+  const selectedIds = scope === 'group'
+    ? getSelectedGroupCrawlPlatformIds()
+    : normalizeContractPlatforms(currentClientPlatforms);
+  if (!selectedIds.length) return [];
+  const selected = new Set(selectedIds);
+  const loggedIn = await getLoggedInCrawlPlatforms();
+  return sortCrawlPlatforms(loggedIn.filter(p => selected.has(p.id)));
 }
 
 async function getGroupCrawlPlatforms() {
-  const scope = document.getElementById('grpPlatformScope')?.value || 'all';
-  return getTargetCrawlPlatforms(scope);
+  return getTargetCrawlPlatforms('group');
 }
 
 function buildGroupCrawlTaskInfoHtml(r) {
@@ -2162,6 +2338,60 @@ async function crawlByGroup() {
 // ══════════════════════════════════════════════════════
 // 爬取记录库
 // ══════════════════════════════════════════════════════
+function buildTaskFilterOptions(records) {
+  const tasks = new Map();
+  (records || []).forEach(r => {
+    if (!r.task_id) return;
+    if (!tasks.has(r.task_id)) {
+      tasks.set(r.task_id, {
+        task_id: r.task_id,
+        count: 0,
+        latest: '',
+        platforms: new Set()
+      });
+    }
+    const task = tasks.get(r.task_id);
+    task.count += 1;
+    if ((r.crawl_time || '') > task.latest) task.latest = r.crawl_time || '';
+    if (r.source_platform) task.platforms.add(CRAWL_PLATFORM_NAMES[r.source_platform] || r.source_platform);
+  });
+  return [...tasks.values()].sort((a, b) => (b.latest || '').localeCompare(a.latest || ''));
+}
+
+function updateTaskFilterOptions(selectId, records, defaultToLatest=false) {
+  const sel = document.getElementById(selectId);
+  if (!sel) return '';
+  const previous = sel.value;
+  const tasks = buildTaskFilterOptions(records);
+  const allLabel = selectId === 'dailyTaskFilter' ? '今日全部' : '全部批次';
+  sel.innerHTML = `<option value="">${allLabel}</option>` + tasks.map(t => {
+    const shortId = t.task_id.length > 8 ? t.task_id.slice(-8) : t.task_id;
+    const platforms = [...t.platforms].join('、') || '未知平台';
+    const label = `${t.latest || '未知时间'} · ${platforms} · ${t.count}条 · #${shortId}`;
+    return `<option value="${escHtml(t.task_id)}">${escHtml(label)}</option>`;
+  }).join('');
+  if (previous && tasks.some(t => t.task_id === previous)) {
+    sel.value = previous;
+  } else if (defaultToLatest && tasks.length && sel.dataset.manual !== '1') {
+    sel.value = tasks[0].task_id;
+  } else {
+    sel.value = '';
+  }
+  return sel.value;
+}
+
+function resetDailyTaskFilter() {
+  const sel = document.getElementById('dailyTaskFilter');
+  if (!sel) return;
+  sel.dataset.manual = '';
+  sel.value = '';
+}
+
+function markDailyTaskFilterManual() {
+  const sel = document.getElementById('dailyTaskFilter');
+  if (sel) sel.dataset.manual = '1';
+}
+
 function onRecDateChange() {
   // 选了日期就取消「全部」高亮
   const btn = document.getElementById('btnRecDateAll');
@@ -2211,7 +2441,9 @@ async function loadRawRecords() {
   if (question_filter) url += `&question=${encodeURIComponent(question_filter)}`;
   if (date) url += `&date=${date}`;
   if (mentioned) url += `&mentioned_only=${mentioned}`;
-  const records = await api(url);
+  const allRecords = await api(url);
+  const taskId = updateTaskFilterOptions('rec-task-filter', allRecords, false);
+  const records = taskId ? allRecords.filter(r => r.task_id === taskId) : allRecords;
   document.getElementById('rec-count').textContent = records.length + ' 条';
 
   // 加载平台统计（传入日期，空=全部）
@@ -2220,6 +2452,7 @@ async function loadRawRecords() {
   if (question_filter) statsUrl += `&question=${encodeURIComponent(question_filter)}`;
   if (date) statsUrl += `&date=${date}`;  // 有日期就按日期，没有就全部
   if (mentioned) statsUrl += `&mentioned_only=${mentioned}`;
+  if (taskId) statsUrl += `&task_id=${encodeURIComponent(taskId)}`;
   const stats = await api(statsUrl);
   renderPlatformStats(stats);
 
@@ -2290,11 +2523,13 @@ async function loadDeepAnalysis() {
   const date = document.getElementById('rec-date-filter')?.value || '';
   const question = document.getElementById('rec-question-filter')?.value || '';
   const mentioned = document.getElementById('rec-mentioned-filter')?.value || '';
+  const taskId = document.getElementById('rec-task-filter')?.value || '';
   try {
     const r = await api('/api/raw_records/deep_analyze', 'POST', {
       client_id: currentClientId,
       platform: currentPlatform, group_id, date, question,
-      mentioned_only: mentioned
+      mentioned_only: mentioned,
+      task_id: taskId
     });
     if (r.error) { toast(r.error,'err'); return; }
     const card = document.getElementById('deepAnalysisCard');
@@ -2333,47 +2568,24 @@ function copyDeepReport() {
 
 function importToContent() {
   if (!window._lastContentInstruction) { toast('暂无内容指令', 'err'); return; }
-  // 切换到内容生产页面
   navTo('content', document.querySelector('.s-nav[onclick*="content"]'));
-  // 等页面渲染后填入指令
   setTimeout(() => {
-    // 填入品牌（从指令中提取）
-    const brandMatch = window._lastContentInstruction.match(/品牌[：:]\s*(.+)/);
-    if (brandMatch && brandMatch[1]) {
-      const brandEl = document.getElementById('ct-brand');
-      if (brandEl) brandEl.value = brandMatch[1].trim();
-    }
-    // 把整个指令作为内容规律填入
-    const patternEl = document.getElementById('ct-pattern');
-    if (patternEl) {
-      patternEl.value = window._lastContentInstruction;
-    }
-    // 根据平台策略自动勾选对应平台
-    autoCheckPlatforms(window._lastContentInstruction);
-    toast('内容生产指令已导入 ✦，请填写主题后开始生产');
-    // 高亮提示
-    if (patternEl) {
-      patternEl.style.borderColor = 'var(--pri)';
-      patternEl.style.background = 'var(--pri-ll)';
+    appendContentOpinion(window._lastContentInstruction, '深度分析指令');
+    toast('内容生产指令已导入 ✦');
+    const opinionEl = document.getElementById('contentOpinion');
+    if (opinionEl) {
+      opinionEl.style.borderColor = 'var(--pri)';
+      opinionEl.style.background = 'var(--pri-ll)';
       setTimeout(() => {
-        patternEl.style.borderColor = '';
-        patternEl.style.background = '';
+        opinionEl.style.borderColor = '';
+        opinionEl.style.background = '';
       }, 3000);
     }
   }, 400);
 }
 
 async function autoCheckPlatforms(instruction) {
-  const platforms = await api('/api/platforms');
-  if (!platforms.length) return;
-  // 从指令中提取平台名，自动勾选
-  const checks = document.querySelectorAll('#ct-platform-checks input[type="checkbox"]');
-  checks.forEach(cb => {
-    const label = cb.parentElement?.textContent?.trim() || '';
-    if (instruction.includes(label)) {
-      cb.checked = true;
-    }
-  });
+  return;
 }
 
 
@@ -2772,7 +2984,9 @@ async function loadDailyData() {
   dailyAnalysisData = null;
 
   // 加载记录列表（带问题组过滤）
-  const records = await api(`/api/daily/records?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${groupId ? '&group_id='+groupId : ''}`);
+  const allRecords = await api(`/api/daily/records?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${groupId ? '&group_id='+groupId : ''}`);
+  const taskId = updateTaskFilterOptions('dailyTaskFilter', allRecords, true);
+  const records = taskId ? allRecords.filter(r => r.task_id === taskId) : allRecords;
   document.getElementById('dailyRecordCount').textContent = records.length + ' 条';
   dailySelectedIds.clear();
   updateBatchDeleteBtn();
@@ -2794,6 +3008,7 @@ async function loadDailyData() {
     window._dailyPage = 0;
     document.getElementById('dailyPlatformBars').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
+    renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
     return;
   }
   // 分页懒加载：只渲染前20条，滚动到底自动加载
@@ -2810,13 +3025,146 @@ async function loadDailyData() {
   }
 
   // 加载引用源统计（带问题组过滤，复用上方已声明的 groupId）
-  loadDailyRefStats(date, groupId);
+  loadDailyRefStats(date, groupId, taskId);
+  loadDailyInsights(date, groupId, taskId);
 }
 
-async function loadDailyRefStats(date, groupId) {
+async function loadDailyInsights(date, groupId, taskId='') {
   try {
     const gParam = groupId ? `&group_id=${groupId}` : '';
-    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}`);
+    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
+    const r = await api(`/api/daily/insights?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
+    renderDailyInsights(r.insights || {});
+  } catch(e) {
+    renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
+  }
+}
+
+function renderDailyEntityDeleteButton(entityName) {
+  const encodedName = encodeURIComponent(entityName || '');
+  return `<button class="btn btn-danger btn-sm" title="从当前筛选范围删除该实体" onclick="deleteDailyEntity(decodeURIComponent('${encodedName}'))">删除</button>`;
+}
+
+async function deleteDailyEntity(entityName) {
+  if (!currentClientId || !entityName) return;
+  if (!confirm(`确认从当前竞品展示范围删除「${entityName}」？\n原始回答不会删除，只移除这个AI识别实体。`)) return;
+  const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
+  const groupId = document.getElementById('dailyGroupFilter')?.value || '';
+  const taskId = document.getElementById('dailyTaskFilter')?.value || '';
+  try {
+    const r = await api('/api/daily/entities/delete', 'POST', {
+      client_id: currentClientId,
+      date,
+      platform: currentPlatform,
+      group_id: groupId,
+      task_id: taskId,
+      name: entityName
+    });
+    if (!r.ok) { toast(r.error || '删除失败', 'err'); return; }
+    toast(`已删除 ${r.removed || 0} 处实体识别结果`);
+    loadDailyData();
+  } catch(e) {
+    toast('删除失败：' + e.message, 'err');
+  }
+}
+
+function renderDailyInsights(insights) {
+  const platforms = insights.ai_platforms || [];
+  const entities = insights.mentioned_entities || [];
+  renderDailyCompetitorArticles(insights);
+  const note = document.getElementById('dailyAiPlatformNote');
+  if (note) note.textContent = `共 ${insights.total_records || 0} 条记录`;
+  if (typeof insights.mention_rate !== 'undefined') {
+    document.getElementById('dk-mention').textContent = `${Math.round(insights.mention_rate)}%`;
+  }
+
+  const aiEl = document.getElementById('dailyAiPlatformCompare');
+  if (aiEl) {
+    aiEl.innerHTML = platforms.length ? platforms.map(p => {
+      const refRows = (p.ref_platforms || []).slice(0, 6).map(rp => `
+        <div style="display:flex;align-items:center;gap:6px;margin-top:5px">
+          <span style="width:64px;font-size:10px;color:var(--text2);font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(rp.platform)}">${escHtml(rp.platform)}</span>
+          <div style="flex:1;height:6px;background:rgba(167,139,250,.12);border-radius:20px;overflow:hidden">
+            <div style="height:100%;width:${Math.min(100, rp.pct || 0)}%;background:linear-gradient(90deg,var(--pri),var(--teal));border-radius:20px"></div>
+          </div>
+          <span style="width:54px;text-align:right;font-size:10px;color:var(--pri);font-weight:800">×${escHtml(rp.count)}</span>
+        </div>`).join('');
+      return `
+      <div style="padding:9px 0;border-bottom:1px solid var(--border2)">
+        <div style="display:grid;grid-template-columns:72px 1fr 70px 48px;gap:8px;align-items:center">
+          <span style="font-size:12px;font-weight:900;color:#312e81">${escHtml(p.platform_name || p.source_platform)}</span>
+          <span style="font-size:11px;color:var(--text2)">记录 ${escHtml(p.total_records)} · 引用 ${escHtml(p.total_refs)}</span>
+          <span class="badge badge-g" style="text-align:center">${escHtml(p.brand_mentions)} 品牌提及</span>
+          <span style="font-size:11px;font-weight:800;color:var(--pri);text-align:right">${escHtml(p.mention_rate)}%</span>
+        </div>
+        <div style="font-size:10px;color:var(--text3);font-weight:800;margin:8px 0 2px">来源平台分布</div>
+        ${refRows || '<div style="font-size:10px;color:var(--text3);margin-top:5px">暂无引用来源</div>'}
+      </div>`;
+    }).join('') : '<div style="color:var(--text3);font-size:12px">暂无平台数据</div>';
+  }
+
+  const entityEl = document.getElementById('dailyEntityMentions');
+  if (entityEl) {
+    entityEl.innerHTML = entities.length ? entities.slice(0, 12).map((e, i) => `
+      <div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--border2)">
+        <span style="width:20px;height:20px;border-radius:6px;background:var(--pink-l);color:var(--pink);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
+        <div style="flex:1;min-width:0">
+          <div style="font-size:12px;font-weight:900;color:#312e81">${escHtml(e.name)} <span class="badge badge-p" style="font-size:9px">${escHtml(e.type || '实体')}</span></div>
+          <div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml((e.evidence_samples || [])[0] || '')}</div>
+        </div>
+        <span style="font-size:12px;font-weight:900;color:var(--pink);flex-shrink:0">×${escHtml(e.count)}</span>
+        ${renderDailyEntityDeleteButton(e.name)}
+      </div>`).join('') : '<div style="color:var(--text3);font-size:12px">暂无竞品/门店提及数据。可先运行实体抽取 dry-run，确认后再入库。</div>';
+  }
+}
+
+function renderDailyCompetitorArticles(insights) {
+  const el = document.getElementById('dailyCompetitorArticles');
+  if (!el) return;
+  const articles = insights.competitor_articles || [];
+  const selected = insights.selected_competitors || [];
+  const note = document.getElementById('dailyCompetitorArticleNote');
+  if (note) {
+    note.textContent = selected.length
+      ? `目标竞品：${selected.map(escHtml).join('、')}`
+      : '基于竞品榜第1和第3名筛选';
+  }
+  if (!articles.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">Top20 中暂无标题/URL命中或正文命中的候选文章。</div>';
+    return;
+  }
+  el.innerHTML = articles.slice(0, 12).map((a, i) => {
+    const aiLabels = (a.ai_platforms || []).map(pid => CRAWL_PLATFORM_NAMES[pid] || pid).join(' / ');
+    const entities = (a.related_entities || []).join('、');
+    const matchTypes = (a.match_types || []).map(t => `<span class="badge ${t === '标题/URL命中' ? 'badge-g' : 'badge-a'}" style="font-size:9px">${escHtml(t)}</span>`).join('');
+    const questions = (a.questions || []).slice(0, 2).map(q => `<div style="font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(q)}">问题：${escHtml(q)}</div>`).join('');
+    return `
+      <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2)">
+        <span style="width:22px;height:22px;border-radius:7px;background:var(--pink-l);color:var(--pink);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
+        <div style="flex:1;min-width:0">
+          <a href="${escHtml(a.url || '#')}" target="_blank" style="font-size:12px;font-weight:900;color:#312e81;text-decoration:none;line-height:1.45;display:block">${escHtml(a.title || '未命名文章')}</a>
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px">
+            <span class="badge badge-p" style="font-size:9px">${escHtml(a.platform || '未知来源')}</span>
+            ${entities ? `<span class="badge badge-pk" style="font-size:9px">关联：${escHtml(entities)}</span>` : ''}
+            ${aiLabels ? `<span class="badge badge-g" style="font-size:9px">AI：${escHtml(aiLabels)}</span>` : ''}
+            ${matchTypes}
+          </div>
+          <div style="font-size:10px;color:var(--text2);line-height:1.6;margin-top:5px">${escHtml(a.reason || '高频引用 Top20 中与目标竞品存在关联')}</div>
+          ${questions}
+        </div>
+        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
+          <span style="font-size:12px;font-weight:900;color:var(--pri)">×${escHtml(a.count || 0)}</span>
+          <span style="font-size:10px;color:var(--text3)">共现 ${escHtml(a.cooccurrence_count || 0)}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function loadDailyRefStats(date, groupId, taskId='') {
+  try {
+    const gParam = groupId ? `&group_id=${groupId}` : '';
+    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
+    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
     const totalRecords = stats.total_records || 0;
 
     // 平台权重
@@ -2838,14 +3186,28 @@ async function loadDailyRefStats(date, groupId) {
     if (stats.top_articles?.length) {
       ta.innerHTML = stats.top_articles.slice(0,20).map((a,i) => {
         const mentionRate = totalRecords > 0 ? Math.round(a.count / totalRecords * 100) : 0;
+        const aiLabels = (a.ai_platforms || []).map(pid => CRAWL_PLATFORM_NAMES[pid] || pid).join(' / ');
+        const compStatus = a.competitor_match_status || '';
+        const compEntities = (a.competitor_matched_entities || []).join('、');
+        const compLabel = a.competitor_match_label || (
+          compStatus === 'matched' ? '提到目标竞品' :
+          compStatus === 'not_matched' ? '未提到目标竞品' :
+          compStatus === 'unconfirmed' ? '正文未确认' : ''
+        );
+        const compBadgeClass = compStatus === 'matched' ? 'badge-g' : compStatus === 'not_matched' ? 'badge-r' : 'badge-a';
+        const compBadge = compLabel ? `<span class="badge ${compBadgeClass}" style="font-size:9px">${escHtml(compLabel)}${compEntities ? `：${escHtml(compEntities)}` : ''}</span>` : '';
         // 提及率颜色：≥50% 绿，≥25% 琥珀，其余灰
         const rateColor = mentionRate >= 50 ? 'var(--teal)' : mentionRate >= 25 ? 'var(--amber)' : 'var(--text3)';
         return `
       <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2)">
         <span style="width:20px;height:20px;border-radius:6px;background:var(--pri-ll);color:var(--pri);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
         <div style="flex:1;min-width:0">
-          <a href="${a.url||'#'}" target="_blank" style="font-size:11px;font-weight:700;color:#312e81;text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.title}</a>
-          <span class="badge badge-p" style="font-size:9px">${a.platform}</span>
+          <a href="${escHtml(a.url||'#')}" target="_blank" style="font-size:11px;font-weight:700;color:#312e81;text-decoration:none;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.title)}">${escHtml(a.title)}</a>
+          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:3px">
+            <span class="badge badge-p" style="font-size:9px">${escHtml(a.platform)}</span>
+            ${aiLabels ? `<span class="badge badge-g" style="font-size:9px">AI：${escHtml(aiLabels)}</span>` : ''}
+            ${compBadge}
+          </div>
         </div>
         <div style="display:flex;align-items:center;gap:5px;flex-shrink:0">
           <span style="font-size:10px;font-weight:700;color:${rateColor};min-width:34px;text-align:right">${mentionRate}%</span>
@@ -2929,12 +3291,14 @@ async function startDailyAnalyze() {
   const groupSel = document.getElementById('dailyGroupFilter');
   const groupId = groupSel?.value || '';
   const groupName = groupId ? (groupSel.options[groupSel.selectedIndex]?.text || '') : '';
+  const taskId = document.getElementById('dailyTaskFilter')?.value || '';
   spin('spDailyAnalyze', true);
   disableBtn('btnDailyAnalyze', true);
   try {
     const r = await api('/api/daily/deep_analyze', 'POST', {
       client_id: currentClientId, date, brand: currentBrand,
-      platform: currentPlatform, group_id: groupId, group_name: groupName
+      platform: currentPlatform, group_id: groupId, group_name: groupName,
+      task_id: taskId
     });
     if (r.error) { toast(r.error, 'err'); return; }
     dailyAnalysisData = r;
@@ -2944,9 +3308,10 @@ async function startDailyAnalyze() {
     const scopeEl = document.getElementById('dailyAnalysisScope');
     if (scopeEl) {
       scopeEl.style.display = 'block';
+      const taskScope = taskId ? ` &nbsp;·&nbsp; 批次 <span style="color:var(--pri)">#${escHtml(taskId.slice(-8))}</span>` : '';
       scopeEl.innerHTML = groupName
-        ? `📂 当前分析范围：<span style="color:var(--pri)">${groupName}</span> 问题组 &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`
-        : `📊 当前分析范围：<span style="color:var(--pri)">全部问题组</span> &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`;
+        ? `📂 当前分析范围：<span style="color:var(--pri)">${groupName}</span> 问题组${taskScope} &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`
+        : `📊 当前分析范围：<span style="color:var(--pri)">全部问题组</span>${taskScope} &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`;
     }
     renderDailyAnalysis(r);
     toast('深度分析完成 喵～✦');
@@ -3039,31 +3404,44 @@ function showPlatformDetail(platform, idx) {
 }
 
 async function refineAndFillPattern(rawText, sourceName) {
-  const patternEl = document.getElementById('ct-pattern');
-  patternEl.value = '正在提炼内容规律…';
-  patternEl.disabled = true;
+  const opinionEl = document.getElementById('contentOpinion');
+  if (!opinionEl) return;
+  const previous = opinionEl.value;
+  opinionEl.value = previous ? `${previous}\n\n正在提炼「${sourceName}」内容规律...` : `正在提炼「${sourceName}」内容规律...`;
+  opinionEl.disabled = true;
   try {
     const r = await api('/api/content/refine_pattern', 'POST', { text: rawText });
     if (r.error) {
-      patternEl.value = rawText.slice(0, 300);
+      opinionEl.value = previous;
+      appendContentOpinion(rawText.slice(0, 300), sourceName);
       toast('提炼失败，已截取前300字', 'err');
     } else {
-      patternEl.value = r.refined;
+      opinionEl.value = previous;
+      appendContentOpinion(r.refined, sourceName);
       toast(`「${sourceName}」内容规律已提炼导入 ✦`);
     }
   } catch(e) {
-    patternEl.value = rawText.slice(0, 300);
+    opinionEl.value = previous;
+    appendContentOpinion(rawText.slice(0, 300), sourceName);
     toast('提炼失败，已截取前300字', 'err');
   } finally {
-    patternEl.disabled = false;
+    opinionEl.disabled = false;
   }
+}
+
+function appendContentOpinion(text, sourceName) {
+  const opinionEl = document.getElementById('contentOpinion');
+  if (!opinionEl) return;
+  const block = `【${sourceName}】\n${text}`;
+  const existing = opinionEl.value.trim();
+  opinionEl.value = existing ? `${existing}\n\n${block}` : block;
+  opinionEl.focus();
 }
 
 async function importPlatformPrompt(platform) {
   if (!dailyAnalysisData?.platform_prompts?.[platform]) { toast('暂无该平台提示词', 'err'); return; }
   const prompt = dailyAnalysisData.platform_prompts[platform];
   navTo('content', null);
-  document.getElementById('ct-brand').value = currentBrand || '';
   const banner = document.getElementById('ct-import-banner');
   if (banner) { banner.style.display = 'block'; banner.textContent = `✦ 已导入「${platform}」平台内容生产指令`; }
   await refineAndFillPattern(prompt, platform);
@@ -3083,7 +3461,6 @@ async function importDailyToContent() {
   if (!dailyAnalysisData) { toast('请先生成深度分析', 'err'); return; }
   navTo('content', null);
   const report = document.getElementById('dailyAnalysisReport').innerText;
-  document.getElementById('ct-brand').value = currentBrand || '';
   const banner = document.getElementById('ct-import-banner');
   if (banner) { banner.style.display = 'block'; banner.textContent = '✦ 已从今日深度分析导入内容生产指令'; }
   await refineAndFillPattern(report, '深度分析报告');
@@ -3246,6 +3623,7 @@ function copyFormatContent() {
 // ── Init ──────────────────────────────────────────────
 refreshApiStatus();
 loadClientsDropdown();
+renderContractPlatformChoices('cl-platforms', ['deepseek'], 'new-client');
 loadDashboard();
 // 设置当日数据整理的默认日期
 const _dailyDateEl = document.getElementById('dailyDate');

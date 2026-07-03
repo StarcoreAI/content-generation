@@ -21,6 +21,9 @@ def isolated_app_data():
         "F_SETTINGS": geo_app.F_SETTINGS,
         "F_GROUPS": geo_app.F_GROUPS,
         "F_RAW_RECORDS": geo_app.F_RAW_RECORDS,
+        "F_COMPETITOR_ARTICLE_BODY_HITS": geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
+        "F_CONTENT_GENERATIONS": getattr(geo_app, "F_CONTENT_GENERATIONS", None),
+        "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "BASE_CRAWLER_DATA_DIR": base_crawler.DATA_DIR,
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -33,6 +36,10 @@ def isolated_app_data():
         geo_app.F_SETTINGS = os.path.join(tmp, "settings.json")
         geo_app.F_GROUPS = os.path.join(tmp, "probe_groups.json")
         geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
+        geo_app.F_COMPETITOR_ARTICLE_BODY_HITS = os.path.join(tmp, "competitor_article_body_hits.json")
+        geo_app.F_CONTENT_GENERATIONS = os.path.join(tmp, "content_generations.json")
+        if hasattr(geo_app, "UPLOAD_FOLDER"):
+            geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
         base_crawler.DATA_DIR = tmp
         try:
             yield tmp
@@ -40,6 +47,8 @@ def isolated_app_data():
             for key, value in original.items():
                 if key == "BASE_CRAWLER_DATA_DIR":
                     base_crawler.DATA_DIR = value
+                elif value is None and hasattr(geo_app, key):
+                    delattr(geo_app, key)
                 else:
                     setattr(geo_app, key, value)
 
@@ -105,6 +114,91 @@ class CoreFunctionTests(unittest.TestCase):
                 {"name": "测试", "items": [1, 2]},
             )
 
+    def test_content_generate_uses_all_materials_history_and_stores_newest_first(self):
+        with isolated_app_data():
+            cid = "client-1"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "苏韵汽车音响"}])
+            material_dir = os.path.join(geo_app.UPLOAD_FOLDER, cid)
+            os.makedirs(material_dir, exist_ok=True)
+            with open(os.path.join(material_dir, "brand.txt"), "w", encoding="utf-8") as f:
+                f.write("品牌资料：苏韵主营汽车音响改装。")
+            with open(os.path.join(material_dir, "case.md"), "w", encoding="utf-8") as f:
+                f.write("案例资料：扬州车主升级DSP和隔音。")
+
+            client = geo_app.app.test_client()
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "第一版文章" if len(captured_messages) == 1 else "第二版文章"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                first = client.post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "写一篇面向扬州车主的宣传文章"},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertEqual(first.get_json()["article"]["content"], "第一版文章")
+
+                second = client.post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "第二版加强施工流程和真实感"},
+                )
+                self.assertEqual(second.status_code, 200)
+                self.assertEqual(second.get_json()["article"]["content"], "第二版文章")
+
+            prompt_payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("苏韵主营汽车音响改装", prompt_payload)
+            self.assertIn("扬州车主升级DSP和隔音", prompt_payload)
+            self.assertIn("写一篇面向扬州车主的宣传文章", prompt_payload)
+
+            second_payload = json.dumps(captured_messages[1], ensure_ascii=False)
+            self.assertIn("第一版文章", second_payload)
+            self.assertIn("第二版加强施工流程和真实感", second_payload)
+
+            listing = client.get(f"/api/content/generations?client_id={cid}")
+            self.assertEqual(listing.status_code, 200)
+            articles = listing.get_json()["articles"]
+            self.assertEqual([a["content"] for a in articles], ["第二版文章", "第一版文章"])
+            self.assertEqual(articles[0]["model"], "deepseek-pro")
+
+    def test_content_generate_includes_sample_links_and_selected_top_articles(self):
+        with isolated_app_data():
+            cid = "client-1"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "苏韵汽车音响"}])
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "参考样例生成文章"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "按这些样例仿写",
+                        "sample_links": ["https://example.com/sample-a"],
+                        "selected_articles": [
+                            {
+                                "title": "汽车音响改装Top20样例",
+                                "url": "https://example.com/top20",
+                                "platform": "懂车帝",
+                                "count": 6,
+                            }
+                        ],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200)
+            prompt_payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("https://example.com/sample-a", prompt_payload)
+            self.assertIn("汽车音响改装Top20样例", prompt_payload)
+            self.assertIn("懂车帝", prompt_payload)
+            article = response.get_json()["article"]
+            self.assertEqual(article["sample_link_count"], 1)
+            self.assertEqual(article["selected_article_count"], 1)
+
     def test_basic_brand_analysis_without_api_marks_pending(self):
         analysis = geo_app.basic_brand_analysis_without_api(
             "测试品牌",
@@ -169,6 +263,122 @@ class CoreFunctionTests(unittest.TestCase):
             day_file = os.path.join(tmp, "raw", "client-1", f"{geo_app.today_str()}.json")
             self.assertTrue(os.path.exists(day_file))
 
+    def test_save_raw_record_persists_crawl_task_metadata(self):
+        with isolated_app_data():
+            geo_app.save_raw_record(
+                client_id="client-1",
+                group_id="group-1",
+                brand="测试品牌",
+                question="测试问题",
+                round_num=1,
+                answer="测试品牌可以考虑。",
+                search_keywords=[],
+                refs=[],
+                analysis={"brand_mentioned": True, "geo_score": 20, "main_ref": {}},
+                source_platform="qwen",
+                task_id="task-1",
+                run_id="run-1",
+                task_report="data/tasks/task-1.json",
+                crawler_engine="node",
+            )
+
+            records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+            self.assertEqual(records[0]["task_id"], "task-1")
+            self.assertEqual(records[0]["run_id"], "run-1")
+            self.assertEqual(records[0]["task_report"], "data/tasks/task-1.json")
+            self.assertEqual(records[0]["crawler_engine"], "node")
+
+            loaded = geo_app.load_client_records("client-1", task_id="task-1")
+            self.assertEqual(len(loaded), 1)
+            self.assertEqual(loaded[0]["question"], "测试问题")
+
+    def test_save_raw_record_raises_when_main_raw_store_write_fails(self):
+        with isolated_app_data():
+            with patch("services.records.save_json", return_value=False):
+                with self.assertRaises(RuntimeError):
+                    geo_app.save_raw_record(
+                        client_id="client-1",
+                        group_id="group-1",
+                        brand="测试品牌",
+                        question="测试问题",
+                        round_num=1,
+                        answer="测试品牌可以考虑。",
+                        search_keywords=[],
+                        refs=[],
+                        analysis={"brand_mentioned": True, "geo_score": 20, "main_ref": {}},
+                        source_platform="deepseek",
+                        task_id="task-1",
+                    )
+
+
+    def test_auto_normalize_task_entities_only_updates_current_task_missing_entities(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "brand": "Brand", "industry": "Industry"}
+            ])
+            geo_app.save(geo_app.F_SETTINGS, {"api_key": "test-key"})
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "raw-current",
+                    "client_id": "client-1",
+                    "today": "2026-07-03",
+                    "task_id": "task-1",
+                    "answer": "answer",
+                    "mentioned_entities": [],
+                },
+                {
+                    "id": "raw-existing",
+                    "client_id": "client-1",
+                    "today": "2026-07-03",
+                    "task_id": "task-1",
+                    "answer": "answer",
+                    "mentioned_entities": [{"name": "Existing"}],
+                },
+                {
+                    "id": "raw-other-task",
+                    "client_id": "client-1",
+                    "today": "2026-07-03",
+                    "task_id": "task-2",
+                    "answer": "answer",
+                    "mentioned_entities": [],
+                },
+            ])
+            fake_body = {
+                "mode": "extract_missing",
+                "selected_records": 1,
+                "own_brand": "Brand",
+                "raw_entity_summary": [],
+                "competitor_report": {
+                    "canonical_entities": [
+                        {"canonical_name": "Entity", "aliases": ["RawEntity"]}
+                    ]
+                },
+                "final_competitor_summary": [],
+                "results": [
+                    {
+                        "record_id": "raw-current",
+                        "competitors": [
+                            {"name": "RawEntity", "type": "Industry", "sentiment": "neutral", "evidence": "RawEntity"}
+                        ],
+                    }
+                ],
+            }
+
+            with patch("scripts.normalize_entities.build_extract_missing_report", return_value=fake_body):
+                result = geo_app.auto_normalize_task_entities(
+                    client_id="client-1",
+                    date_str="2026-07-03",
+                    task_id="task-1",
+                )
+
+            records = {item["id"]: item for item in geo_app.load(geo_app.F_RAW_RECORDS, [])}
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["changed"], 1)
+            self.assertEqual(records["raw-current"]["mentioned_entities"][0]["name"], "Entity")
+            self.assertEqual(records["raw-existing"]["mentioned_entities"], [{"name": "Existing"}])
+            self.assertEqual(records["raw-other-task"]["mentioned_entities"], [])
+            self.assertTrue(os.path.exists(result["report_path"]))
+
 
 class FlaskApiTests(unittest.TestCase):
     def setUp(self):
@@ -204,6 +414,31 @@ class FlaskApiTests(unittest.TestCase):
             self.assertNotIn("api_key", payload)
             self.assertEqual(payload["base_url"], "https://api.example.com")
             self.assertEqual(payload["model"], "test-model")
+
+    def test_client_contract_platforms_can_be_created_and_updated(self):
+        with isolated_app_data():
+            response = self.client.post(
+                "/api/clients",
+                json={
+                    "name": "客户A",
+                    "brand": "品牌A",
+                    "industry": "汽车音响",
+                    "goal": "提升提及率",
+                    "contract_platforms": ["qwen", "doubao", "bad"],
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            client = response.get_json()["client"]
+            self.assertEqual(client["contract_platforms"], ["doubao", "qwen"])
+
+            update_response = self.client.put(
+                f"/api/clients/{client['id']}",
+                json={"contract_platforms": ["deepseek", "yuanbao"]},
+            )
+            self.assertEqual(update_response.status_code, 200)
+
+            clients = self.client.get("/api/clients").get_json()
+            self.assertEqual(clients[0]["contract_platforms"], ["deepseek", "yuanbao"])
 
     def test_platform_list_shape(self):
         with isolated_app_data():
@@ -468,6 +703,432 @@ class FlaskApiTests(unittest.TestCase):
                 ],
             )
 
+    def test_raw_record_endpoints_filter_by_task_id(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "crawl_time": "2026-07-02 10:00",
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "question": "任务一问题",
+                        "answer": "测试品牌被提到",
+                        "refs": [{"title": "文章A", "url": "https://a.example", "platform": "搜狐", "position": 1}],
+                        "ref_count": 1,
+                        "brand_mentioned": True,
+                        "geo_score": 20,
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "crawl_time": "2026-07-02 11:00",
+                        "source_platform": "qwen",
+                        "task_id": "task-2",
+                        "question": "任务二问题",
+                        "answer": "另一条回答",
+                        "refs": [{"title": "文章B", "url": "https://b.example", "platform": "知乎", "position": 1}],
+                        "ref_count": 1,
+                        "brand_mentioned": False,
+                        "geo_score": 0,
+                    },
+                ],
+            )
+
+            records_response = self.client.get(
+                "/api/raw_records?client_id=client-1&task_id=task-1"
+            )
+            stats_response = self.client.get(
+                "/api/raw_records/platform_stats?client_id=client-1&task_id=task-1"
+            )
+            daily_response = self.client.get(
+                f"/api/daily/records?client_id=client-1&date={geo_app.today_str()}&task_id=task-1"
+            )
+            daily_stats_response = self.client.get(
+                f"/api/daily/ref_stats?client_id=client-1&date={geo_app.today_str()}&task_id=task-1"
+            )
+
+            self.assertEqual(records_response.status_code, 200)
+            self.assertEqual([r["id"] for r in records_response.get_json()], ["raw-1"])
+            self.assertEqual(stats_response.get_json()["total_records"], 1)
+            self.assertEqual(stats_response.get_json()["top_articles"][0]["title"], "文章A")
+            self.assertEqual([r["id"] for r in daily_response.get_json()], ["raw-1"])
+            self.assertEqual(daily_stats_response.get_json()["total_records"], 1)
+            self.assertEqual(daily_stats_response.get_json()["top_articles"][0]["title"], "文章A")
+
+    def test_daily_ref_stats_counts_ref_items_and_article_ai_platforms(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "deepseek",
+                        "question": "q1",
+                        "answer": "a1",
+                        "refs": [
+                            {"title": "Shared Article", "url": "https://shared.example", "platform": "Sohu", "position": 1},
+                            {"title": "Other Article", "url": "https://other.example", "platform": "Sohu", "position": 2},
+                        ],
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "question": "q2",
+                        "answer": "a2",
+                        "refs": [
+                            {"title": "Shared Article", "url": "https://shared.example", "platform": "Sohu", "position": 1},
+                        ],
+                    },
+                    {
+                        "id": "raw-3",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "doubao",
+                        "question": "q3",
+                        "answer": "a3",
+                        "refs": [
+                            {"title": "Zhihu Article", "url": "https://zhihu.example", "platform": "Zhihu", "position": 1},
+                        ],
+                    },
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/ref_stats?client_id=client-1&date={geo_app.today_str()}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["total_refs"], 4)
+            self.assertEqual(payload["platform_weights"][0]["platform"], "Sohu")
+            self.assertEqual(payload["platform_weights"][0]["count"], 3)
+            self.assertEqual(payload["platform_weights"][0]["pct"], 75.0)
+            self.assertEqual(sum(p["count"] for p in payload["platform_weights"]), payload["total_refs"])
+            self.assertEqual(payload["top_articles"][0]["title"], "Shared Article")
+            self.assertEqual(payload["top_articles"][0]["count"], 2)
+            self.assertEqual(payload["top_articles"][0]["ai_platforms"], ["deepseek", "qwen"])
+
+    def test_daily_ref_stats_merges_same_article_url_variants_across_ai(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "deepseek",
+                        "question": "q1",
+                        "answer": "a1",
+                        "refs": [
+                            {
+                                "title": "Gold Guide - Toutiao",
+                                "url": "https://www.toutiao.com/article/7655174835676480010/?wid=1782389372799",
+                                "platform": "Toutiao",
+                                "position": 1,
+                            }
+                        ],
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "yuanbao",
+                        "question": "q2",
+                        "answer": "a2",
+                        "refs": [
+                            {
+                                "title": "Gold Guide: Toutiao",
+                                "url": "https://www.toutiao.com/a7655174835676480010?channel=",
+                                "platform": "Toutiao",
+                                "position": 1,
+                            }
+                        ],
+                    },
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/ref_stats?client_id=client-1&date={geo_app.today_str()}"
+            )
+
+            payload = response.get_json()
+            self.assertEqual(len(payload["top_articles"]), 1)
+            self.assertEqual(payload["top_articles"][0]["count"], 2)
+            self.assertEqual(payload["top_articles"][0]["ai_platforms"], ["deepseek", "yuanbao"])
+
+    def test_daily_ref_stats_marks_top_articles_with_competitor_body_hits(self):
+        with isolated_app_data():
+            date = geo_app.today_str()
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": date,
+                        "source_platform": "qwen",
+                        "question": "q1",
+                        "answer": "第一竞品和第三竞品被提到",
+                        "refs": [
+                            {"title": "命中文章", "url": "https://hit.example", "platform": "示例", "position": 1},
+                            {"title": "未命中文章", "url": "https://miss.example", "platform": "示例", "position": 2},
+                            {"title": "失败文章", "url": "https://fail.example", "platform": "示例", "position": 3},
+                        ],
+                        "mentioned_entities": [
+                            {"name": "第一竞品", "evidence": "第一竞品"},
+                            {"name": "第二竞品", "evidence": "第二竞品"},
+                            {"name": "第三竞品", "evidence": "第三竞品"},
+                        ],
+                    }
+                ],
+            )
+            geo_app.save(
+                geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
+                [
+                    {
+                        "client_id": "client-1",
+                        "date": date,
+                        "task_id": "",
+                        "group_id": "",
+                        "platform": "",
+                        "body_hits": [
+                            {
+                                "status": "matched",
+                                "title": "命中文章",
+                                "url": "https://hit.example",
+                                "matched_entities": ["第一竞品"],
+                            },
+                            {
+                                "status": "not_matched",
+                                "title": "未命中文章",
+                                "url": "https://miss.example",
+                            },
+                            {
+                                "status": "fetch_failed",
+                                "title": "失败文章",
+                                "url": "https://fail.example",
+                                "error": "timeout",
+                            },
+                        ],
+                    }
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/ref_stats?client_id=client-1&date={date}"
+            )
+
+            payload = response.get_json()
+            by_title = {item["title"]: item for item in payload["top_articles"]}
+            self.assertEqual(by_title["命中文章"]["competitor_match_status"], "matched")
+            self.assertEqual(by_title["命中文章"]["competitor_matched_entities"], ["第一竞品"])
+            self.assertEqual(by_title["未命中文章"]["competitor_match_status"], "not_matched")
+            self.assertEqual(by_title["失败文章"]["competitor_match_status"], "unconfirmed")
+
+    def test_daily_insights_filters_by_task_id(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "crawl_time": "2026-07-02 10:00",
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "question": "任务一问题",
+                        "answer": "测试品牌和竞品汽车音响都被提到",
+                        "refs": [{"title": "文章A", "url": "https://a.example", "platform": "搜狐", "position": 1}],
+                        "ref_count": 1,
+                        "brand_mentioned": True,
+                        "geo_score": 20,
+                        "mentioned_entities": [{"name": "竞品汽车音响", "type": "门店", "sentiment": "positive", "evidence": "竞品汽车音响"}],
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "crawl_time": "2026-07-02 11:00",
+                        "source_platform": "doubao",
+                        "task_id": "task-2",
+                        "question": "任务二问题",
+                        "answer": "另一条回答",
+                        "refs": [{"title": "文章B", "url": "https://b.example", "platform": "知乎", "position": 1}],
+                        "ref_count": 1,
+                        "brand_mentioned": False,
+                        "geo_score": 0,
+                    },
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/insights?client_id=client-1&date={geo_app.today_str()}&task_id=task-1"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["insights"]["total_records"], 1)
+            self.assertEqual(payload["insights"]["ai_platforms"][0]["source_platform"], "qwen")
+            self.assertEqual(payload["insights"]["top_articles"][0]["title"], "文章A")
+            self.assertEqual(payload["insights"]["mentioned_entities"][0]["name"], "竞品汽车音响")
+
+    def test_daily_insights_merges_stored_competitor_article_body_hits(self):
+        with isolated_app_data():
+            date = geo_app.today_str()
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": date,
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "question": "任务一问题",
+                        "answer": "第一竞品和第三竞品都被提到",
+                        "brand": "测试品牌",
+                        "refs": [
+                            {
+                                "title": "高频文章A",
+                                "url": "https://a.example/article",
+                                "platform": "示例平台",
+                                "position": 1,
+                            }
+                        ],
+                        "mentioned_entities": [
+                            {"name": "第一竞品", "type": "门店", "evidence": "第一竞品"},
+                            {"name": "第二竞品", "type": "门店", "evidence": "第二竞品"},
+                            {"name": "第三竞品", "type": "门店", "evidence": "第三竞品"},
+                        ],
+                    }
+                ],
+            )
+            geo_app.save(
+                geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
+                [
+                    {
+                        "client_id": "client-1",
+                        "date": date,
+                        "task_id": "",
+                        "group_id": "",
+                        "platform": "",
+                        "generated_at": "2026-07-03 13:28:08",
+                        "body_hits": [
+                            {
+                                "status": "matched",
+                                "title": "高频文章A",
+                                "url": "https://a.example/article",
+                                "platform": "示例平台",
+                                "count": 1,
+                                "ai_platforms": ["qwen"],
+                                "matched_entities": ["第一竞品"],
+                                "evidence": "正文里提到第一竞品",
+                            }
+                        ],
+                    }
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/insights?client_id=client-1&date={date}"
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            articles = payload["insights"]["competitor_articles"]
+            self.assertEqual(len(articles), 1)
+            self.assertEqual(articles[0]["title"], "高频文章A")
+            self.assertEqual(articles[0]["related_entities"], ["第一竞品"])
+            self.assertIn("正文命中", articles[0]["match_types"])
+            self.assertEqual(payload["insights"]["body_hit_report"]["matched_article_count"], 1)
+
+    def test_delete_daily_entity_removes_name_within_filtered_scope(self):
+        with isolated_app_data():
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-current-1",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "mentioned_entities": [
+                            {"name": "Bad Entity", "evidence": "bad"},
+                            {"name": "Good Entity", "evidence": "good"},
+                        ],
+                    },
+                    {
+                        "id": "raw-current-2",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "mentioned_entities": [{"name": "Bad Entity", "evidence": "bad again"}],
+                    },
+                    {
+                        "id": "raw-other-task",
+                        "client_id": "client-1",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "task_id": "task-2",
+                        "mentioned_entities": [{"name": "Bad Entity", "evidence": "keep"}],
+                    },
+                    {
+                        "id": "raw-other-client",
+                        "client_id": "client-2",
+                        "group_id": "group-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "task_id": "task-1",
+                        "mentioned_entities": [{"name": "Bad Entity", "evidence": "keep"}],
+                    },
+                ],
+            )
+
+            response = self.client.post(
+                "/api/daily/entities/delete",
+                json={
+                    "client_id": "client-1",
+                    "date": geo_app.today_str(),
+                    "platform": "qwen",
+                    "group_id": "group-1",
+                    "task_id": "task-1",
+                    "name": "Bad Entity",
+                },
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["removed"], 2)
+            self.assertEqual(payload["records_changed"], 2)
+            records = {r["id"]: r for r in geo_app.load(geo_app.F_RAW_RECORDS, [])}
+            self.assertEqual(records["raw-current-1"]["mentioned_entities"], [{"name": "Good Entity", "evidence": "good"}])
+            self.assertEqual(records["raw-current-2"]["mentioned_entities"], [])
+            self.assertEqual(records["raw-other-task"]["mentioned_entities"][0]["name"], "Bad Entity")
+            self.assertEqual(records["raw-other-client"]["mentioned_entities"][0]["name"], "Bad Entity")
+
     def test_crawl_with_unverified_saved_state_returns_cookie_expired_before_crawling(self):
         with isolated_app_data() as tmp:
             geo_app.save(
@@ -568,7 +1229,14 @@ class FlaskApiTests(unittest.TestCase):
                         ],
                     }
 
-                with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler):
+                entity_result = {
+                    "ok": True,
+                    "skipped": False,
+                    "changed": 1,
+                    "report_path": os.path.join(tmp, "reports", "entity.json"),
+                }
+                with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler), \
+                        patch.object(geo_app, "auto_normalize_task_entities", return_value=entity_result) as auto_entities:
                     response = self.client.post(
                         "/api/platform/crawl",
                         json={
@@ -590,6 +1258,8 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertIn("output_dir", calls[0]["kwargs"])
                 self.assertTrue(os.path.isabs(calls[0]["kwargs"]["output_dir"]))
                 self.assertTrue(calls[0]["kwargs"]["output_dir"].endswith(os.path.join("tasks", "node", payload["task_id"], "qwen")))
+                auto_entities.assert_called_once_with("client-1", geo_app.today_str(), payload["task_id"])
+                self.assertEqual(payload["entity_normalize"], entity_result)
 
                 records = geo_app.load(geo_app.F_RAW_RECORDS, [])
                 self.assertEqual(len(records), 1)
@@ -601,6 +1271,7 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertEqual(report["crawler_engine"], "node")
                 self.assertEqual(report["node_output_dir"], calls[0]["kwargs"]["output_dir"])
                 self.assertEqual(report["status"], "completed")
+                self.assertEqual(report["entity_normalize"], entity_result)
         finally:
             if old_value is None:
                 os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
@@ -667,6 +1338,87 @@ class FlaskApiTests(unittest.TestCase):
                 raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
                 self.assertEqual(len(raw_records), 1)
                 self.assertTrue(raw_records[0]["brand_mentioned"])
+        finally:
+            if old_value is None:
+                os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
+            else:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
+    def test_crawl_saves_raw_record_when_ai_analysis_retries_then_falls_back(self):
+        old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
+        try:
+            with isolated_app_data() as tmp:
+                os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "qwen"
+                geo_app.save(geo_app.F_SETTINGS, {"api_key": "test-key"})
+                geo_app.save(
+                    os.path.join(tmp, "qwen_state.json"),
+                    {
+                        "cookies": [
+                            {"name": "session", "value": "abc", "domain": ".qianwen.com", "path": "/"}
+                        ],
+                        "origins": [],
+                    },
+                )
+                base_crawler.mark_login_status("qwen", "ok", "登录状态已保存")
+
+                def fake_run_node_crawler(platform, questions, **kwargs):
+                    return {
+                        "ok": True,
+                        "platform": platform,
+                        "total": 1,
+                        "success": 1,
+                        "results": [
+                            {
+                                "ok": True,
+                                "question": questions[0],
+                                "answer": "测试品牌可以作为候选之一，适合本地服务评估。",
+                                "refs": [
+                                    {
+                                        "title": "测试品牌参考文章",
+                                        "url": "https://example.com/ref",
+                                        "platform": "示例平台",
+                                    }
+                                ],
+                                "error": "",
+                            }
+                        ],
+                    }
+
+                with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler), \
+                        patch.object(geo_app, "analyze_brand_intel", side_effect=ValueError("Invalid control character")) as analyze, \
+                        patch.object(geo_app, "auto_normalize_task_entities", return_value={"ok": True, "changed": 0}):
+                    response = self.client.post(
+                        "/api/platform/crawl",
+                        json={
+                            "client_id": "client-1",
+                            "brand": "测试品牌",
+                            "questions": ["测试问题"],
+                            "platform": "qwen",
+                            "repeat_count": 1,
+                            "parallel": 1,
+                        },
+                    )
+
+                self.assertEqual(response.status_code, 200)
+                payload = response.get_json()
+                self.assertTrue(payload["ok"])
+                self.assertEqual(payload["analyzed"], 1)
+                self.assertEqual(payload["errors"], 0)
+                self.assertEqual(analyze.call_count, 3)
+
+                raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+                self.assertEqual(len(raw_records), 1)
+                self.assertEqual(raw_records[0]["question"], "测试问题")
+                self.assertTrue(raw_records[0]["brand_mentioned"])
+                self.assertEqual(raw_records[0]["analysis"]["analysis_status"], "fallback_basic")
+                self.assertEqual(raw_records[0]["analysis"]["analysis_mode"], "api_failed_basic")
+
+                report = geo_app.load(payload["task_report"], {})
+                self.assertEqual(report["status"], "completed")
+                self.assertEqual(report["analysis_errors"], [])
+                self.assertEqual(len(report["analysis_fallbacks"]), 1)
+                self.assertEqual(report["analysis_fallbacks"][0]["attempts"], 3)
+                self.assertEqual(report["success"][0]["analysis_status"], "fallback_basic")
         finally:
             if old_value is None:
                 os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)

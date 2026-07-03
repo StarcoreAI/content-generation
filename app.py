@@ -15,6 +15,7 @@ from services.storage import load_json, save_json
 app = Flask(__name__)
 APP_VERSION = "2.3"
 NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen"}
+CLIENT_CONTRACT_PLATFORM_ORDER = ["doubao", "deepseek", "yuanbao", "qwen"]
 crawl_run_lock = threading.Lock()
 
 # ── 数据文件路径 ────────────────────────────────────────
@@ -27,6 +28,8 @@ F_ARTICLES  = f"{D}/articles.json"
 F_SETTINGS  = f"{D}/settings.json"
 F_GROUPS    = f"{D}/probe_groups.json"
 F_RAW_RECORDS = f"{D}/raw_records.json"  # 细化版爬取记录
+F_COMPETITOR_ARTICLE_BODY_HITS = f"{D}/competitor_article_body_hits.json"
+F_CONTENT_GENERATIONS = f"{D}/content_generations.json"
 
 def get_raw_data_dir():
     """获取原始数据存储目录（可由用户自定义）"""
@@ -78,14 +81,97 @@ def should_use_node_crawler(platform):
     return platform in requested
 
 
-def load_client_records(client_id, date=None, group_id=None, platform=None):
+def normalize_contract_platforms(platforms):
+    if not isinstance(platforms, list):
+        return []
+    requested = {str(item).strip() for item in platforms if str(item).strip()}
+    return [platform for platform in CLIENT_CONTRACT_PLATFORM_ORDER if platform in requested]
+
+
+def _body_hit_scope_value(value):
+    value = str(value or "").strip()
+    if value == "all":
+        return ""
+    return value
+
+
+def load_competitor_article_body_hit_report(client_id, date_str, task_id="", group_id="", platform=""):
+    scope = {
+        "client_id": _body_hit_scope_value(client_id),
+        "date": _body_hit_scope_value(date_str),
+        "task_id": _body_hit_scope_value(task_id),
+        "group_id": _body_hit_scope_value(group_id),
+        "platform": _body_hit_scope_value(platform),
+    }
+    candidates = []
+    for item in load(F_COMPETITOR_ARTICLE_BODY_HITS, []):
+        if not isinstance(item, dict):
+            continue
+        item_scope = {key: _body_hit_scope_value(item.get(key)) for key in scope}
+        if item_scope == scope:
+            candidates.append(item)
+    if not candidates:
+        return None
+    return sorted(candidates, key=lambda x: str(x.get("generated_at") or ""))[-1]
+
+
+def annotate_top_articles_with_competitor_matches(top_articles, records, body_hit_report=None):
+    if not top_articles:
+        return top_articles
+    from services.ref_articles import canonical_article_key
+    from services.record_insights import build_record_insights, merge_body_hit_results
+
+    insights = build_record_insights(records)
+    competitor_articles = insights.get("competitor_articles", [])
+    selected_competitors = insights.get("selected_competitors", [])
+    body_hits = body_hit_report.get("body_hits", []) if body_hit_report else []
+    if body_hit_report:
+        competitor_articles = merge_body_hit_results(
+            competitor_articles,
+            body_hits,
+            selected_competitors,
+        )
+    competitor_by_key = {
+        canonical_article_key(item.get("title", ""), item.get("url", "")): item
+        for item in competitor_articles
+    }
+    body_status_by_key = {
+        canonical_article_key(item.get("title", ""), item.get("url", "")): item
+        for item in body_hits
+    }
+    for article in top_articles:
+        key = canonical_article_key(article.get("title", ""), article.get("url", ""))
+        match = competitor_by_key.get(key)
+        if match:
+            article["competitor_match_status"] = "matched"
+            article["competitor_match_label"] = "提到目标竞品"
+            article["competitor_match_types"] = match.get("match_types", [])
+            article["competitor_matched_entities"] = match.get("related_entities", [])
+            continue
+
+        body_status = body_status_by_key.get(key)
+        if body_status and body_status.get("status") in {"fetch_failed", "skipped"}:
+            article["competitor_match_status"] = "unconfirmed"
+            article["competitor_match_label"] = "正文未确认"
+        elif body_hit_report:
+            article["competitor_match_status"] = "not_matched"
+            article["competitor_match_label"] = "未提到目标竞品"
+        else:
+            article["competitor_match_status"] = ""
+            article["competitor_match_label"] = ""
+        article["competitor_match_types"] = []
+        article["competitor_matched_entities"] = []
+    return top_articles
+
+
+def load_client_records(client_id, date=None, group_id=None, platform=None, task_id=None):
     """
     严格按 client_id 过滤爬取记录的唯一入口。
     client_id 为空时强制返回空列表，绝不读取全量数据，防止跨客户串数据。
     platform: 可选，按来源平台过滤（doubao/deepseek/yuanbao/qwen），None=全部
     """
     return record_store.load_client_records(
-        F_RAW_RECORDS, client_id, date, group_id, normalize_platform_filter(platform)
+        F_RAW_RECORDS, client_id, date, group_id, normalize_platform_filter(platform), task_id
     )
 
 
@@ -208,6 +294,16 @@ def ai(prompt, max_tokens=2000):
     )
     return resp.choices[0].message.content.strip()
 
+def ai_deepseek_pro(messages, max_tokens=6000):
+    s = get_settings()
+    if not s.get("api_key"):
+        raise Exception("请先在系统设置中配置 API Key")
+    client = OpenAI(api_key=s["api_key"], base_url=s.get("base_url", "https://api.deepseek.com").rstrip("/"))
+    resp = client.chat.completions.create(
+        model="deepseek-pro", max_tokens=max_tokens, messages=messages
+    )
+    return resp.choices[0].message.content.strip()
+
 def ai_json(prompt, max_tokens=1500):
     raw = ai(prompt, max_tokens)
     raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
@@ -286,10 +382,31 @@ def add_client():
     d = request.json
     c = {"id": uid(), "name": d["name"], "brand": d["brand"],
          "industry": d.get("industry",""), "goal": d.get("goal",""),
+         "contract_platforms": normalize_contract_platforms(d.get("contract_platforms", [])),
          "created": today_str()}
     clients.append(c)
     save(F_CLIENTS, clients)
     return jsonify({"ok": True, "client": c})
+
+@app.route("/api/clients/<cid>", methods=["PUT"])
+def update_client(cid):
+    clients = load(F_CLIENTS, [])
+    d = request.json or {}
+    updated = None
+    for client in clients:
+        if client["id"] != cid:
+            continue
+        if "contract_platforms" in d:
+            client["contract_platforms"] = normalize_contract_platforms(d.get("contract_platforms", []))
+        for key in ["name", "brand", "industry", "goal"]:
+            if key in d:
+                client[key] = d.get(key, "")
+        updated = client
+        break
+    if not updated:
+        return jsonify({"error": "client_not_found"}), 404
+    save(F_CLIENTS, clients)
+    return jsonify({"ok": True, "client": updated})
 
 @app.route("/api/clients/<cid>", methods=["DELETE"])
 def del_client(cid):
@@ -903,7 +1020,8 @@ def add_question_to_group(cid, gid):
 
 def save_raw_record(client_id, group_id, brand, question, round_num,
                     answer, search_keywords, refs, analysis,
-                    source_platform="doubao"):
+                    source_platform="doubao", task_id="", run_id="",
+                    task_report="", crawler_engine=""):
     """保存单次爬取的完整原始记录"""
     return record_store.save_raw_record(
         F_RAW_RECORDS,
@@ -922,7 +1040,69 @@ def save_raw_record(client_id, group_id, brand, question, round_num,
         today_str,
         now_str,
         source_platform=source_platform,
+        task_id=task_id,
+        run_id=run_id,
+        task_report=task_report,
+        crawler_engine=crawler_engine,
     )
+
+
+def auto_normalize_task_entities(client_id, date_str, task_id):
+    """Incrementally extract competitor entities for records created by one crawl task."""
+    settings = load(F_SETTINGS, {})
+    if not settings.get("api_key"):
+        return {"ok": True, "skipped": True, "reason": "missing_api_key", "changed": 0}
+    if not client_id or not date_str or not task_id:
+        return {"ok": False, "skipped": True, "reason": "missing_scope", "changed": 0}
+
+    from scripts import normalize_entities
+
+    records = load(F_RAW_RECORDS, [])
+    selected = normalize_entities.select_records(
+        records,
+        client_id=client_id,
+        date=date_str,
+        task_id=task_id,
+        include_existing=False,
+    )
+    if not selected:
+        return {"ok": True, "skipped": True, "reason": "no_missing_records", "changed": 0}
+
+    clients = load(F_CLIENTS, [])
+    competitor_category = normalize_entities.resolve_competitor_category("", client_id, clients)
+    own_brand = normalize_entities.resolve_own_brand(client_id, clients)
+    report_body = normalize_entities.build_extract_missing_report(
+        selected,
+        {**settings, "progress": False},
+        use_llm=True,
+        competitor_category=competitor_category,
+        own_brand=own_brand,
+    )
+    report = {
+        "dry_run": False,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "client_id": client_id,
+        "date": date_str,
+        "task_id": task_id,
+        "competitor_category": competitor_category,
+        "own_brand": own_brand,
+        "data_written": False,
+        **report_body,
+    }
+    apply_result = normalize_entities.apply_competitor_report_results(F_RAW_RECORDS, records, report)
+    report["data_written"] = True
+    report["apply_result"] = apply_result
+    report_dir = os.path.join(D, "reports")
+    report_path = normalize_entities.write_report(report_dir, client_id, report)
+    return {
+        "ok": True,
+        "skipped": False,
+        "changed": apply_result["changed"],
+        "backup_path": apply_result["backup_path"],
+        "report_path": report_path,
+        "selected_records": report_body.get("selected_records", 0),
+        "final_entities": len(report_body.get("final_competitor_summary") or []),
+    }
 
 @app.route("/api/raw_records", methods=["GET"])
 def get_raw_records():
@@ -933,8 +1113,10 @@ def get_raw_records():
     question = request.args.get("question", "")
     mentioned_only = request.args.get("mentioned_only", "")
     platform = request.args.get("platform", "")  # 按爬取平台过滤
+    task_id = request.args.get("task_id", "")
     records = load_client_records(client_id, group_id=group_id,
-                                  platform=platform if platform else None)
+                                  platform=platform if platform else None,
+                                  task_id=task_id if task_id else None)
     if date:
         records = [r for r in records if r.get("today") == date]
     if question:
@@ -951,8 +1133,10 @@ def platform_stats():
     question_filter = request.args.get("question", "")
     mentioned_only = request.args.get("mentioned_only", "")
     source_platform = request.args.get("platform", "")  # 按爬取平台过滤
+    task_id = request.args.get("task_id", "")
     records = load_client_records(client_id, group_id=group_id,
-                                  platform=source_platform if source_platform else None)
+                                  platform=source_platform if source_platform else None,
+                                  task_id=task_id if task_id else None)
 
     from collections import defaultdict
     date = request.args.get("date", "")  # 空或all表示全部
@@ -1028,9 +1212,11 @@ def deep_analyze():
     question = d.get("question", "")
     mentioned_only = d.get("mentioned_only", "")
     source_platform = d.get("platform", "")  # 按爬取平台过滤
+    task_id = d.get("task_id", "")
 
     records = load_client_records(client_id, group_id=group_id,
-                                  platform=source_platform if source_platform else None)
+                                  platform=source_platform if source_platform else None,
+                                  task_id=task_id if task_id else None)
     if date:
         records = [r for r in records if r.get("today") == date]
     if question:
@@ -1208,38 +1394,264 @@ def del_material(cid, filename):
         os.remove(fpath)
     return jsonify({"ok": True})
 
-def read_material_text(cid, max_chars=3000):
-    """读取客户资料文本内容，用于内容生产参考"""
+def extract_material_file_text(fpath, max_chars=4000):
+    ext = fpath.rsplit('.', 1)[-1].lower()
+    if ext in ('txt', 'md'):
+        with open(fpath, 'r', encoding='utf-8', errors='ignore') as fp:
+            return fp.read()[:max_chars]
+    if ext == 'docx':
+        try:
+            import zipfile
+            import xml.etree.ElementTree as ET
+            with zipfile.ZipFile(fpath) as zf:
+                xml = zf.read("word/document.xml")
+            root = ET.fromstring(xml)
+            texts = [node.text for node in root.iter() if node.text]
+            return "\n".join(texts)[:max_chars]
+        except Exception:
+            return ""
+    if ext == 'pdf':
+        try:
+            import pdfplumber
+            with pdfplumber.open(fpath) as pdf:
+                text = "\n".join(page.extract_text() or "" for page in pdf.pages[:8])
+            return text[:max_chars]
+        except Exception:
+            try:
+                from pypdf import PdfReader
+                reader = PdfReader(fpath)
+                text = "\n".join(page.extract_text() or "" for page in reader.pages[:8])
+                return text[:max_chars]
+            except Exception:
+                return ""
+    return ""
+
+def read_material_bundle(cid, max_chars=12000, per_file_chars=4000):
+    """读取当前客户上传目录中的全部资料，返回带文件名的合并文本。"""
     client_dir = os.path.join(UPLOAD_FOLDER, cid)
     if not os.path.exists(client_dir):
-        return ""
-    texts = []
-    for f in os.listdir(client_dir):
-        fpath = os.path.join(client_dir, f)
+        return {"text": "", "files": []}
+    sections = []
+    files = []
+    for filename in sorted(os.listdir(client_dir)):
+        fpath = os.path.join(client_dir, filename)
+        if not os.path.isfile(fpath) or not allowed_file(filename):
+            continue
         try:
-            ext = f.rsplit('.', 1)[-1].lower()
-            if ext in ('txt', 'md'):
-                with open(fpath, 'r', encoding='utf-8', errors='ignore') as fp:
-                    texts.append(fp.read()[:1000])
-            elif ext == 'pdf':
-                try:
-                    import subprocess
-                    result = subprocess.run(['python', '-c',
-                        f'import sys; sys.path.insert(0,""); '
-                        f'try:\n'
-                        f'    import pdfplumber\n'
-                        f'    with pdfplumber.open(r"{fpath}") as p:\n'
-                        f'        print("\n".join(page.extract_text() or "" for page in p.pages[:3]))\n'
-                        f'except: print("")'],
-                        capture_output=True, text=True, timeout=10)
-                    if result.stdout.strip():
-                        texts.append(result.stdout.strip()[:1000])
-                except:
-                    pass
-        except:
-            pass
-    combined = "\n---\n".join(texts)
-    return combined[:max_chars]
+            text = extract_material_file_text(fpath, per_file_chars).strip()
+        except Exception:
+            text = ""
+        files.append({
+            "name": filename,
+            "chars": len(text),
+            "has_text": bool(text),
+        })
+        if text:
+            sections.append(f"【资料：{filename}】\n{text}")
+        else:
+            sections.append(f"【资料：{filename}】\n（该文件暂未提取到可用正文，仅保留文件名作为上下文。）")
+    combined = "\n\n---\n\n".join(sections)
+    return {"text": combined[:max_chars], "files": files}
+
+def read_material_text(cid, max_chars=3000):
+    """读取客户资料文本内容，用于内容生产参考"""
+    return read_material_bundle(cid, max_chars=max_chars, per_file_chars=1000)["text"][:max_chars]
+
+def get_client(cid):
+    return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
+
+def _content_generation_store():
+    data = load(F_CONTENT_GENERATIONS, {})
+    return data if isinstance(data, dict) else {}
+
+def load_content_session(cid):
+    data = _content_generation_store()
+    session = data.get(cid) or {}
+    return {
+        "messages": session.get("messages", []) if isinstance(session.get("messages"), list) else [],
+        "articles": session.get("articles", []) if isinstance(session.get("articles"), list) else [],
+    }
+
+def save_content_session(cid, session):
+    data = _content_generation_store()
+    data[cid] = session
+    save(F_CONTENT_GENERATIONS, data)
+
+def extract_generated_title(content):
+    for line in (content or "").splitlines():
+        title = re.sub(r"^[#\s《》「」\"']+|[#\s《》「」\"']+$", "", line.strip())
+        if title:
+            return title[:80]
+    return "未命名文章"
+
+def normalize_sample_links(sample_links):
+    if isinstance(sample_links, str):
+        sample_links = re.split(r"[\n,，\s]+", sample_links)
+    if not isinstance(sample_links, list):
+        return []
+    cleaned = []
+    seen = set()
+    for item in sample_links:
+        url = str(item or "").strip()
+        if not url or url in seen:
+            continue
+        seen.add(url)
+        cleaned.append(url[:500])
+        if len(cleaned) >= 20:
+            break
+    return cleaned
+
+def normalize_selected_sample_articles(articles):
+    if not isinstance(articles, list):
+        return []
+    cleaned = []
+    seen = set()
+    for item in articles:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("url") or "").strip()
+        key = url or title
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append({
+            "title": title[:200],
+            "url": url[:500],
+            "platform": str(item.get("platform") or "").strip()[:80],
+            "count": item.get("count") or 0,
+        })
+        if len(cleaned) >= 20:
+            break
+    return cleaned
+
+def format_sample_article_context(sample_links, selected_articles):
+    sections = []
+    if sample_links:
+        sections.append("【人工提供的优质样例链接】\n" + "\n".join(f"- {url}" for url in sample_links))
+    if selected_articles:
+        lines = []
+        for idx, article in enumerate(selected_articles, 1):
+            title = article.get("title") or "未命名文章"
+            platform = article.get("platform") or "未知平台"
+            count = article.get("count") or 0
+            url = article.get("url") or ""
+            lines.append(f"{idx}. {title}｜{platform}｜引用 {count} 次｜{url}")
+        sections.append("【从当天高频引用 Top20 选中的样例文章】\n" + "\n".join(lines))
+    return "\n\n".join(sections) if sections else "暂无额外样例文章。"
+
+def build_content_generation_messages(client, material_bundle, history, opinion, sample_links=None, selected_articles=None):
+    brand = client.get("brand") or client.get("name") or ""
+    material_text = material_bundle.get("text") or "暂无上传资料。"
+    material_count = len(material_bundle.get("files") or [])
+    sample_links = sample_links or []
+    selected_articles = selected_articles or []
+    sample_context = format_sample_article_context(sample_links, selected_articles)
+    system_prompt = (
+        "你是资深品牌内容策划和长文撰稿人。请基于客户资料、运营意见和上下文历史生成可直接交给运营修改的中文文章。"
+        "要求事实谨慎，不虚构客户案例、价格、资质、门店地址或用户评价；如果资料不足，用稳妥表述。"
+    )
+    clean_history = []
+    for item in history[-20:]:
+        role = item.get("role")
+        content = item.get("content")
+        if role in {"user", "assistant"} and content:
+            clean_history.append({"role": role, "content": content})
+    current_prompt = f"""请根据以下信息生成新一版文章。
+
+【客户】
+客户名称：{client.get('name', '')}
+品牌名称：{brand}
+
+【客户资料】
+以下为该客户已上传的全部资料，本次生成必须全部纳入参考。当前共 {material_count} 份：
+{material_text}
+
+【优质样例文章】
+这些样例用于参考标题角度、文章结构、表达方式和信息组织，不代表客户事实：
+{sample_context}
+
+【运营意见】
+{opinion}
+
+【输出要求】
+- 直接输出文章正文，不要输出解释过程。
+- 标题放在第一行。
+- 结构清晰，适合后续人工润色和发布。
+- 可仿照样例文章的结构和表达，但客户事实必须以客户资料和运营意见为准。
+- 如果运营意见是在要求修改上一版，请结合历史文章进行改写。"""
+    return [{"role": "system", "content": system_prompt}] + clean_history + [{"role": "user", "content": current_prompt}]
+
+@app.route("/api/content/generations", methods=["GET"])
+def list_content_generations():
+    cid = request.args.get("client_id", "")
+    if not cid:
+        return jsonify({"error": "缺少client_id"}), 400
+    session = load_content_session(cid)
+    articles = sorted(
+        session["articles"],
+        key=lambda x: (int(x.get("sequence") or 0), x.get("created_at", "")),
+        reverse=True,
+    )
+    return jsonify({"ok": True, "articles": articles})
+
+@app.route("/api/content/generate", methods=["POST"])
+def generate_content_article():
+    d = request.json or {}
+    cid = d.get("client_id", "")
+    opinion = (d.get("opinion") or "").strip()
+    if not cid:
+        return jsonify({"error": "缺少client_id"}), 400
+    if not opinion:
+        return jsonify({"error": "请先填写运营意见"}), 400
+    client = get_client(cid)
+    if not client:
+        return jsonify({"error": "客户不存在"}), 404
+
+    session = load_content_session(cid)
+    material_bundle = read_material_bundle(cid)
+    sample_links = normalize_sample_links(d.get("sample_links", []))
+    selected_articles = normalize_selected_sample_articles(d.get("selected_articles", []))
+    messages = build_content_generation_messages(
+        client,
+        material_bundle,
+        session["messages"],
+        opinion,
+        sample_links=sample_links,
+        selected_articles=selected_articles,
+    )
+    try:
+        content = ai_deepseek_pro(messages, 6000)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+    created_at = now_str()
+    sequence = max([int(a.get("sequence") or 0) for a in session["articles"]] or [0]) + 1
+    article = {
+        "id": uid(),
+        "client_id": cid,
+        "sequence": sequence,
+        "title": extract_generated_title(content),
+        "content": content,
+        "operator_opinion": opinion,
+        "model": "deepseek-pro",
+        "material_count": len(material_bundle.get("files") or []),
+        "sample_link_count": len(sample_links),
+        "selected_article_count": len(selected_articles),
+        "sample_links": sample_links,
+        "selected_articles": selected_articles,
+        "created_at": created_at,
+    }
+    session["messages"].append({"role": "user", "content": opinion, "created_at": created_at})
+    session["messages"].append({"role": "assistant", "content": content, "created_at": created_at, "article_id": article["id"]})
+    session["articles"].append(article)
+    save_content_session(cid, session)
+    articles = sorted(
+        session["articles"],
+        key=lambda x: (int(x.get("sequence") or 0), x.get("created_at", "")),
+        reverse=True,
+    )
+    return jsonify({"ok": True, "article": article, "articles": articles})
 
 # ══════════════════════════════════════════════════════
 # 智能主题生成模块
@@ -1357,9 +1769,11 @@ def get_daily_records():
     date = request.args.get("date", today_str())
     source_platform = request.args.get("platform", "")
     group_id = request.args.get("group_id", "")
+    task_id = request.args.get("task_id", "")
     result = load_client_records(client_id, date=date,
                                   platform=source_platform if source_platform else None,
-                                  group_id=group_id if group_id else None)
+                                  group_id=group_id if group_id else None,
+                                  task_id=task_id if task_id else None)
     result.sort(key=lambda x: x.get("crawl_time", ""), reverse=True)
     return jsonify(result)
 
@@ -1395,38 +1809,49 @@ def daily_ref_stats():
     date = request.args.get("date", today_str())
     source_platform = request.args.get("platform", "")
     group_id = request.args.get("group_id", "")
+    task_id = request.args.get("task_id", "")
     try:
         records = load_client_records(client_id, date=date,
                                       platform=source_platform if source_platform else None,
-                                      group_id=group_id if group_id else None)
+                                      group_id=group_id if group_id else None,
+                                      task_id=task_id if task_id else None)
 
         from collections import defaultdict
+        from services.ref_articles import canonical_article_key
+        from services.ref_platforms import normalize_ref_platform
         platform_cnt = defaultdict(int)
         article_cnt = defaultdict(int)
         article_info = {}
+        total_refs = 0
 
         for rec in records:
-            seen_platforms = set()
+            ai_platform = rec.get("source_platform", "doubao") or "doubao"
             for ref in rec.get("refs", []):
-                p = ref.get("platform", "未知")
                 url = ref.get("url", "")
+                p = normalize_ref_platform(ref.get("platform", "未知"), url)
                 title = ref.get("title", "")
                 pos = ref.get("position", 0)
-                if p not in seen_platforms:
-                    platform_cnt[p] += 1
-                    seen_platforms.add(p)
-                key = url or title
+                platform_cnt[p] += 1
+                total_refs += 1
+                key = canonical_article_key(title, url)
                 if key:
                     article_cnt[key] += 1
                     if key not in article_info:
-                        article_info[key] = {"title": title, "url": url, "platform": p, "positions": []}
+                        article_info[key] = {
+                            "title": title,
+                            "url": url,
+                            "platform": p,
+                            "positions": [],
+                            "ai_platforms": set(),
+                        }
                     article_info[key]["positions"].append(pos)
+                    article_info[key]["ai_platforms"].add(ai_platform)
 
         total_records = len(records)
         platform_weights = sorted([
             {
                 "platform": p, "count": c,
-                "pct": round(c / total_records * 100, 1) if total_records else 0,
+                "pct": round(c / total_refs * 100, 1) if total_refs else 0,
             }
             for p, c in platform_cnt.items()
         ], key=lambda x: x["count"], reverse=True)
@@ -1435,13 +1860,27 @@ def daily_ref_stats():
             {
                 "title": v["title"], "url": v["url"], "platform": v["platform"],
                 "count": article_cnt[k],
-                "avg_position": round(sum(v["positions"]) / len(v["positions"]), 1) if v["positions"] else 0
+                "avg_position": round(sum(v["positions"]) / len(v["positions"]), 1) if v["positions"] else 0,
+                "ai_platforms": sorted(v["ai_platforms"]),
             }
             for k, v in article_info.items()
         ], key=lambda x: x["count"], reverse=True)[:20]
+        body_hit_report = load_competitor_article_body_hit_report(
+            client_id,
+            date,
+            task_id=task_id,
+            group_id=group_id,
+            platform=source_platform,
+        )
+        top_articles = annotate_top_articles_with_competitor_matches(
+            top_articles,
+            records,
+            body_hit_report=body_hit_report,
+        )
 
         return jsonify({
             "total_records": total_records,
+            "total_refs": total_refs,
             "date": date,
             "platform_weights": platform_weights,
             "top_articles": top_articles
@@ -1450,9 +1889,87 @@ def daily_ref_stats():
         print(f"[daily_ref_stats 错误] {e}")
         return jsonify({"total_records": 0, "date": date, "platform_weights": [], "top_articles": []})
 
+@app.route("/api/daily/insights", methods=["GET"])
+def daily_insights():
+    """当日或指定批次的证据层聚合，用于平台分类、竞品/门店和高频引用展示。"""
+    client_id = request.args.get("client_id", "")
+    date = request.args.get("date", today_str())
+    source_platform = request.args.get("platform", "")
+    group_id = request.args.get("group_id", "")
+    task_id = request.args.get("task_id", "")
+    records = load_client_records(
+        client_id,
+        date=date,
+        platform=source_platform if source_platform else None,
+        group_id=group_id if group_id else None,
+        task_id=task_id if task_id else None,
+    )
+    from services.record_insights import build_record_insights, merge_body_hit_results
+    insights = build_record_insights(records)
+    body_hit_report = load_competitor_article_body_hit_report(
+        client_id,
+        date,
+        task_id=task_id,
+        group_id=group_id,
+        platform=source_platform,
+    )
+    if body_hit_report:
+        body_hits = body_hit_report.get("body_hits", [])
+        insights["competitor_articles"] = merge_body_hit_results(
+            insights.get("competitor_articles", []),
+            body_hits,
+            insights.get("selected_competitors", []),
+        )
+        insights["body_hit_report"] = {
+            "generated_at": body_hit_report.get("generated_at", ""),
+            "checked_article_count": body_hit_report.get("checked_article_count", len(body_hits)),
+            "matched_article_count": body_hit_report.get(
+                "matched_article_count",
+                sum(1 for item in body_hits if item.get("status") == "matched"),
+            ),
+        }
+    else:
+        insights["body_hit_report"] = None
+    return jsonify({
+        "ok": True,
+        "date": date,
+        "client_id": client_id,
+        "group_id": group_id,
+        "task_id": task_id,
+        "insights": insights,
+    })
+
 # ══════════════════════════════════════════════════════
 # 深度分析增强模块（按平台分类）
 # ══════════════════════════════════════════════════════
+
+@app.route("/api/daily/entities/delete", methods=["POST"])
+def delete_daily_entity():
+    """Remove one AI-recognized entity from the current daily insight scope."""
+    d = request.json or {}
+    client_id = (d.get("client_id") or "").strip()
+    entity_name = (d.get("name") or "").strip()
+    if not client_id:
+        return jsonify({"ok": False, "error": "client_id required"}), 400
+    if not entity_name:
+        return jsonify({"ok": False, "error": "name required"}), 400
+
+    result = record_store.delete_entity_mentions(
+        F_RAW_RECORDS,
+        client_id=client_id,
+        date=d.get("date") or today_str(),
+        entity_name=entity_name,
+        platform=normalize_platform_filter(d.get("platform", "")),
+        group_id=d.get("group_id") or None,
+        task_id=d.get("task_id") or None,
+    )
+    return jsonify({
+        "ok": True,
+        "name": entity_name,
+        "removed": result["removed"],
+        "records_changed": result["records_changed"],
+    })
+
 
 @app.route("/api/daily/deep_analyze", methods=["POST"])
 def daily_deep_analyze():
@@ -1464,10 +1981,12 @@ def daily_deep_analyze():
     source_platform = d.get("platform", "")  # 按爬取来源平台过滤
     group_id = d.get("group_id", "")          # 按问题组过滤（新增）
     group_name = d.get("group_name", "")      # 问题组名称（用于报告标题）
+    task_id = d.get("task_id", "")
 
     records = load_client_records(client_id, date=date,
                                   platform=source_platform if source_platform else None,
-                                  group_id=group_id if group_id else None)
+                                  group_id=group_id if group_id else None,
+                                  task_id=task_id if task_id else None)
     if not records:
         scope = f"「{group_name}」问题组" if group_name else "当日"
         return jsonify({"error": f"{scope}暂无数据，请先完成爬取"}), 400
@@ -1674,8 +2193,9 @@ def platform_detail():
     client_id = request.args.get("client_id", "")
     date = request.args.get("date", today_str())
     platform = request.args.get("platform", "")
+    task_id = request.args.get("task_id", "")
 
-    records = load_client_records(client_id, date=date)
+    records = load_client_records(client_id, date=date, task_id=task_id if task_id else None)
 
     articles = {}
     questions_with_platform = []
@@ -2040,7 +2560,17 @@ def list_platforms_api():
         })
     return jsonify(result)
 
-def basic_brand_analysis_without_api(brand, question, answer, refs):
+def basic_brand_analysis_without_api(
+    brand,
+    question,
+    answer,
+    refs,
+    *,
+    analysis_status="pending_api",
+    analysis_mode="basic_no_api_key",
+    summary=None,
+    suggestion=None,
+):
     """
     Fallback analysis used when no API key is configured.
     It keeps crawler verification possible and marks records for later AI analysis.
@@ -2054,13 +2584,42 @@ def basic_brand_analysis_without_api(brand, question, answer, refs):
         "brand_sentiment": "neutral",
         "main_ref": main_ref,
         "source_count": len(refs),
-        "summary": "未配置 API Key，已保存原始爬取结果，暂未进行 AI 深度分析。",
-        "suggestion": "配置 API Key 后可重新生成深度分析；当前记录可用于验证平台登录、回答抓取和引用源提取。",
-        "analysis_status": "pending_api",
-        "analysis_mode": "basic_no_api_key",
+        "summary": summary or "未配置 API Key，已保存原始爬取结果，暂未进行 AI 深度分析。",
+        "suggestion": suggestion or "配置 API Key 后可重新生成深度分析；当前记录可用于验证平台登录、回答抓取和引用源提取。",
+        "analysis_status": analysis_status,
+        "analysis_mode": analysis_mode,
     }
     result["geo_score"] = calc_geo_score(brand, question, clean_answer, refs, result)
     return result
+
+
+def analyze_brand_intel_with_retry(brand, question, answer, refs, settings, max_attempts=3):
+    failures = []
+    attempts = max(1, int(max_attempts or 1))
+    for attempt in range(1, attempts + 1):
+        try:
+            return analyze_brand_intel(brand, question, answer, refs, settings), None
+        except Exception as exc:
+            failures.append({"attempt": attempt, "error": str(exc)})
+
+    fallback = basic_brand_analysis_without_api(
+        brand,
+        question,
+        answer,
+        refs,
+        analysis_status="fallback_basic",
+        analysis_mode="api_failed_basic",
+        summary="AI 深度分析连续失败，已使用基础规则分析并保留原始爬取结果。",
+        suggestion="建议稍后重新分析该题；当前记录已可用于回答、引用源和品牌提及的基础统计。",
+    )
+    fallback["analysis_error"] = failures[-1]["error"] if failures else ""
+    fallback["analysis_attempts"] = attempts
+    return fallback, {
+        "question": question,
+        "attempts": attempts,
+        "errors": failures,
+        "fallback": "basic_brand_analysis",
+    }
 
 @app.route("/api/platform/crawl", methods=["POST"])
 @app.route("/api/doubao/crawl", methods=["POST"])  # 兼容旧接口
@@ -2114,6 +2673,7 @@ def platform_crawl_impl():
         return jsonify({"error": "该问题组暂无问题，请先在问题组中手动添加问题"}), 400
 
     task_id = uid()
+    task_report_path = os.path.join(get_crawl_task_dir(), f"{today_str()}_{task_id}.json")
     task_report = {
         "task_id": task_id,
         "status": "running",
@@ -2366,6 +2926,7 @@ def platform_crawl_impl():
 
     saved = []
     errors = []
+    analysis_fallbacks = []
 
     for question, rounds in question_groups.items():
         try:
@@ -2390,7 +2951,11 @@ def platform_crawl_impl():
 
             # 有 API Key 时做 AI 综合分析；没有时保留原始爬取结果并标记待分析。
             if has_api_key:
-                analysis = analyze_brand_intel(brand, question, combined_answer, all_refs, settings)
+                analysis, fallback_info = analyze_brand_intel_with_retry(
+                    brand, question, combined_answer, all_refs, settings
+                )
+                if fallback_info:
+                    analysis_fallbacks.append(fallback_info)
             else:
                 analysis = basic_brand_analysis_without_api(brand, question, combined_answer, all_refs)
             analysis = calibrate_analysis_brand_mention(
@@ -2408,7 +2973,12 @@ def platform_crawl_impl():
                 "analysis": analysis,
                 "date": now_str(), "today": today_str(),
                 "auto_crawled": True,
-                "repeat_count": len(rounds)
+                "repeat_count": len(rounds),
+                "task_id": task_id,
+                "run_id": session_id,
+                "task_report": task_report_path,
+                "source_platform": source_platform,
+                "crawler_engine": task_report["crawler_engine"],
             }
             records = load(F_RECORDS, [])
             records.append(record)
@@ -2434,7 +3004,11 @@ def platform_crawl_impl():
                     search_keywords=[],
                     refs=rnd_refs,
                     analysis=rnd_analysis,
-                    source_platform=source_platform
+                    source_platform=source_platform,
+                    task_id=task_id,
+                    run_id=session_id,
+                    task_report=task_report_path,
+                    crawler_engine=task_report["crawler_engine"],
                 )
 
             # 同时保存到每日原始数据文件
@@ -2447,7 +3021,9 @@ def platform_crawl_impl():
                 "sample_count": len(rounds),
                 "ref_count": len(all_refs),
                 "main_platform": analysis.get("main_ref", {}).get("platform", ""),
-                "suggestion": analysis.get("suggestion", "")
+                "suggestion": analysis.get("suggestion", ""),
+                "analysis_status": analysis.get("analysis_status", "ok"),
+                "analysis_mode": analysis.get("analysis_mode", "ai"),
             }
             saved.append(result_item)
             # 推送进度事件
@@ -2488,6 +3064,11 @@ def platform_crawl_impl():
         except:
             pass
 
+    try:
+        entity_normalize = auto_normalize_task_entities(client_id, today_str(), task_id)
+    except Exception as e:
+        entity_normalize = {"ok": False, "error": str(e), "changed": 0}
+
     # 推送完成事件
     crawl_sessions[session_id]["events"].append({"status": "finished"})
 
@@ -2503,7 +3084,9 @@ def platform_crawl_impl():
         "success": saved,
         "failures": crawl_failures,
         "analysis_errors": errors,
+        "analysis_fallbacks": analysis_fallbacks,
         "batch_summary": batch_summary,
+        "entity_normalize": entity_normalize,
     })
     task_path = save_crawl_task_report(task_report)
 
@@ -2523,6 +3106,8 @@ def platform_crawl_impl():
         "errors": len(error_details),
         "results": saved,
         "batch_summary": batch_summary,
+        "entity_normalize": entity_normalize,
+        "analysis_fallbacks": analysis_fallbacks,
         "error_details": error_details
     })
 

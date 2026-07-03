@@ -47,9 +47,12 @@ def save_daily_raw(settings_path, default_data_dir, client_id, brand, question, 
     return day_file
 
 
-def load_client_records(raw_records_path, client_id, date=None, group_id=None, platform=None):
+def load_client_records(raw_records_path, client_id, date=None, group_id=None,
+                        platform=None, task_id=None):
     if platform == "all":
         platform = None
+    if task_id == "all":
+        task_id = None
     if not client_id:
         return []
     records = load_json(raw_records_path, [])
@@ -60,12 +63,15 @@ def load_client_records(raw_records_path, client_id, date=None, group_id=None, p
         records = [r for r in records if r.get("group_id") == group_id]
     if platform:
         records = [r for r in records if r.get("source_platform", "doubao") == platform]
+    if task_id:
+        records = [r for r in records if r.get("task_id") == task_id]
     return records
 
 
 def save_raw_record(raw_records_path, settings_path, default_data_dir, client_id, group_id,
                     brand, question, round_num, answer, search_keywords, refs, analysis,
-                    uid_fn, today_fn, now_fn, source_platform="doubao"):
+                    uid_fn, today_fn, now_fn, source_platform="doubao",
+                    task_id="", run_id="", task_report="", crawler_engine=""):
     records = load_json(raw_records_path, [])
     record_id = uid_fn()
     brand_mentioned = bool(analysis.get("brand_mentioned"))
@@ -96,8 +102,17 @@ def save_raw_record(raw_records_path, settings_path, default_data_dir, client_id
         "geo_score": analysis.get("geo_score", 0),
         "main_platform": analysis.get("main_ref", {}).get("platform", ""),
     }
+    if task_id:
+        record["task_id"] = task_id
+    if run_id:
+        record["run_id"] = run_id
+    if task_report:
+        record["task_report"] = task_report
+    if crawler_engine:
+        record["crawler_engine"] = crawler_engine
     records.append(record)
-    save_json(raw_records_path, records)
+    if save_json(raw_records_path, records) is False:
+        raise RuntimeError(f"failed to save raw record store: {raw_records_path}")
     save_daily_raw(
         settings_path,
         default_data_dir,
@@ -129,6 +144,59 @@ def delete_raw_records(raw_records_path, record_ids):
     records = [r for r in records if r.get("id") not in ids]
     save_json(raw_records_path, records)
     return before - len(records)
+
+
+def delete_entity_mentions(raw_records_path, client_id, date, entity_name,
+                           platform=None, group_id=None, task_id=None):
+    if platform == "all":
+        platform = None
+    if task_id == "all":
+        task_id = None
+    entity_name = (entity_name or "").strip()
+    if not client_id or not entity_name:
+        return {"removed": 0, "records_changed": 0}
+
+    records = load_json(raw_records_path, [])
+    removed = 0
+    records_changed = 0
+
+    def in_scope(r):
+        if r.get("client_id") != client_id:
+            return False
+        if date and r.get("today") != date:
+            return False
+        if group_id and r.get("group_id") != group_id:
+            return False
+        if platform and r.get("source_platform", "doubao") != platform:
+            return False
+        if task_id and r.get("task_id") != task_id:
+            return False
+        return True
+
+    for record in records:
+        if not in_scope(record):
+            continue
+        entities = record.get("mentioned_entities")
+        if not isinstance(entities, list):
+            continue
+        kept = []
+        removed_here = 0
+        for entity in entities:
+            name = ""
+            if isinstance(entity, dict):
+                name = str(entity.get("name", "")).strip()
+            if name == entity_name:
+                removed += 1
+                removed_here += 1
+            else:
+                kept.append(entity)
+        if removed_here:
+            record["mentioned_entities"] = kept
+            records_changed += 1
+
+    if removed:
+        save_json(raw_records_path, records)
+    return {"removed": removed, "records_changed": records_changed}
 
 
 def clear_client_day_records(raw_records_path, client_id, date, source_platform=""):
