@@ -44,6 +44,14 @@ http://localhost:5000
 .\health_check.bat
 ```
 
+首次启用登录前，后台创建管理员账号：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\create_user.py --username admin --role admin
+```
+
+命令会提示输入密码，并把哈希后的用户记录写入 `data/users.json`。
+
 会影响当前服务的命令：
 
 ```powershell

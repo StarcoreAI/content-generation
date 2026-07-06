@@ -5,15 +5,17 @@ GEO Agent v2 — 内容投放优化工作台
 import json, os, re, asyncio, threading
 from datetime import datetime, date
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for
 from openai import OpenAI
 from services import crawl_tasks as crawl_task_store
 from services import records as record_store
+from services.auth import authenticate_user, find_user
 from services.content_generations import ContentGenerationStore
 from services.materials import MaterialService
 from services.storage import load_json, save_json
 
 app = Flask(__name__)
+app.secret_key = os.environ.get("GEO_SECRET_KEY", "dev-secret-key-change-before-deploy")
 APP_VERSION = "2.3"
 NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen"}
 CLIENT_CONTRACT_PLATFORM_ORDER = ["doubao", "deepseek", "yuanbao", "qwen"]
@@ -31,6 +33,99 @@ F_GROUPS    = f"{D}/probe_groups.json"
 F_RAW_RECORDS = f"{D}/raw_records.json"  # 细化版爬取记录
 F_COMPETITOR_ARTICLE_BODY_HITS = f"{D}/competitor_article_body_hits.json"
 F_CONTENT_GENERATIONS = f"{D}/content_generations.json"
+F_USERS = f"{D}/users.json"
+
+ANONYMOUS_ENDPOINTS = {
+    "static",
+    "login_page",
+    "auth_login",
+    "auth_logout",
+    "auth_me",
+    "health_check",
+}
+
+
+def public_user(user):
+    if not user:
+        return None
+    return {
+        "username": user.get("username", ""),
+        "role": user.get("role", "operator"),
+        "disabled": bool(user.get("disabled", False)),
+    }
+
+
+def current_user():
+    username = session.get("username")
+    if not username:
+        return None
+    user = find_user(F_USERS, username)
+    if not user or user.get("disabled"):
+        session.pop("username", None)
+        return None
+    return user
+
+
+def is_admin(user=None):
+    user = user or current_user()
+    return bool(user and user.get("role") == "admin")
+
+
+def auth_disabled():
+    return bool(app.config.get("AUTH_DISABLED"))
+
+
+def can_access_client(client):
+    if auth_disabled():
+        return bool(client)
+    user = current_user()
+    if not user or not client:
+        return False
+    if is_admin(user):
+        return True
+    return client.get("owner_username") == user.get("username")
+
+
+def visible_clients():
+    clients = load(F_CLIENTS, [])
+    if auth_disabled() or is_admin():
+        return clients
+    return [client for client in clients if can_access_client(client)]
+
+
+def require_client_access(client_id):
+    client = next((c for c in load(F_CLIENTS, []) if c.get("id") == client_id), None)
+    if auth_disabled():
+        return client or {"id": client_id}
+    return client if can_access_client(client) else None
+
+
+def request_client_id():
+    view_args = request.view_args or {}
+    if view_args.get("cid"):
+        return view_args.get("cid")
+    if request.args.get("client_id"):
+        return request.args.get("client_id")
+    data = request.get_json(silent=True) if request.is_json else None
+    if isinstance(data, dict) and data.get("client_id"):
+        return data.get("client_id")
+    return ""
+
+
+@app.before_request
+def require_login():
+    if app.config.get("AUTH_DISABLED"):
+        return None
+    if request.endpoint in ANONYMOUS_ENDPOINTS:
+        return None
+    if current_user():
+        client_id = request_client_id()
+        if client_id and not require_client_access(client_id):
+            return jsonify({"error": "client_not_found"}), 404
+        return None
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "auth_required", "message": "请先登录"}), 401
+    return redirect(url_for("login_page"))
 
 def get_raw_data_dir():
     """获取原始数据存储目录（可由用户自定义）"""
@@ -335,8 +430,61 @@ def ai_json(prompt, max_tokens=1500):
 # ══════════════════════════════════════════════════════
 # 路由：页面
 # ══════════════════════════════════════════════════════
+@app.route("/login")
+def login_page():
+    return """<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>GEO Agent 登录</title></head>
+<body>
+  <h1>GEO Agent</h1>
+  <form id="loginForm">
+    <input name="username" placeholder="用户名" autocomplete="username">
+    <input name="password" type="password" placeholder="密码" autocomplete="current-password">
+    <button type="submit">登录</button>
+  </form>
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: form.get('username'),
+          password: form.get('password')
+        })
+      });
+      if (response.ok) location.href = '/';
+      else alert('用户名或密码错误');
+    });
+  </script>
+</body>
+</html>"""
+
+
 @app.route("/")
 def index(): return render_template("index.html")
+
+@app.route("/api/auth/login", methods=["POST"])
+def auth_login():
+    data = request.json or {}
+    user = authenticate_user(F_USERS, data.get("username", ""), data.get("password", ""))
+    if not user:
+        return jsonify({"error": "invalid_credentials", "message": "用户名或密码错误"}), 401
+    session["username"] = user["username"]
+    return jsonify({"ok": True, "user": public_user(user)})
+
+
+@app.route("/api/auth/logout", methods=["POST"])
+def auth_logout():
+    session.pop("username", None)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/auth/me", methods=["GET"])
+def auth_me():
+    return jsonify({"ok": True, "user": public_user(current_user())})
+
 
 @app.route("/api/health", methods=["GET"])
 def health_check():
@@ -385,15 +533,20 @@ def health_check():
 # 模块一：客户管理
 # ══════════════════════════════════════════════════════
 @app.route("/api/clients", methods=["GET"])
-def get_clients(): return jsonify(load(F_CLIENTS, []))
+def get_clients(): return jsonify(visible_clients())
 
 @app.route("/api/clients", methods=["POST"])
 def add_client():
     clients = load(F_CLIENTS, [])
     d = request.json
+    user = current_user() or {}
+    owner_username = user.get("username", "")
+    if is_admin(user) and d.get("owner_username"):
+        owner_username = str(d.get("owner_username")).strip()
     c = {"id": uid(), "name": d["name"], "brand": d["brand"],
          "industry": d.get("industry",""), "goal": d.get("goal",""),
          "contract_platforms": normalize_contract_platforms(d.get("contract_platforms", [])),
+         "owner_username": owner_username,
          "created": today_str()}
     clients.append(c)
     save(F_CLIENTS, clients)
@@ -407,6 +560,8 @@ def update_client(cid):
     for client in clients:
         if client["id"] != cid:
             continue
+        if not can_access_client(client):
+            return jsonify({"error": "client_not_found"}), 404
         if "contract_platforms" in d:
             client["contract_platforms"] = normalize_contract_platforms(d.get("contract_platforms", []))
         for key in ["name", "brand", "industry", "goal"]:
@@ -421,6 +576,8 @@ def update_client(cid):
 
 @app.route("/api/clients/<cid>", methods=["DELETE"])
 def del_client(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     clients = [c for c in load(F_CLIENTS, []) if c["id"] != cid]
     save(F_CLIENTS, clients)
 
@@ -864,6 +1021,8 @@ def list_local_materials():
 @app.route("/api/materials/<cid>", methods=["GET"])
 def get_materials(cid):
     """获取客户已上传的资料列表"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     service = material_service()
     indexed = service.list_client_materials(cid)
     if indexed:
@@ -891,6 +1050,8 @@ def get_materials(cid):
 @app.route("/api/materials/<cid>/upload", methods=["POST"])
 def upload_material(cid):
     """上传客户资料文件"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     files = request.files.getlist('file')
     if not files:
         return jsonify({"error": "没有文件"}), 400
@@ -919,6 +1080,8 @@ def upload_material(cid):
 @app.route("/api/materials/<cid>/import-local", methods=["POST"])
 def import_local_materials(cid):
     """从项目 pdf/ 文件夹导入资料到当前客户。"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     data = request.get_json(silent=True) or {}
     filenames = data.get("filenames")
     if isinstance(filenames, str):
@@ -940,6 +1103,8 @@ def import_local_materials(cid):
 @app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
 def parse_material(cid, material_id):
     """解析资料并生成清洗文本与事实卡。"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     try:
         material = material_service().parse_material(cid, material_id)
     except KeyError:
@@ -949,6 +1114,8 @@ def parse_material(cid, material_id):
 @app.route("/api/materials/<cid>/<material_id>/confirm", methods=["POST"])
 def confirm_material(cid, material_id):
     """确认或取消确认资料参与内容生成。"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     data = request.get_json(silent=True) or {}
     confirmed = bool(data.get("confirmed", True))
     try:
@@ -960,6 +1127,8 @@ def confirm_material(cid, material_id):
 @app.route("/api/materials/<cid>/<filename>", methods=["DELETE"])
 def del_material(cid, filename):
     """删除资料文件"""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     service = material_service()
     if not service.delete_material(cid, filename):
         fpath = os.path.join(UPLOAD_FOLDER, cid, filename)
@@ -1200,6 +1369,8 @@ def list_content_generations():
     cid = request.args.get("client_id", "")
     if not cid:
         return jsonify({"error": "缺少client_id"}), 400
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
     session = load_content_session(cid)
     articles = sorted(
         session["articles"],
@@ -1217,7 +1388,7 @@ def generate_content_article():
         return jsonify({"error": "缺少client_id"}), 400
     if not opinion:
         return jsonify({"error": "请先填写运营意见"}), 400
-    client = get_client(cid)
+    client = require_client_access(cid)
     if not client:
         return jsonify({"error": "客户不存在"}), 404
 
@@ -1256,6 +1427,7 @@ def generate_content_article():
         "selected_articles": selected_articles,
         "article_type": article_type,
         "created_at": created_at,
+        "created_by": (current_user() or {}).get("username", ""),
     }
     user_message = {"role": "user", "content": opinion, "created_at": created_at}
     assistant_message = {"role": "assistant", "content": content, "created_at": created_at, "article_id": article["id"]}

@@ -15,6 +15,7 @@ def isolated_material_app():
         "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
+        "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
     }
     with tempfile.TemporaryDirectory() as tmp:
         geo_app.D = tmp
@@ -22,11 +23,18 @@ def isolated_material_app():
         geo_app.LOCAL_PDF_FOLDER = os.path.join(tmp, "pdf")
         geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
+        geo_app.app.config["AUTH_DISABLED"] = True
         os.makedirs(geo_app.LOCAL_PDF_FOLDER, exist_ok=True)
         try:
             yield tmp
         finally:
+            if original["AUTH_DISABLED"] is None:
+                geo_app.app.config.pop("AUTH_DISABLED", None)
+            else:
+                geo_app.app.config["AUTH_DISABLED"] = original["AUTH_DISABLED"]
             for key, value in original.items():
+                if key == "AUTH_DISABLED":
+                    continue
                 if value is None and hasattr(geo_app, key):
                     delattr(geo_app, key)
                 else:

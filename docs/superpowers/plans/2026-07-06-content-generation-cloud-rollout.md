@@ -97,14 +97,14 @@ Expected: only the new plan and the handoff pointer are shown.
 - Produces: every non-health API and main page requires login.
 - Produces: generated content records include `created_by` when a user is logged in.
 
-- [ ] Write a failing test that `GET /` redirects or rejects when unauthenticated.
-- [ ] Write a failing test that `GET /api/health` still works without login.
-- [ ] Write a failing test that `POST /api/content/generate` rejects unauthenticated requests.
-- [ ] Implement a simple user store under `data/users.json` with password hashes, not plaintext passwords.
-- [ ] Add login, logout, and current-user routes.
-- [ ] Protect all app routes except health, login, static assets, and explicitly whitelisted checks.
-- [ ] Add `created_by` to content-generation records.
-- [ ] Add an admin-only initialization path or documented CLI/bootstrap step for the first users.
+- [x] Write a failing test that `GET /` redirects or rejects when unauthenticated.
+- [x] Write a failing test that `GET /api/health` still works without login.
+- [x] Write a failing test that `POST /api/content/generate` rejects unauthenticated requests.
+- [x] Implement a simple user store under `data/users.json` with password hashes, not plaintext passwords.
+- [x] Add login, logout, and current-user routes.
+- [x] Protect all app routes except health, login, static assets, and explicitly whitelisted checks.
+- [x] Add `created_by` to content-generation records.
+- [x] Add an admin-only initialization path or documented CLI/bootstrap step for the first users.
 
 Implementation note for the next agent:
 

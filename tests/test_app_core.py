@@ -27,6 +27,7 @@ def isolated_app_data():
         "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
+        "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
         "BASE_CRAWLER_DATA_DIR": base_crawler.DATA_DIR,
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -50,14 +51,21 @@ def isolated_app_data():
             geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         if hasattr(geo_app, "MATERIAL_CACHE_FOLDER"):
             geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
+        geo_app.app.config["AUTH_DISABLED"] = True
         base_crawler.DATA_DIR = tmp
         try:
             yield tmp
         finally:
+            if original["AUTH_DISABLED"] is None:
+                geo_app.app.config.pop("AUTH_DISABLED", None)
+            else:
+                geo_app.app.config["AUTH_DISABLED"] = original["AUTH_DISABLED"]
             for key, value in original.items():
-                if key == "BASE_CRAWLER_DATA_DIR":
-                    base_crawler.DATA_DIR = value
-                elif value is None and hasattr(geo_app, key):
+                if key in {"BASE_CRAWLER_DATA_DIR", "AUTH_DISABLED"}:
+                    if key == "BASE_CRAWLER_DATA_DIR":
+                        base_crawler.DATA_DIR = value
+                    continue
+                if value is None and hasattr(geo_app, key):
                     delattr(geo_app, key)
                 else:
                     setattr(geo_app, key, value)
@@ -643,7 +651,15 @@ class CoreFunctionTests(unittest.TestCase):
 class FlaskApiTests(unittest.TestCase):
     def setUp(self):
         geo_app.app.config["TESTING"] = True
+        self._auth_disabled = geo_app.app.config.get("AUTH_DISABLED")
+        geo_app.app.config["AUTH_DISABLED"] = True
         self.client = geo_app.app.test_client()
+
+    def tearDown(self):
+        if self._auth_disabled is None:
+            geo_app.app.config.pop("AUTH_DISABLED", None)
+        else:
+            geo_app.app.config["AUTH_DISABLED"] = self._auth_disabled
 
     def test_health_does_not_require_api_key(self):
         with isolated_app_data():
