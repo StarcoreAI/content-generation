@@ -1,3 +1,4 @@
+import re
 from collections import defaultdict
 
 from services.ref_articles import canonical_article_key
@@ -20,7 +21,37 @@ def _contains_entity(text, entity_name):
     return str(entity_name or "").strip().lower() in str(text or "").lower()
 
 
-def _pick_selected_competitors(mentioned_entities):
+def _normalize_name(value):
+    return re.sub(r"\s+", "", str(value or "").strip()).lower()
+
+
+def _own_brand_names(records, own_brand="", own_client_name=""):
+    names = []
+    for value in [own_brand, own_client_name, *[rec.get("brand", "") for rec in records]]:
+        name = _normalize_name(value)
+        if len(name) >= 2 and name not in names:
+            names.append(name)
+    return names
+
+
+def _is_own_brand_entity(name, own_brand_names):
+    normalized = _normalize_name(name)
+    if len(normalized) < 2:
+        return False
+    return any(
+        re.search(re.escape(brand_name), normalized) or re.search(re.escape(normalized), brand_name)
+        for brand_name in own_brand_names
+    )
+
+
+def _mentions_own_brand(text, own_brand_names):
+    normalized = _normalize_name(text)
+    if not normalized:
+        return False
+    return any(brand_name in normalized for brand_name in own_brand_names)
+
+
+def select_article_match_entities(mentioned_entities):
     selected = []
     for idx in (0, 2):
         if len(mentioned_entities) > idx:
@@ -30,184 +61,34 @@ def _pick_selected_competitors(mentioned_entities):
     return selected
 
 
-def _record_mentions_brand(record):
+def _record_mentions_brand(record, own_brand_names=None):
     if record.get("brand_mentioned"):
         return True
-    brand = str(record.get("brand") or "").strip()
-    if not brand:
-        return False
-    if brand in str(record.get("answer") or ""):
+    own_brand_names = own_brand_names or _own_brand_names([record])
+    if _mentions_own_brand(record.get("answer", ""), own_brand_names):
         return True
     for entity in record.get("mentioned_entities") or []:
         if not isinstance(entity, dict):
             continue
-        name = str(entity.get("name") or "").strip()
-        evidence = str(entity.get("evidence") or "").strip()
-        if name == brand or brand in name or name in brand:
+        if _is_own_brand_entity(entity.get("name", ""), own_brand_names):
             return True
-        if brand in evidence:
+        if _mentions_own_brand(entity.get("evidence", ""), own_brand_names):
             return True
     return False
 
 
-def _build_competitor_articles(records, top_articles, selected_competitors):
-    if not selected_competitors:
-        return [], []
-
-    top_article_map = {
-        canonical_article_key(article.get("title", ""), article.get("url", "")): article
-        for article in top_articles[:20]
-    }
-    top_article_map = {key: article for key, article in top_article_map.items() if key}
-    if not top_article_map:
-        return [], []
-
-    strong_candidates = {}
-    weak_candidates = {}
-
-    def ensure_candidate(bucket, key, article):
-        if key not in bucket:
-            bucket[key] = {
-                "title": article.get("title", ""),
-                "url": article.get("url", ""),
-                "platform": article.get("platform", ""),
-                "count": article.get("count", 0),
-                "ai_platforms": set(article.get("ai_platforms") or []),
-                "questions": set(article.get("questions") or []),
-                "related_entities": set(),
-                "match_types": set(),
-                "cooccurrence_count": 0,
-            }
-        return bucket[key]
-
-    for key, article in top_article_map.items():
-        article_text = f"{article.get('title', '')} {article.get('url', '')}"
-        for entity_name in selected_competitors:
-            if _contains_entity(article_text, entity_name):
-                candidate = ensure_candidate(strong_candidates, key, article)
-                candidate["related_entities"].add(entity_name)
-                candidate["match_types"].add("标题/URL命中")
-
-    for rec in records:
-        answer = rec.get("answer", "")
-        entity_names = {
-            str(entity.get("name", "")).strip()
-            for entity in rec.get("mentioned_entities") or []
-            if isinstance(entity, dict) and str(entity.get("name", "")).strip()
-        }
-        matched_entities = [
-            entity_name for entity_name in selected_competitors
-            if entity_name in entity_names or _contains_entity(answer, entity_name)
-        ]
-        if not matched_entities:
-            continue
-        for ref in rec.get("refs") or []:
-            key = canonical_article_key(ref.get("title", ""), ref.get("url", ""))
-            article = top_article_map.get(key)
-            if not article:
-                continue
-            candidate = ensure_candidate(weak_candidates, key, article)
-            candidate["cooccurrence_count"] += 1
-            if rec.get("source_platform"):
-                candidate["ai_platforms"].add(rec.get("source_platform"))
-            if rec.get("question"):
-                candidate["questions"].add(rec.get("question"))
-            for entity_name in matched_entities:
-                candidate["related_entities"].add(entity_name)
-                candidate["match_types"].add("回答共现")
-
-    def format_candidates(candidates, include_weak_reason=False):
-        result = []
-        for item in candidates.values():
-            match_types = sorted(
-                item["match_types"],
-                key=lambda x: {"标题/URL命中": 0, "正文命中": 1, "回答共现": 2}.get(x, 9),
-            )
-            reason_prefix = "高频引用 Top20 中与目标竞品存在"
-            if include_weak_reason:
-                reason_prefix = "弱关联：同一条 AI 回答提到目标竞品并引用该文章，尚未证明正文提到竞品"
-            result.append({
-                "title": item["title"],
-                "url": item["url"],
-                "platform": item["platform"],
-                "count": item["count"],
-                "ai_platforms": sorted(item["ai_platforms"]),
-                "questions": sorted(item["questions"])[:5],
-                "related_entities": sorted(item["related_entities"], key=selected_competitors.index),
-                "match_types": match_types,
-                "cooccurrence_count": item["cooccurrence_count"],
-                "reason": reason_prefix if include_weak_reason else reason_prefix + "、".join(match_types),
-            })
-        result.sort(key=lambda x: (
-            -x["count"],
-            0 if "标题/URL命中" in x["match_types"] else 1,
-            -x["cooccurrence_count"],
-            x["title"],
-        ))
-        return result
-
-    strong = format_candidates(strong_candidates)
-    weak = format_candidates(weak_candidates, include_weak_reason=True)
-    strong_keys = set(strong_candidates.keys())
-    weak = [
-        item for item in weak
-        if canonical_article_key(item.get("title", ""), item.get("url", "")) not in strong_keys
-    ]
-    return strong, weak
-
-
-def merge_body_hit_results(competitor_articles, body_hit_results, selected_competitors):
-    articles_by_key = {
-        canonical_article_key(article.get("title", ""), article.get("url", "")): dict(article)
-        for article in competitor_articles or []
-    }
-    for hit in body_hit_results or []:
-        if hit.get("status") != "matched" or not hit.get("matched_entities"):
-            continue
-        key = canonical_article_key(hit.get("title", ""), hit.get("url", ""))
-        if not key:
-            continue
-        article = articles_by_key.get(key, {
-            "title": hit.get("title", ""),
-            "url": hit.get("url", ""),
-            "platform": hit.get("platform", ""),
-            "count": hit.get("count", 0),
-            "ai_platforms": hit.get("ai_platforms", []),
-            "questions": [],
-            "related_entities": [],
-            "match_types": [],
-            "cooccurrence_count": 0,
-            "reason": "",
-        })
-        related = set(article.get("related_entities") or [])
-        for entity_name in hit.get("matched_entities") or []:
-            if entity_name in selected_competitors:
-                related.add(entity_name)
-        article["related_entities"] = sorted(related, key=selected_competitors.index)
-        match_types = set(article.get("match_types") or [])
-        match_types.add("正文命中")
-        article["match_types"] = sorted(
-            match_types,
-            key=lambda x: {"标题/URL命中": 0, "正文命中": 1, "回答共现": 2}.get(x, 9),
-        )
-        article["body_hit_status"] = "matched"
-        article["body_evidence"] = hit.get("evidence", "")
-        article["reason"] = "高频引用 Top20 中与目标竞品存在" + "、".join(article["match_types"])
-        articles_by_key[key] = article
-
-    result = list(articles_by_key.values())
-    result.sort(key=lambda x: (
-        -x["count"],
-        0 if "标题/URL命中" in x["match_types"] else 1,
-        0 if "正文命中" in x["match_types"] else 1,
-        -x["cooccurrence_count"],
-        x["title"],
-    ))
-    return result
-
-
-def build_record_insights(records):
+def build_record_insights(records, configured_platforms=None, own_brand="", own_client_name=""):
     records = list(records or [])
+    own_brand_names = _own_brand_names(
+        records,
+        own_brand=own_brand,
+        own_client_name=own_client_name,
+    )
+    configured_platforms = [
+        str(platform or "").strip()
+        for platform in (configured_platforms or [])
+        if str(platform or "").strip()
+    ]
     platform_data = defaultdict(lambda: {
         "source_platform": "",
         "platform_name": "",
@@ -232,7 +113,7 @@ def build_record_insights(records):
         refs = rec.get("refs") or []
         record_id = rec.get("id", "")
         answer = rec.get("answer") or ""
-        brand_mentioned = _record_mentions_brand(rec)
+        brand_mentioned = _record_mentions_brand(rec, own_brand_names)
 
         pdata = platform_data[source_platform]
         pdata["source_platform"] = source_platform
@@ -283,6 +164,8 @@ def build_record_insights(records):
             name = str(entity.get("name", "")).strip()
             if not name:
                 continue
+            if _is_own_brand_entity(name, own_brand_names):
+                continue
             if name not in entity_data:
                 entity_data[name] = {
                     "name": name,
@@ -317,6 +200,32 @@ def build_record_insights(records):
         ai_platforms.append(item)
     ai_platforms.sort(key=lambda x: (x["total_refs"], x["total_records"]), reverse=True)
 
+    actual_platform_count = len(platform_data)
+    show_all_platform = bool(records) and (
+        actual_platform_count > 1 or len(configured_platforms) > 1
+    )
+    if show_all_platform:
+        all_ref_platforms = sorted([
+            {
+                "platform": item["platform"],
+                "count": item["count"],
+                "pct": _pct(item["count"], total_refs),
+            }
+            for item in source_data.values()
+        ], key=lambda x: x["count"], reverse=True)[:12]
+        ai_platforms.insert(0, {
+            "source_platform": "all",
+            "platform_name": "全部平台",
+            "total_records": len(records),
+            "total_refs": total_refs,
+            "brand_mentions": brand_mentions,
+            "zero_ref_records": zero_ref_records,
+            "empty_answer_records": empty_answer_records,
+            "mention_rate": _pct(brand_mentions, len(records)),
+            "zero_ref_rate": _pct(zero_ref_records, len(records)),
+            "ref_platforms": all_ref_platforms,
+        })
+
     top_articles = []
     for item in article_data.values():
         top_articles.append({
@@ -349,13 +258,6 @@ def build_record_insights(records):
             "ai_platforms": sorted(item["ai_platforms"]),
         })
     mentioned_entities.sort(key=lambda x: x["count"], reverse=True)
-    selected_competitors = _pick_selected_competitors(mentioned_entities)
-    competitor_articles, weak_competitor_articles = _build_competitor_articles(
-        records,
-        top_articles,
-        selected_competitors,
-    )
-
     return {
         "total_records": len(records),
         "total_refs": total_refs,
@@ -367,7 +269,4 @@ def build_record_insights(records):
         "top_articles": top_articles[:50],
         "top_ref_platforms": top_ref_platforms[:30],
         "mentioned_entities": mentioned_entities[:50],
-        "selected_competitors": selected_competitors,
-        "competitor_articles": competitor_articles,
-        "weak_competitor_articles": weak_competitor_articles,
     }

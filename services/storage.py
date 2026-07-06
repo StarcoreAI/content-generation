@@ -1,8 +1,13 @@
 import json
 import os
+import threading
+
+
+_json_write_lock = threading.RLock()
 
 
 def load_json(path, default):
+    path = os.fspath(path)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     if os.path.exists(path):
         try:
@@ -23,18 +28,20 @@ def load_json(path, default):
 
 
 def save_json(path, data):
+    path = os.fspath(path)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp_path = path + ".tmp"
-    try:
-        with open(tmp_path, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-        os.replace(tmp_path, path)
-        return True
-    except Exception as e:
-        print(f"[警告] 保存 {path} 失败: {e}")
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except Exception:
-                pass
-        return False
+    with _json_write_lock:
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+            os.replace(tmp_path, path)
+            return True
+        except Exception as e:
+            print(f"[警告] 保存 {path} 失败: {e}")
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception:
+                    pass
+            return False

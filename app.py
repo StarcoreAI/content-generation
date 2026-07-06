@@ -1,15 +1,16 @@
 """
 GEO Agent v2 — 内容投放优化工作台
-模块：客户管理 / 问题组管理 / AI引用情报 / 平台库 / 内容生产 / 数据看板
+模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import json, os, re, csv, asyncio, threading
+import json, os, re, asyncio, threading
 from datetime import datetime, date
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify
 from openai import OpenAI
-import io
 from services import crawl_tasks as crawl_task_store
 from services import records as record_store
+from services.content_generations import ContentGenerationStore
+from services.materials import MaterialService
 from services.storage import load_json, save_json
 
 app = Flask(__name__)
@@ -119,37 +120,47 @@ def annotate_top_articles_with_competitor_matches(top_articles, records, body_hi
     if not top_articles:
         return top_articles
     from services.ref_articles import canonical_article_key
-    from services.record_insights import build_record_insights, merge_body_hit_results
+    from services.record_insights import build_record_insights, select_article_match_entities
 
     insights = build_record_insights(records)
-    competitor_articles = insights.get("competitor_articles", [])
-    selected_competitors = insights.get("selected_competitors", [])
+    selected_entities = select_article_match_entities(insights.get("mentioned_entities", []))
     body_hits = body_hit_report.get("body_hits", []) if body_hit_report else []
-    if body_hit_report:
-        competitor_articles = merge_body_hit_results(
-            competitor_articles,
-            body_hits,
-            selected_competitors,
-        )
-    competitor_by_key = {
-        canonical_article_key(item.get("title", ""), item.get("url", "")): item
-        for item in competitor_articles
-    }
     body_status_by_key = {
         canonical_article_key(item.get("title", ""), item.get("url", "")): item
         for item in body_hits
     }
     for article in top_articles:
         key = canonical_article_key(article.get("title", ""), article.get("url", ""))
-        match = competitor_by_key.get(key)
-        if match:
-            article["competitor_match_status"] = "matched"
-            article["competitor_match_label"] = "提到目标竞品"
-            article["competitor_match_types"] = match.get("match_types", [])
-            article["competitor_matched_entities"] = match.get("related_entities", [])
-            continue
+        article_text = f"{article.get('title', '')} {article.get('url', '')}"
+        matched_entities = [
+            entity_name
+            for entity_name in selected_entities
+            if entity_name and entity_name.lower() in article_text.lower()
+        ]
+        match_types = ["标题/URL命中"] if matched_entities else []
 
         body_status = body_status_by_key.get(key)
+        if body_status and body_status.get("status") == "matched":
+            body_entities = [
+                entity_name
+                for entity_name in body_status.get("matched_entities") or []
+                if entity_name in selected_entities
+            ]
+            if body_entities:
+                matched_entities = sorted(
+                    set(matched_entities + body_entities),
+                    key=selected_entities.index,
+                )
+                if "正文命中" not in match_types:
+                    match_types.append("正文命中")
+
+        if match_types:
+            article["competitor_match_status"] = "matched"
+            article["competitor_match_label"] = "提到目标竞品"
+            article["competitor_match_types"] = match_types
+            article["competitor_matched_entities"] = matched_entities
+            continue
+
         if body_status and body_status.get("status") in {"fetch_failed", "skipped"}:
             article["competitor_match_status"] = "unconfirmed"
             article["competitor_match_label"] = "正文未确认"
@@ -300,7 +311,7 @@ def ai_deepseek_pro(messages, max_tokens=6000):
         raise Exception("请先在系统设置中配置 API Key")
     client = OpenAI(api_key=s["api_key"], base_url=s.get("base_url", "https://api.deepseek.com").rstrip("/"))
     resp = client.chat.completions.create(
-        model="deepseek-pro", max_tokens=max_tokens, messages=messages
+        model=s.get("model", "deepseek-chat"), max_tokens=max_tokens, messages=messages
     )
     return resp.choices[0].message.content.strip()
 
@@ -432,524 +443,6 @@ def del_client(cid):
                 save(path, kept)
 
     return jsonify({"ok": True})
-
-# ══════════════════════════════════════════════════════
-# 模块二：AI引用情报
-# ══════════════════════════════════════════════════════
-@app.route("/api/intel/analyze", methods=["POST"])
-def analyze_intel():
-    """分析单条豆包回答：提取引用源 + AI深度分析"""
-    d = request.json
-    question = d["question"]
-    answer = d["answer"]
-    refs = d.get("refs", [])  # [{title, url, platform}]
-    brand = d["brand"]
-    cid = d["client_id"]
-
-    # AI分析
-    prompt = f"""你是GEO引用情报分析专家。请分析以下豆包回答数据。
-
-品牌名：{brand}
-用户问题：{question}
-
-豆包回答：
-{answer}
-
-豆包引用的文章列表：
-{json.dumps(refs, ensure_ascii=False, indent=2)}
-
-请返回JSON分析结果，只返回JSON：
-{{
-  "brand_mentioned": true/false,
-  "brand_rank": null或数字（品牌在推荐中的排名）,
-  "brand_sentiment": "positive"/"neutral"/"negative",
-  "brand_snippet": "品牌相关的关键句（最多60字）",
-  "main_ref": {{
-    "title": "与豆包回答最符合的文章标题",
-    "platform": "平台名",
-    "match_score": 0-100,
-    "match_reason": "为什么这篇文章是主要参考（30字内）"
-  }},
-  "platform_weights": [{{"platform":"平台名","count":数字,"pct":0-100}}],
-  "content_patterns": ["高引用文章的内容规律1","规律2","规律3"],
-  "title_patterns": ["标题规律1","标题规律2"],
-  "geo_score": 0-100,
-  "suggestion": "下一步投放建议（40字内）"
-}}"""
-    try:
-        analysis = ai_json(prompt)
-        record = {
-            "id": uid(), "client_id": cid, "brand": brand,
-            "question": question, "answer": answer, "refs": refs,
-            "analysis": analysis, "date": now_str(), "today": today_str()
-        }
-        records = load(F_RECORDS, [])
-        records.append(record)
-        save(F_RECORDS, records)
-        return jsonify({"ok": True, "analysis": analysis, "record_id": record["id"]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/intel/records", methods=["GET"])
-def get_records():
-    cid = request.args.get("client_id","")
-    platform = normalize_platform_filter(request.args.get("platform", ""))
-    records = load(F_RECORDS, [])
-    if cid:
-        records = [r for r in records if r.get("client_id") == cid]
-    if platform:
-        records = [r for r in records if r.get("source_platform", "doubao") == platform]
-    return jsonify(sorted(records, key=lambda x: x["date"], reverse=True))
-
-@app.route("/api/intel/platform_report", methods=["GET"])
-def platform_report():
-    """聚合分析：哪些平台被高频引用"""
-    cid = request.args.get("client_id","")
-    records = load(F_RECORDS, [])
-    if cid:
-        records = [r for r in records if r.get("client_id") == cid]
-    platform_cnt = defaultdict(int)
-    platform_articles = defaultdict(list)
-    for r in records:
-        for ref in r.get("refs", []):
-            p = ref.get("platform","未知")
-            platform_cnt[p] += 1
-            platform_articles[p].append(ref.get("title",""))
-    total = sum(platform_cnt.values()) or 1
-    result = sorted([
-        {"platform": p, "count": c,
-         "pct": round(c/total*100, 1),
-         "sample_titles": list(set(platform_articles[p]))[:3]}
-        for p, c in platform_cnt.items()
-    ], key=lambda x: x["count"], reverse=True)
-    return jsonify(result)
-
-@app.route("/api/intel/ai_report", methods=["POST"])
-def ai_intel_report():
-    """AI生成平台偏好洞察报告"""
-    d = request.json
-    cid = d.get("client_id","")
-    records = load(F_RECORDS, [])
-    if cid:
-        records = [r for r in records if r.get("client_id") == cid]
-    if not records:
-        return jsonify({"error": "暂无监测记录"}), 400
-    summaries = [{"question": r["question"], "analysis": r["analysis"]} for r in records[-20:]]
-    prompt = f"""你是GEO优化专家。请基于以下豆包引用监测数据，总结豆包的内容抓取偏好规律，为后续内容生产和投放提供指导。
-
-监测数据（共{len(records)}条）：
-{json.dumps(summaries, ensure_ascii=False, indent=2)}
-
-请生成Markdown格式报告，包含：
-## 平台偏好结论
-## 高引用内容规律（标题、结构、字数等）
-## 豆包抓取逻辑推断
-## 下一轮投放策略建议（具体可执行）"""
-    try:
-        report = ai(prompt, 2000)
-        return jsonify({"ok": True, "report": report})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════
-# 模块四：平台库工具箱
-# ══════════════════════════════════════════════════════
-@app.route("/api/platforms", methods=["GET"])
-def get_platforms(): return jsonify(load(F_PLATFORMS, []))
-
-@app.route("/api/platforms", methods=["POST"])
-def add_platform():
-    platforms = load(F_PLATFORMS, [])
-    d = request.json
-    p = {"id": uid(), "name": d["name"], "style": d.get("style",""),
-         "word_count": d.get("word_count",""), "title_rule": d.get("title_rule",""),
-         "taboos": d.get("taboos",""), "notes": d.get("notes",""),
-         "created": today_str()}
-    platforms.append(p)
-    save(F_PLATFORMS, platforms)
-    return jsonify({"ok": True, "platform": p})
-
-@app.route("/api/platforms/<pid>", methods=["PUT"])
-def update_platform(pid):
-    platforms = load(F_PLATFORMS, [])
-    d = request.json
-    for p in platforms:
-        if p["id"] == pid:
-            p.update({k: d[k] for k in ["name","style","word_count","title_rule","taboos","notes"] if k in d})
-    save(F_PLATFORMS, platforms)
-    return jsonify({"ok": True})
-
-@app.route("/api/platforms/<pid>", methods=["DELETE"])
-def del_platform(pid):
-    platforms = [p for p in load(F_PLATFORMS, []) if p["id"] != pid]
-    save(F_PLATFORMS, platforms)
-    return jsonify({"ok": True})
-
-@app.route("/api/platforms/ai_fill", methods=["POST"])
-def ai_fill_platform():
-    """AI自动补全平台规范"""
-    d = request.json
-    prompt = f"""你是内容运营专家，请根据平台名称自动补全该平台的内容发布规范。
-
-平台名称：{d['name']}
-（如果是今日头条、搜狐号、百家号、知乎、小红书、微信公众号、抖音等，请根据你的知识填写）
-
-只返回JSON，不要其他内容：
-{{
-  "style": "内容风格（20字内）",
-  "word_count": "推荐字数范围",
-  "title_rule": "标题规范（30字内）",
-  "taboos": "禁忌事项（30字内）",
-  "notes": "其他注意事项（40字内）"
-}}"""
-    try:
-        result = ai_json(prompt, 600)
-        return jsonify({"ok": True, **result})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-# ══════════════════════════════════════════════════════
-# 模块五：内容生产
-# ══════════════════════════════════════════════════════
-@app.route("/api/articles", methods=["GET"])
-def get_articles():
-    cid = request.args.get("client_id","")
-    articles = load(F_ARTICLES, [])
-    if cid:
-        articles = [a for a in articles if a.get("client_id") == cid]
-    return jsonify(sorted(articles, key=lambda x: x["created"], reverse=True))
-
-@app.route("/api/articles/generate", methods=["POST"])
-def gen_article():
-    """生成单篇文章"""
-    d = request.json
-    platform_id = d["platform_id"]
-    platforms = load(F_PLATFORMS, [])
-    pf = next((p for p in platforms if p["id"] == platform_id), None)
-    if not pf:
-        return jsonify({"error": "平台不存在"}), 400
-
-    material_text = read_material_text(d.get("client_id",""))
-    prompt = f"""你是专业内容创作者，请根据以下要求创作一篇文章。
-【内容风格】{pf.get('style','')}
-【字数要求】{pf.get('word_count','')}
-【标题规范】{pf.get('title_rule','')}
-【禁忌事项】{pf.get('taboos','')}
-【其他要求】{pf.get('notes','')}
-
-【文章主题】{d['topic']}
-【客户品牌】{d['brand']}
-【品牌卖点】{d.get('selling_points','')}
-【参考内容规律】{d.get('content_pattern','')}
-【参考标题规律】{d.get('title_pattern','')}
-
-【客户品牌资料（请参考确保品牌信息准确）】
-{material_text if material_text else "暂无上传资料"}
-
-要求：
-1. 文章要自然融入品牌名和卖点，不能太硬广
-2. 标题要符合平台规范，吸引AI大模型抓取
-3. 内容结构清晰，符合该平台读者习惯
-4. 适合被豆包等AI大模型引用
-
-请返回JSON：
-{{
-  "title": "文章标题",
-  "content": "正文内容（保留换行）",
-  "keywords": ["关键词1","关键词2","关键词3"],
-  "summary": "一句话摘要（30字内）"
-}}"""
-    try:
-        result = ai_json(prompt, 2000)
-        article = {
-            "id": uid(), "client_id": d["client_id"],
-            "brand": d["brand"], "platform_id": platform_id,
-            "platform_name": pf["name"], "topic": d["topic"],
-            "title": result["title"], "content": result["content"],
-            "keywords": result.get("keywords",[]),
-            "summary": result.get("summary",""),
-            "status": "pending", "created": now_str(), "today": today_str()
-        }
-        articles = load(F_ARTICLES, [])
-        articles.append(article)
-        save(F_ARTICLES, articles)
-        return jsonify({"ok": True, "article": article})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/articles/batch", methods=["POST"])
-def batch_gen():
-    """批量生成：多主题×多平台，并发执行提升速度"""
-    d = request.json
-    topics = d["topics"]
-    platform_ids = d["platform_ids"]
-    client_id = d.get("client_id", "")
-    brand = d.get("brand", "")
-    selling_points = d.get("selling_points", "")
-    cp = (d.get("content_pattern", "") or "")[:300]  # 精炼后的内容规律，限300字
-
-    # ── 公共数据提前读一次，不在每篇里重复 IO ──────────────
-    platforms = load(F_PLATFORMS, [])
-    platform_map = {p["id"]: p for p in platforms}
-    user_tmpl = get_active_template(client_id)
-    mat_text = read_material_text(client_id, max_chars=400)
-
-    tmpl_part = f"\n【发文模板框架（主要参考）】\n{user_tmpl[:600]}" if user_tmpl else ""
-    mat_part  = f"\n【品牌资料（辅助参考）】\n{mat_text}" if mat_text else ""
-    cp_part   = f"\n【内容规律参考】\n{cp}" if cp else ""
-
-    # ── 展开任务列表 ────────────────────────────────────────
-    tasks = []
-    for topic in topics:
-        for pid in platform_ids:
-            pf = platform_map.get(pid)
-            if not pf:
-                tasks.append({"topic": topic, "pid": pid, "pf": None})
-            else:
-                tasks.append({"topic": topic, "pid": pid, "pf": pf})
-
-    results = []
-    errors  = []
-    lock    = __import__("threading").Lock()
-
-    def extract_real_competitors(client_id, brand, region=""):
-        """从爬取回答正文里提取真实出现过的竞品公司名，严格过滤幻觉"""
-        import re as _re
-        records = load_client_records(client_id)
-
-        answers = [r.get("answer", "") for r in records if r.get("answer")]
-        combined = "\n".join(answers)
-
-        patterns = [
-            r'(?:第[一二三四五六七八九十]+名?|TOP\s*\d+|^\s*\d+\s*[\.、）)])\s*[【]?\s*([^，。\n【】（(]{2,12}?(?:装饰|装修|设计|工程|建材|家装|空间)[^，。\n【】（(]{0,4}?)\s*[】（(，。：:\s]',
-            r'(\S{2,10}?(?:装饰|装修|设计|工程|建材|家装|空间)\S{0,4}?)(?:：|是|为|主打|专注|擅长)',
-            r'推荐\S{0,4}?(\S{2,10}?(?:装饰|装修|设计|工程|建材|家装|空间))',
-        ]
-
-        from collections import defaultdict
-        company_cnt = defaultdict(int)
-        for p in patterns:
-            for m in _re.finditer(p, combined, re.MULTILINE):
-                name = m.group(1).strip()
-                name = _re.sub(r'[（(｜|].*', '', name).strip()
-                name = _re.sub(r'^\d+[\.、]', '', name).strip()
-                skip = ['昆山','苏州','上海','杭州','北京','全国','本土','本地',
-                        '装修公司','家装公司',
-                        brand, brand[:2] if len(brand) >= 2 else brand]
-                if (2 <= len(name) <= 10
-                        and not any(s in name for s in skip)
-                        and _re.search(r'[装饰修设计工程建材家空间]', name)
-                        and not _re.search(r'[的地得了吗呢啊哦是为]$', name)):
-                    company_cnt[name] += 1
-
-        # 按频次排序取前15个，足够填满任何主题数量
-        top_competitors = sorted(company_cnt.keys(), key=lambda x: -company_cnt[x])[:15]
-        top_competitors = [c for c in top_competitors
-                          if c != brand and (len(brand) < 2 or brand[:2] not in c)]
-        return top_competitors
-
-    def generate_one(task):
-        topic = task["topic"]
-        pid   = task["pid"]
-        pf    = task["pf"]
-        if not pf:
-            with lock:
-                errors.append({"topic": topic, "platform": pid, "error": "平台不存在"})
-            return
-        try:
-            import re as _re
-            # 从主题提取地区词
-            region_match = _re.search(r'[一-龥]{2,4}(?:市|区|县|省|地区)?', topic)
-            region = region_match.group() if region_match else ""
-            region_hint = f"\n【地区约束】文章中涉及的所有企业、竞品、案例必须严格限定在「{region}」本地，禁止出现其他城市的公司" if region else ""
-
-            # 提取真实竞品公司名（不是标题，是真实公司名）
-            real_competitors = extract_real_competitors(client_id, brand, region)
-            competitor_hint = ""
-            if real_competitors:
-                competitor_hint = (
-                    f"\n【真实竞品公司名单】以下是豆包回答中真实出现过的本地竞品公司名，"
-                    f"共 {len(real_competitors)} 家，加上客户品牌共 {len(real_competitors)+1} 家：\n"
-                    + "、".join(real_competitors)
-                    + f"\n【排序铁律】{brand} 必须排在第1位，其余按综合实力排列"
-                    + f"\n【反幻觉铁律】只能从以上名单中选取公司，禁止出现名单之外的任何公司名（包括泛指、模糊称呼、半编造名字），名单公司数量足够，请按主题要求的数量从名单中选取"
-                )
-                # count_hint 保持主题数量要求不变
-            else:
-                competitor_hint = (
-                    f"\n【竞品约束】暂无真实竞品数据，文章只介绍 {brand} 一家，禁止虚构任何其他公司名称"
-                )
-                count_hint = f"\n【数量铁律】因真实竞品数据不足，本文只介绍 {brand} 一家公司，标题相应调整"
-
-            # 从主题标题里提取数字，强制约束公司数量
-            import re as _re2
-            num_zh = {'一':1,'二':2,'三':3,'四':4,'五':5,'六':6,'七':7,'八':8,'九':9,'十':10,
-                      '两':2,'十大':10,'五大':5,'三大':3}
-            count_hint = ""
-            num_match = _re2.search(r'([一二三四五六七八九十两]+大?|TOP\s*(\d+)|\d+)\s*(?:家|个|强|名)', topic)
-            if num_match:
-                raw = num_match.group(1)
-                try:
-                    n = int(_re2.search(r'\d+', raw).group()) if _re2.search(r'\d+', raw) else num_zh.get(raw, 0)
-                except:
-                    n = 0
-                if n > 0:
-                    count_hint = (
-                        f"\n【数量铁律】主题要求列举 {n} 家公司，正文必须严格列出 {n} 家，"
-                        f"不能多也不能少，每家公司介绍不少于150字，包含：公司简介、核心优势、适合人群"
-                    )
-
-            # 质量要求
-            quality_hint = """
-【质量要求】
-- 每家公司介绍必须包含：①公司定位 ②2-3个具体核心优势（含数据/案例）③适合什么类型的客户
-- 禁止使用空洞词汇如「专业」「优质」「领先」，必须用具体数据或案例支撑
-- 文章结构：开篇（市场背景+选择标准）→ 公司逐一详述 → 对比总结表格 → 选择建议
-- 每家公司字数不少于150字，整篇文章不少于2000字
-- 【禁止】不得编造或引用任何客户评价、用户口碑、业主评价、真实案例对话，如「某业主表示」「用户反馈」「口碑评价」等内容一律不得出现"""
-
-            prompt = f"""你是{pf['name']}平台资深内容创作者，精通GEO优化。
-
-请为"{pf['name']}"平台创作一篇关于"{topic}"的文章。
-
-【平台规范】
-内容风格：{pf.get('style') or '专业实用'}
-推荐字数：{pf.get('word_count') or '2000-3000字'}
-标题规范：{pf.get('title_rule') or '含关键词，有数据感'}
-禁忌事项：{pf.get('taboos') or '避免虚假宣传'}{region_hint}{count_hint}{competitor_hint}{quality_hint}
-
-【品牌信息】
-品牌名称：{brand}
-核心卖点：{selling_points}{tmpl_part}{cp_part}{mat_part}
-
-只返回JSON，不要其他内容：
-{{"title":"文章标题","content":"正文全文（不少于2000字）","keywords":["关键词1","关键词2","关键词3"],"summary":"150字摘要"}}"""
-            result = ai_json(prompt, 6000)
-            article = {
-                "id": uid(), "client_id": client_id,
-                "brand": brand, "platform_id": pid,
-                "platform_name": pf["name"], "topic": topic,
-                "title": result["title"], "content": result["content"],
-                "keywords": result.get("keywords", []),
-                "summary": result.get("summary", ""),
-                "status": "pending", "created": now_str(), "today": today_str()
-            }
-            with lock:
-                # 每篇写入时单独加锁，避免并发写 JSON 文件冲突
-                saved = load(F_ARTICLES, [])
-                saved.append(article)
-                save(F_ARTICLES, saved)
-                results.append({"topic": topic, "platform": pf["name"], "title": result["title"]})
-        except Exception as e:
-            with lock:
-                errors.append({"topic": topic, "platform": pf["name"], "error": str(e)})
-
-    # ── 并发执行，最多 5 个线程同时跑 ──────────────────────
-    from concurrent.futures import ThreadPoolExecutor, as_completed
-    max_workers = min(5, len(tasks))
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [executor.submit(generate_one, t) for t in tasks]
-        for f in as_completed(futures):
-            f.result()  # 让异常冒泡到外层（已在 generate_one 内捕获）
-
-    return jsonify({
-        "ok": True,
-        "success": len(results),
-        "errors": len(errors),
-        "results": results,
-        "error_details": errors
-    })
-
-
-@app.route("/api/articles/<aid>/status", methods=["PUT"])
-def update_article_status(aid):
-    articles = load(F_ARTICLES, [])
-    status = request.json.get("status")
-    for a in articles:
-        if a["id"] == aid:
-            a["status"] = status
-    save(F_ARTICLES, articles)
-    return jsonify({"ok": True})
-
-@app.route("/api/articles/<aid>", methods=["DELETE"])
-def del_article(aid):
-    articles = [a for a in load(F_ARTICLES, []) if a["id"] != aid]
-    save(F_ARTICLES, articles)
-    return jsonify({"ok": True})
-
-# ══════════════════════════════════════════════════════
-# 模块六：数据看板
-# ══════════════════════════════════════════════════════
-@app.route("/api/stats/overview", methods=["GET"])
-def stats_overview():
-    cid = request.args.get("client_id","")
-    records = load(F_RECORDS, [])
-    articles = load(F_ARTICLES, [])
-    if cid:
-        records = [r for r in records if r.get("client_id") == cid]
-        articles = [a for a in articles if a.get("client_id") == cid]
-
-    mentioned = [r for r in records if r.get("analysis",{}).get("brand_mentioned")]
-    scores = [r["analysis"]["geo_score"] for r in records if r.get("analysis",{}).get("geo_score") is not None]
-    avg_score = round(sum(scores)/len(scores), 1) if scores else 0
-    pending = [a for a in articles if a.get("status") == "pending"]
-
-    # 近7天趋势
-    daily = defaultdict(lambda: {"total":0,"mentioned":0,"articles":0})
-    for r in records:
-        d = r.get("today", r["date"][:10])
-        daily[d]["total"] += 1
-        if r.get("analysis",{}).get("brand_mentioned"):
-            daily[d]["mentioned"] += 1
-    for a in articles:
-        d = a.get("today", a["created"][:10])
-        daily[d]["articles"] += 1
-    trend = [{"date": d, **v} for d, v in sorted(daily.items())[-7:]]
-
-    # 平台权重
-    platform_cnt = defaultdict(int)
-    for r in records:
-        for ref in r.get("refs", []):
-            platform_cnt[ref.get("platform","未知")] += 1
-    total_refs = sum(platform_cnt.values()) or 1
-    platforms = sorted([
-        {"platform": p, "count": c, "pct": round(c/total_refs*100, 1)}
-        for p, c in platform_cnt.items()
-    ], key=lambda x: x["count"], reverse=True)[:6]
-
-    return jsonify({
-        "total_records": len(records),
-        "mentioned": len(mentioned),
-        "mention_rate": round(len(mentioned)/len(records)*100, 1) if records else 0,
-        "avg_geo_score": avg_score,
-        "total_articles": len(articles),
-        "pending_articles": len(pending),
-        "approved_articles": len([a for a in articles if a.get("status")=="approved"]),
-        "trend": trend,
-        "platform_weights": platforms
-    })
-
-@app.route("/api/stats/export", methods=["GET"])
-def export_stats():
-    cid = request.args.get("client_id","")
-    records = load(F_RECORDS, [])
-    if cid:
-        records = [r for r in records if r.get("client_id") == cid]
-    out = io.StringIO()
-    w = csv.writer(out)
-    w.writerow(["日期","问题","品牌提及","GEO评分","主参考平台","引用源数","建议"])
-    for r in records:
-        a = r.get("analysis",{})
-        mr = a.get("main_ref",{})
-        w.writerow([r["date"], r["question"],
-                    "是" if a.get("brand_mentioned") else "否",
-                    a.get("geo_score","-"), mr.get("platform","-"),
-                    len(r.get("refs",[])), a.get("suggestion","-")])
-    out.seek(0)
-    return send_file(io.BytesIO(out.getvalue().encode("utf-8-sig")),
-        mimetype="text/csv", as_attachment=True,
-        download_name=f"geo_report_{today_str()}.csv")
-
 
 # ══════════════════════════════════════════════════════
 # 问题组管理模块
@@ -1345,15 +838,36 @@ import werkzeug
 from flask import send_from_directory
 
 UPLOAD_FOLDER = "data/uploads"
+LOCAL_PDF_FOLDER = "pdf"
+F_MATERIALS_INDEX = f"{D}/materials_index.json"
+MATERIAL_CACHE_FOLDER = f"{D}/material_cache"
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'docx', 'doc'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def material_service():
+    return MaterialService(
+        root_dir=".",
+        upload_dir=UPLOAD_FOLDER,
+        local_pdf_dir=LOCAL_PDF_FOLDER,
+        index_path=F_MATERIALS_INDEX,
+        cache_dir=MATERIAL_CACHE_FOLDER,
+    )
+
+@app.route("/api/materials/local", methods=["GET"])
+def list_local_materials():
+    """列出项目 pdf/ 文件夹下可导入的客户资料。"""
+    return jsonify({"ok": True, "files": material_service().list_local_materials()})
+
 @app.route("/api/materials/<cid>", methods=["GET"])
 def get_materials(cid):
     """获取客户已上传的资料列表"""
+    service = material_service()
+    indexed = service.list_client_materials(cid)
+    if indexed:
+        return jsonify(indexed)
     client_dir = os.path.join(UPLOAD_FOLDER, cid)
     if not os.path.exists(client_dir):
         return jsonify([])
@@ -1361,9 +875,15 @@ def get_materials(cid):
     for f in os.listdir(client_dir):
         fpath = os.path.join(client_dir, f)
         files.append({
+            "id": f,
             "name": f,
+            "stored_name": f,
+            "original_name": f,
             "size": os.path.getsize(fpath),
             "path": fpath,
+            "source": "legacy_upload",
+            "status": "未解析",
+            "confirmed": False,
             "uploaded": datetime.fromtimestamp(os.path.getmtime(fpath)).strftime("%Y-%m-%d %H:%M")
         })
     return jsonify(sorted(files, key=lambda x: x["uploaded"], reverse=True))
@@ -1371,27 +891,80 @@ def get_materials(cid):
 @app.route("/api/materials/<cid>/upload", methods=["POST"])
 def upload_material(cid):
     """上传客户资料文件"""
-    if 'file' not in request.files:
+    files = request.files.getlist('file')
+    if not files:
         return jsonify({"error": "没有文件"}), 400
-    file = request.files['file']
-    if not file.filename or not allowed_file(file.filename):
-        return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/docx"}), 400
-    client_dir = os.path.join(UPLOAD_FOLDER, cid)
-    os.makedirs(client_dir, exist_ok=True)
-    filename = werkzeug.utils.secure_filename(file.filename)
-    # 保留原始中文文件名
-    original_name = file.filename
-    safe_name = f"{uid()}_{filename}"
-    fpath = os.path.join(client_dir, safe_name)
-    file.save(fpath)
-    return jsonify({"ok": True, "name": original_name, "saved_as": safe_name})
+    service = material_service()
+    materials = []
+    try:
+        for file in files:
+            if not file or not file.filename:
+                continue
+            if not allowed_file(file.filename):
+                return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/docx"}), 400
+            material = service.save_uploaded_material(cid, file, file.filename)
+            materials.append(service.parse_material(cid, material["id"]))
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if not materials:
+        return jsonify({"error": "没有文件"}), 400
+    first = materials[0]
+    return jsonify({
+        "ok": True,
+        "name": first.get("original_name"),
+        "saved_as": first.get("stored_name"),
+        "materials": materials,
+    })
+
+@app.route("/api/materials/<cid>/import-local", methods=["POST"])
+def import_local_materials(cid):
+    """从项目 pdf/ 文件夹导入资料到当前客户。"""
+    data = request.get_json(silent=True) or {}
+    filenames = data.get("filenames")
+    if isinstance(filenames, str):
+        filenames = [filenames]
+    if not isinstance(filenames, list) or not filenames:
+        return jsonify({"error": "请选择要导入的文件"}), 400
+    service = material_service()
+    materials = []
+    try:
+        for filename in filenames:
+            material = service.import_local_material(cid, str(filename))
+            materials.append(service.parse_material(cid, material["id"]))
+    except FileNotFoundError:
+        return jsonify({"error": "找不到本地资料文件"}), 404
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "materials": materials})
+
+@app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
+def parse_material(cid, material_id):
+    """解析资料并生成清洗文本与事实卡。"""
+    try:
+        material = material_service().parse_material(cid, material_id)
+    except KeyError:
+        return jsonify({"error": "找不到资料"}), 404
+    return jsonify({"ok": True, "material": material})
+
+@app.route("/api/materials/<cid>/<material_id>/confirm", methods=["POST"])
+def confirm_material(cid, material_id):
+    """确认或取消确认资料参与内容生成。"""
+    data = request.get_json(silent=True) or {}
+    confirmed = bool(data.get("confirmed", True))
+    try:
+        material = material_service().confirm_material(cid, material_id, confirmed)
+    except KeyError:
+        return jsonify({"error": "找不到资料"}), 404
+    return jsonify({"ok": True, "material": material})
 
 @app.route("/api/materials/<cid>/<filename>", methods=["DELETE"])
 def del_material(cid, filename):
     """删除资料文件"""
-    fpath = os.path.join(UPLOAD_FOLDER, cid, filename)
-    if os.path.exists(fpath):
-        os.remove(fpath)
+    service = material_service()
+    if not service.delete_material(cid, filename):
+        fpath = os.path.join(UPLOAD_FOLDER, cid, filename)
+        if os.path.exists(fpath):
+            os.remove(fpath)
     return jsonify({"ok": True})
 
 def extract_material_file_text(fpath, max_chars=4000):
@@ -1428,6 +1001,10 @@ def extract_material_file_text(fpath, max_chars=4000):
 
 def read_material_bundle(cid, max_chars=12000, per_file_chars=4000):
     """读取当前客户上传目录中的全部资料，返回带文件名的合并文本。"""
+    indexed_bundle = material_service().build_generation_bundle(cid, max_chars=max_chars)
+    if indexed_bundle.get("text") or indexed_bundle.get("files"):
+        return indexed_bundle
+
     client_dir = os.path.join(UPLOAD_FOLDER, cid)
     if not os.path.exists(client_dir):
         return {"text": "", "files": []}
@@ -1460,22 +1037,18 @@ def read_material_text(cid, max_chars=3000):
 def get_client(cid):
     return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
 
-def _content_generation_store():
-    data = load(F_CONTENT_GENERATIONS, {})
-    return data if isinstance(data, dict) else {}
-
 def load_content_session(cid):
-    data = _content_generation_store()
-    session = data.get(cid) or {}
-    return {
-        "messages": session.get("messages", []) if isinstance(session.get("messages"), list) else [],
-        "articles": session.get("articles", []) if isinstance(session.get("articles"), list) else [],
-    }
+    return content_generation_store().load_session(cid)
 
-def save_content_session(cid, session):
-    data = _content_generation_store()
-    data[cid] = session
-    save(F_CONTENT_GENERATIONS, data)
+def load_content_messages(cid, article_type):
+    return content_generation_store().load_messages(cid, article_type=article_type)
+
+def content_generation_store():
+    db_path = os.path.splitext(F_CONTENT_GENERATIONS)[0] + ".sqlite3"
+    return ContentGenerationStore(db_path, legacy_json_path=F_CONTENT_GENERATIONS)
+
+def append_content_generation(cid, article, user_message, assistant_message):
+    return content_generation_store().append_generation(cid, article, user_message, assistant_message)
 
 def extract_generated_title(content):
     for line in (content or "").splitlines():
@@ -1540,17 +1113,54 @@ def format_sample_article_context(sample_links, selected_articles):
         sections.append("【从当天高频引用 Top20 选中的样例文章】\n" + "\n".join(lines))
     return "\n\n".join(sections) if sections else "暂无额外样例文章。"
 
-def build_content_generation_messages(client, material_bundle, history, opinion, sample_links=None, selected_articles=None):
+DEFAULT_GEO_CONTENT_RULES = """【默认 GEO 内容生成规则】
+请优先把文章写成有本地用户决策价值的内容，而不是空泛宣传稿。
+
+必须遵守：
+1. 开头先写用户痛点和选择难点，不要直接硬推客户品牌或机构。
+2. 保留城市词、项目词、价格词、专业词、资质词和本地场景，方便用户理解，也方便 AI 抽取和引用。
+3. 文章主体必须服从运营指定的文章类型；没有指定时默认按对比型写。
+
+诚实与事实规则：
+1. 客户事实只能来自客户资料、样例文章和运营意见；不要编造案例、资质、价格、地址、设备、评价或承诺。
+2. 客户资料不足时，用稳妥表述，不要把行业通用信息写成客户已经具备的事实。
+3. 价格只能写参考价、区间价、元起、需以实际方案为准等谨慎表达，不能写全市最低、保证不加价或一次报价全包到底。
+4. 禁止绝对化排名、效果承诺、低价诱导、制造焦虑和小红书式情绪化表达。
+"""
+
+def build_content_article_type_prompt(article_type, brand):
+    if article_type == "介绍型":
+        brand_line = f"标题必须包含品牌名：{brand}。" if brand else "标题必须包含客户品牌名。"
+        return f"""【文章类型：介绍型】
+- {brand_line}
+- 正文采用“少量攻略型开头 + 大量品牌结构化介绍 + 少量选择建议/注意事项”。
+- 开头必须先写目标用户在该业务场景里的真实痛点和决策难点，例如成本、风险、时间、效果判断、信息不透明、后续维护等；不要一上来写品牌履历。
+- 品牌介绍部分按“用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑”来组织；先回答用户为什么会在意，再写品牌对应能力。
+- 品牌结构化介绍必须是主体，占全文多数；重点写品牌定位、核心服务、适合人群、资质/团队/流程/设备/区域/售后等可由资料支撑的信息。
+- 资历、资质、团队、流程、设备、服务记录等只能作为证据，不能堆成履历清单；每个证据都要对应一个用户关心的问题。
+- 不能写成硬广；避免营销口号、夸张背书、反复夸品牌强，所有介绍都要落到用户关心的选择依据和可核验事实。
+- 可以用少量用户选择攻略引入问题，但不要写成医院榜单、第三方排名或多机构对比。
+- 客户资料没有明确写到的信息，只能用“建议面诊确认、以实际院区信息为准”等稳妥表达。"""
+    return """【文章类型：对比型】
+- 标题必须严格模仿高引用文章标题，优先使用“城市/区域 + 项目/机构 + 全攻略/推荐/怎么选 + 年份/最新”这类结构。
+- 正文采用“少量攻略型开头 + 大量分类对比/排名/适合人群/优缺点/快速匹配 + 少量避坑总结”。
+- 主体分类对比必须充分展开，占全文多数；优先按机构类型、用户需求、预算、复杂程度、复诊便利性等维度组织。
+- 对比型不能只有一个对比对象；每个主要分类下都要出现多个可比较对象、机构类型或选择方向。
+- 单个品牌只能作为对比条目或推荐对象自然出现，不要写成单一品牌介绍稿。
+- 可模仿参考文章的“资质、地址、核心优势、适合人群、缺点、价格参考、快速匹配、避坑要点”结构，但不要照抄原文或把样例事实当成客户事实。"""
+
+def build_content_generation_messages(client, material_bundle, history, opinion, sample_links=None, selected_articles=None, article_type="对比型"):
     brand = client.get("brand") or client.get("name") or ""
     material_text = material_bundle.get("text") or "暂无上传资料。"
     material_count = len(material_bundle.get("files") or [])
     sample_links = sample_links or []
     selected_articles = selected_articles or []
     sample_context = format_sample_article_context(sample_links, selected_articles)
-    system_prompt = (
-        "你是资深品牌内容策划和长文撰稿人。请基于客户资料、运营意见和上下文历史生成可直接交给运营修改的中文文章。"
-        "要求事实谨慎，不虚构客户案例、价格、资质、门店地址或用户评价；如果资料不足，用稳妥表述。"
-    )
+    article_type = article_type if article_type in {"对比型", "介绍型"} else "对比型"
+    article_type_prompt = build_content_article_type_prompt(article_type, brand)
+    system_prompt = f"""{DEFAULT_GEO_CONTENT_RULES}
+
+你是资深品牌内容策划和长文撰稿人。请基于客户资料、运营意见和上下文历史生成可直接交给运营修改的中文文章。"""
     clean_history = []
     for item in history[-20:]:
         role = item.get("role")
@@ -1573,6 +1183,9 @@ def build_content_generation_messages(client, material_bundle, history, opinion,
 
 【运营意见】
 {opinion}
+
+【文章类型要求】
+{article_type_prompt}
 
 【输出要求】
 - 直接输出文章正文，不要输出解释过程。
@@ -1608,44 +1221,46 @@ def generate_content_article():
     if not client:
         return jsonify({"error": "客户不存在"}), 404
 
-    session = load_content_session(cid)
     material_bundle = read_material_bundle(cid)
     sample_links = normalize_sample_links(d.get("sample_links", []))
     selected_articles = normalize_selected_sample_articles(d.get("selected_articles", []))
+    article_type = d.get("article_type") if d.get("article_type") in {"对比型", "介绍型"} else "对比型"
+    history = load_content_messages(cid, article_type)
     messages = build_content_generation_messages(
         client,
         material_bundle,
-        session["messages"],
+        history,
         opinion,
         sample_links=sample_links,
         selected_articles=selected_articles,
+        article_type=article_type,
     )
+    generation_model = get_settings().get("model", "deepseek-chat")
     try:
         content = ai_deepseek_pro(messages, 6000)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
     created_at = now_str()
-    sequence = max([int(a.get("sequence") or 0) for a in session["articles"]] or [0]) + 1
     article = {
         "id": uid(),
         "client_id": cid,
-        "sequence": sequence,
         "title": extract_generated_title(content),
         "content": content,
         "operator_opinion": opinion,
-        "model": "deepseek-pro",
+        "model": generation_model,
         "material_count": len(material_bundle.get("files") or []),
         "sample_link_count": len(sample_links),
         "selected_article_count": len(selected_articles),
         "sample_links": sample_links,
         "selected_articles": selected_articles,
+        "article_type": article_type,
         "created_at": created_at,
     }
-    session["messages"].append({"role": "user", "content": opinion, "created_at": created_at})
-    session["messages"].append({"role": "assistant", "content": content, "created_at": created_at, "article_id": article["id"]})
-    session["articles"].append(article)
-    save_content_session(cid, session)
+    user_message = {"role": "user", "content": opinion, "created_at": created_at}
+    assistant_message = {"role": "assistant", "content": content, "created_at": created_at, "article_id": article["id"]}
+    article = append_content_generation(cid, article, user_message, assistant_message)
+    session = load_content_session(cid)
     articles = sorted(
         session["articles"],
         key=lambda x: (int(x.get("sequence") or 0), x.get("created_at", "")),
@@ -1679,81 +1294,6 @@ def refine_pattern():
     try:
         result = ai(prompt, 600)
         return jsonify({"ok": True, "refined": result[:300]})
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-@app.route("/api/content/gen_topics", methods=["POST"])
-def gen_topics():
-    """AI智能生成内容主题，覆盖品牌泛推荐问题"""
-    d = request.json
-    client_id = d.get("client_id", "")
-    brand = d.get("brand", "")
-    count = min(int(d.get("count", 10)), 30)
-    instruction = d.get("instruction", "").strip()
-
-    if not client_id:
-        return jsonify({"error": "缺少client_id"}), 400
-
-    # ── 严格只读当前客户数据，绝不混入其他客户 ──────────────
-    records = load_client_records(client_id)
-
-    from collections import defaultdict
-    import re
-
-    # 统计高频引用标题（仅限当前客户）
-    article_cnt = defaultdict(int)
-    for rec in records:
-        for ref in rec.get("refs", []):
-            t = ref.get("title", "")
-            if t:
-                article_cnt[t] += 1
-    hot_titles = sorted(article_cnt.keys(), key=lambda x: article_cnt[x], reverse=True)[:12]
-
-    # 收集该客户爬取过的问题（直接反映业务方向）
-    crawled_questions = list(dict.fromkeys(
-        r.get("question", "") for r in records if r.get("question")
-    ))[:10]
-
-    # 获取平台列表
-    platforms = load(F_PLATFORMS, [])
-    platform_names = [p["name"] for p in platforms]
-
-    if not hot_titles and not crawled_questions:
-        return jsonify({"error": "该客户暂无爬取数据，请先完成至少一次爬取再生成主题"}), 400
-
-    prompt = f"""你是GEO内容策略专家。请严格基于以下该客户的真实爬取数据生成文章主题，不要引入任何其他行业或领域的内容。
-
-品牌名称：{brand}
-目标平台：{', '.join(platform_names) if platform_names else '今日头条、搜狐、网易等'}
-生成数量：{count}条
-
-【该客户豆包高频引用文章标题（最重要参考，严格模仿标题的行业、地区、格式规律）】
-{chr(10).join(f'  {i+1}. {t}' for i, t in enumerate(hot_titles)) if hot_titles else '暂无'}
-
-【该客户实际爬取问题（反映真实业务方向，主题必须与这些问题同类）】
-{chr(10).join(f'  - {q}' for q in crawled_questions) if crawled_questions else '暂无'}
-
-生成规则：
-1. 【铁律】行业、地区、关键词必须与上方引用标题完全一致，禁止引入任何上方数据中没有出现过的行业词
-2. 【铁律】绝对不能出现任何具体品牌名称，泛推荐视角
-3. 严格模仿高频引用标题的格式（年份、数字、TOP榜、竖线分隔等）
-4. 覆盖：推荐榜单类、对比测评类、避坑指南类、选购攻略类
-5. 标题要有数据感、权威感，适合被AI大模型引用
-{f"6. 【用户特别要求，优先遵守】{instruction}" if instruction else ""}
-
-只返回JSON数组，不要其他内容：["主题1","主题2",...]"""
-
-    try:
-        topics = ai_json(prompt)
-        import re as _re
-        topics = [_re.sub(r'[-–—]\s*[一-龥a-zA-Z0-9]+(?:网|家居|装修|新闻|大学|中心|通网|资讯|平台)$', '', t).strip() for t in topics]
-        brand_keywords = [brand] + ([brand[:2]] if len(brand) >= 2 else [])
-        clean_topics = [t for t in topics if not any(kw in t for kw in brand_keywords)]
-        filtered_count = len(topics) - len(clean_topics)
-        if filtered_count > 0:
-            print(f"过滤掉 {filtered_count} 个含品牌名的主题")
-        return jsonify({"ok": True, "topics": clean_topics})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -1904,32 +1444,22 @@ def daily_insights():
         group_id=group_id if group_id else None,
         task_id=task_id if task_id else None,
     )
-    from services.record_insights import build_record_insights, merge_body_hit_results
-    insights = build_record_insights(records)
-    body_hit_report = load_competitor_article_body_hit_report(
-        client_id,
-        date,
-        task_id=task_id,
-        group_id=group_id,
-        platform=source_platform,
+    configured_platforms = []
+    own_brand = ""
+    own_client_name = ""
+    for client in load(F_CLIENTS, []):
+        if client.get("id") == client_id:
+            configured_platforms = client.get("contract_platforms") or []
+            own_brand = client.get("brand") or client.get("name") or ""
+            own_client_name = client.get("name") or ""
+            break
+    from services.record_insights import build_record_insights
+    insights = build_record_insights(
+        records,
+        configured_platforms=configured_platforms,
+        own_brand=own_brand,
+        own_client_name=own_client_name,
     )
-    if body_hit_report:
-        body_hits = body_hit_report.get("body_hits", [])
-        insights["competitor_articles"] = merge_body_hit_results(
-            insights.get("competitor_articles", []),
-            body_hits,
-            insights.get("selected_competitors", []),
-        )
-        insights["body_hit_report"] = {
-            "generated_at": body_hit_report.get("generated_at", ""),
-            "checked_article_count": body_hit_report.get("checked_article_count", len(body_hits)),
-            "matched_article_count": body_hit_report.get(
-                "matched_article_count",
-                sum(1 for item in body_hits if item.get("status") == "matched"),
-            ),
-        }
-    else:
-        insights["body_hit_report"] = None
     return jsonify({
         "ok": True,
         "date": date,
@@ -2323,112 +1853,6 @@ def preview_template(cid):
 # ══════════════════════════════════════════════════════
 # 文章格式优化
 # ══════════════════════════════════════════════════════
-def format_plain(text):
-    import re
-    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\*\*(.*?)\*\*', r'【\1】', text)
-    text = re.sub(r'\*(.*?)\*', r'\1', text)
-    text = re.sub(r'^\|[-:| ]+\|$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\|(.*)\|$', lambda m: '  '.join(c.strip() for c in m.group(1).split('|') if c.strip()), text, flags=re.MULTILINE)
-    text = re.sub(r'^- ', '• ', text, flags=re.MULTILINE)
-    text = re.sub(r'^> ', '', text, flags=re.MULTILINE)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-def format_html(text):
-    import re
-    result = []
-    in_table = False
-    table_rows = []
-    for line in text.split('\n'):
-        if re.match(r'^\|', line):
-            if re.match(r'^\|[-:| ]+\|', line):
-                continue
-            cells = [c.strip() for c in line.strip('|').split('|')]
-            if not in_table:
-                in_table = True
-                table_rows = [cells]
-            else:
-                table_rows.append(cells)
-            continue
-        else:
-            if in_table:
-                result.append('<table border="1" style="border-collapse:collapse;width:100%;margin:12px 0">')
-                for i, row in enumerate(table_rows):
-                    tag = 'th' if i == 0 else 'td'
-                    result.append('<tr>' + ''.join(f'<{tag} style="padding:6px 10px">{c}</{tag}>' for c in row) + '</tr>')
-                result.append('</table>')
-                in_table = False
-                table_rows = []
-        if re.match(r'^## ', line):
-            result.append(f'<h2 style="font-size:18px;font-weight:bold;margin:16px 0 8px">{line[3:]}</h2>')
-        elif re.match(r'^# ', line):
-            result.append(f'<h1 style="font-size:22px;font-weight:bold;margin:20px 0 10px">{line[2:]}</h1>')
-        elif re.match(r'^- ', line):
-            line2 = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', line[2:])
-            result.append(f'<li style="margin:4px 0">{line2}</li>')
-        elif re.match(r'^> ', line):
-            result.append(f'<blockquote style="border-left:3px solid #ccc;padding-left:12px;color:#666">{line[2:]}</blockquote>')
-        elif line.strip():
-            line2 = re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', line)
-            result.append(f'<p style="line-height:1.8;margin:8px 0">{line2}</p>')
-    return '\n'.join(result)
-
-def format_xiaohongshu(text):
-    import re
-    text = re.sub(r'^#{1,6}\s+', '✨ ', text, flags=re.MULTILINE)
-    text = re.sub(r'\*\*(.*?)\*\*', r'「\1」', text)
-    text = re.sub(r'^\|[-:| ]+\|$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\|(.*)\|$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^- ', '💡 ', text, flags=re.MULTILINE)
-    text = re.sub(r'^> ', '📌 ', text, flags=re.MULTILINE)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-def format_zhihu(text):
-    import re
-    text = re.sub(r'^## (.*)', r'**\1**', text, flags=re.MULTILINE)
-    text = re.sub(r'^\|[-:| ]+\|$', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\|(.*)\|$', lambda m: '> ' + ' | '.join(c.strip() for c in m.group(1).split('|') if c.strip()), text, flags=re.MULTILINE)
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    return text.strip()
-
-
-FORMAT_FUNCS = {
-    "plain": format_plain,
-    "html": format_html,
-    "xiaohongshu": format_xiaohongshu,
-    "zhihu": format_zhihu,
-}
-
-PLATFORM_FORMAT_MAP = {
-    "土巴兔": "plain", "新浪家居": "plain", "装修之家": "plain",
-    "网易新闻": "html", "今日头条": "html", "搜狐": "html",
-    "百家号": "html", "腾讯新闻": "html", "凤凰网": "html",
-    "小红书": "xiaohongshu",
-    "知乎": "zhihu",
-}
-
-@app.route("/api/articles/<aid>/format", methods=["POST"])
-def format_article(aid):
-    """格式化文章为指定平台发布格式"""
-    fmt = request.json.get("format", "")
-    articles = load(F_ARTICLES, [])
-    article = next((a for a in articles if a["id"] == aid), None)
-    if not article:
-        return jsonify({"error": "文章不存在"}), 404
-
-    # 如果没有指定format，根据平台名自动匹配
-    if not fmt:
-        pname = article.get("platform_name", "")
-        fmt = PLATFORM_FORMAT_MAP.get(pname, "plain")
-
-    fn = FORMAT_FUNCS.get(fmt, format_plain)
-    formatted = fn(article.get("content", ""))
-    return jsonify({"ok": True, "format": fmt, "content": formatted,
-                    "title": article.get("title", "")})
-
-# ══════════════════════════════════════════════════════
 # 系统设置
 # ══════════════════════════════════════════════════════
 @app.route("/api/settings", methods=["GET"])
@@ -2520,11 +1944,6 @@ def platform_login():
     pname = CRAWL_PLATFORMS[platform]["name"]
     return jsonify({"ok": True, "message": f"浏览器已打开，请在窗口中完成 {pname} 登录"})
 
-# 兼容旧登录接口
-@app.route("/api/doubao/login", methods=["POST"])
-def doubao_login():
-    return platform_login()
-
 @app.route("/api/platform/check_login", methods=["GET"])
 def check_platform_login():
     """检查指定平台登录状态。状态文件存在不等于真实会话可用。"""
@@ -2537,11 +1956,6 @@ def check_platform_login():
         **status,
         "name": CRAWL_PLATFORMS.get(platform, {}).get("name", platform),
     })
-
-@app.route("/api/doubao/check_login", methods=["GET"])
-def check_cookie():
-    from base_crawler import get_platform_login_status
-    return jsonify(get_platform_login_status("doubao"))
 
 @app.route("/api/platform/list", methods=["GET"])
 def list_platforms_api():
@@ -2622,7 +2036,6 @@ def analyze_brand_intel_with_retry(brand, question, answer, refs, settings, max_
     }
 
 @app.route("/api/platform/crawl", methods=["POST"])
-@app.route("/api/doubao/crawl", methods=["POST"])  # 兼容旧接口
 def platform_crawl():
     if not crawl_run_lock.acquire(blocking=False):
         return jsonify({
@@ -3111,137 +2524,6 @@ def platform_crawl_impl():
         "error_details": error_details
     })
 
-
-@app.route("/api/crawl/daily", methods=["GET"])
-@app.route("/api/doubao/daily", methods=["GET"])  # 兼容旧接口
-def get_crawl_daily_data():
-    """查询指定日期的原始爬取数据"""
-    client_id = request.args.get("client_id", "")
-    date_str = request.args.get("date", today_str())
-    raw_dir = get_raw_data_dir()
-    if client_id:
-        day_file = os.path.join(raw_dir, client_id, f"{date_str}.json")
-    else:
-        return jsonify({"error": "缺少client_id"}), 400
-    if not os.path.exists(day_file):
-        return jsonify({"date": date_str, "records": [], "exists": False})
-    with open(day_file, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    return jsonify({**data, "exists": True, "file_path": day_file})
-
-@app.route("/api/crawl/daily_list", methods=["GET"])
-@app.route("/api/doubao/daily_list", methods=["GET"])  # 兼容旧接口
-def list_crawl_daily_files():
-    """列出某客户所有有数据的日期"""
-    client_id = request.args.get("client_id", "")
-    if not client_id:
-        return jsonify({"error": "缺少client_id"}), 400
-    raw_dir = get_raw_data_dir()
-    client_dir = os.path.join(raw_dir, client_id)
-    if not os.path.exists(client_dir):
-        return jsonify({"dates": [], "path": client_dir})
-    dates = sorted([
-        f.replace(".json", "")
-        for f in os.listdir(client_dir)
-        if f.endswith(".json")
-    ], reverse=True)
-    return jsonify({"dates": dates, "path": client_dir, "total": len(dates)})
-
-@app.route("/api/crawl/daily_analyze", methods=["POST"])
-@app.route("/api/doubao/daily_analyze", methods=["POST"])  # 兼容旧接口
-def analyze_crawl_daily():
-    """对指定日期的原始数据一键生成AI分析报告"""
-    d = request.json
-    client_id = d.get("client_id", "")
-    date_str = d.get("date", today_str())
-    raw_dir = get_raw_data_dir()
-    day_file = os.path.join(raw_dir, client_id, f"{date_str}.json")
-    if not os.path.exists(day_file):
-        return jsonify({"error": f"{date_str} 暂无数据"}), 400
-    with open(day_file, "r", encoding="utf-8") as f:
-        day_data = json.load(f)
-    records = day_data.get("records", [])
-    if not records:
-        return jsonify({"error": "当日无记录"}), 400
-    brand = day_data.get("brand", "")
-
-    # 统计汇总
-    from collections import defaultdict
-    mention_count = sum(1 for r in records if r.get("brand_mentioned"))
-    mention_rate = round(mention_count / len(records) * 100, 1)
-    avg_score = round(sum(r.get("geo_score", 0) for r in records) / len(records), 1)
-    platform_cnt = defaultdict(int)
-    for r in records:
-        for ref in r.get("refs", []):
-            p = ref.get("platform", "未知")
-            platform_cnt[p] += 1
-    top_platforms = sorted(platform_cnt.items(), key=lambda x: x[1], reverse=True)[:5]
-    total_refs = sum(platform_cnt.values()) or 1
-    platform_weights = [
-        {"platform": p, "count": c, "pct": round(c/total_refs*100, 1)}
-        for p, c in top_platforms
-    ]
-
-    # AI一键分析报告
-    summaries = [
-        {"question": r["question"], "brand_mentioned": r.get("brand_mentioned"),
-         "geo_score": r.get("geo_score"), "main_platform": r.get("main_platform"),
-         "refs_count": r.get("ref_count", 0)}
-        for r in records
-    ]
-    prompt = f"""你是GEO优化专家。请基于以下{date_str}单日爬取数据生成分析报告。
-
-品牌：{brand}
-日期：{date_str}
-总监测问题：{len(records)}条
-品牌提及率：{mention_rate}%
-平均GEO评分：{avg_score}
-平台权重：{json.dumps(platform_weights, ensure_ascii=False)}
-
-详细数据：
-{json.dumps(summaries, ensure_ascii=False, indent=2)}
-
-请生成Markdown报告，包含：
-## 当日核心结论
-## 品牌表现分析（提及率/评分/情感）
-## 平台引用规律（哪个平台权重最高及原因）
-## 表现最好的3个问题场景
-## 表现最差的3个问题场景及改进建议
-## 明日投放建议（具体可执行）"""
-
-    try:
-        report = ai(prompt, 2000)
-        return jsonify({
-            "ok": True,
-            "date": date_str,
-            "stats": {
-                "total": len(records),
-                "mentioned": mention_count,
-                "mention_rate": mention_rate,
-                "avg_score": avg_score,
-                "platform_weights": platform_weights
-            },
-            "report": report
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-@app.route("/api/settings/rawpath", methods=["POST"])
-def set_raw_path():
-    """设置原始数据自定义存储路径"""
-    d = request.json
-    path = d.get("path", "").strip()
-    if path and not os.path.isdir(path):
-        try:
-            os.makedirs(path, exist_ok=True)
-        except Exception as e:
-            return jsonify({"error": f"路径创建失败：{str(e)}"}), 400
-    s = load(F_SETTINGS, {})
-    s["raw_data_path"] = path
-    save(F_SETTINGS, s)
-    return jsonify({"ok": True, "path": path or get_raw_data_dir()})
-
-
 import uuid as uuid_lib
 from flask import Response, stream_with_context
 
@@ -3249,7 +2531,6 @@ from flask import Response, stream_with_context
 crawl_sessions = {}
 
 @app.route("/api/crawl/progress/<session_id>")
-@app.route("/api/doubao/progress/<session_id>")  # 兼容旧接口
 def crawl_progress(session_id):
     """SSE：实时推送爬取进度"""
     def generate():
@@ -3793,7 +3074,7 @@ def precise_generate():
 
 
 if __name__ == "__main__":
-    host = os.environ.get("GEO_HOST", "0.0.0.0")
+    host = os.environ.get("GEO_HOST", "127.0.0.1")
     port = int(os.environ.get("GEO_PORT", "5000"))
     print("="*50)
     print(f"GEO Agent v{APP_VERSION} 启动中...")

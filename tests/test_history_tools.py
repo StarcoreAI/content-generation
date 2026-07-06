@@ -180,14 +180,25 @@ class RecordInsightsTests(unittest.TestCase):
 
         self.assertEqual(insights["total_records"], 2)
         self.assertEqual(insights["total_refs"], 3)
-        self.assertEqual(insights["ai_platforms"][0]["source_platform"], "doubao")
+        self.assertEqual(insights["ai_platforms"][0]["source_platform"], "all")
+        self.assertEqual(insights["ai_platforms"][0]["platform_name"], "全部平台")
+        self.assertEqual(insights["ai_platforms"][0]["total_records"], 2)
+        self.assertEqual(insights["ai_platforms"][0]["total_refs"], 3)
+        self.assertEqual(
+            insights["ai_platforms"][0]["ref_platforms"],
+            [
+                {"platform": "搜狐", "count": 2, "pct": 66.7},
+                {"platform": "知乎", "count": 1, "pct": 33.3},
+            ],
+        )
+        self.assertEqual(insights["ai_platforms"][1]["source_platform"], "doubao")
         self.assertEqual(insights["top_articles"][0]["url"], "https://a.example")
         self.assertEqual(insights["top_articles"][0]["count"], 2)
         self.assertEqual(insights["top_ref_platforms"][0]["platform"], "搜狐")
         self.assertEqual(insights["mentioned_entities"][0]["name"], "竞品汽车音响")
         self.assertEqual(insights["mentioned_entities"][0]["count"], 2)
 
-    def test_build_record_insights_counts_brand_mentions_from_entities(self):
+    def test_build_record_insights_counts_brand_mentions_from_entity_aliases(self):
         from services.record_insights import build_record_insights
 
         records = [
@@ -222,7 +233,101 @@ class RecordInsightsTests(unittest.TestCase):
         self.assertEqual(insights["ai_platforms"][0]["brand_mentions"], 1)
         self.assertEqual(insights["ai_platforms"][0]["mention_rate"], 50.0)
 
-    def test_build_record_insights_selects_first_and_third_entity_title_hits_only(self):
+    def test_build_record_insights_counts_client_name_and_brand_but_filters_them_from_entities(self):
+        from services.record_insights import build_record_insights
+
+        records = [
+            {
+                "id": "r1",
+                "brand": "西安兔博士口腔",
+                "source_platform": "doubao",
+                "brand_mentioned": False,
+                "answer": "兔博士口腔适合学生党，复诊方便。竞品A也被提到。",
+                "refs": [],
+                "mentioned_entities": [
+                    {"name": "兔博士口腔", "type": "口腔机构", "evidence": "兔博士口腔适合学生党"},
+                    {"name": "竞品A", "type": "口腔机构", "evidence": "竞品A也被提到"},
+                ],
+            },
+            {
+                "id": "r2",
+                "brand": "西安兔博士口腔",
+                "source_platform": "doubao",
+                "brand_mentioned": False,
+                "answer": "这里只提到其他机构。",
+                "refs": [],
+                "mentioned_entities": [
+                    {"name": "其他机构", "type": "口腔机构", "evidence": "其他机构"}
+                ],
+            },
+        ]
+
+        insights = build_record_insights(
+            records,
+            own_brand="兔博士",
+            own_client_name="西安兔博士口腔",
+        )
+
+        self.assertEqual(insights["brand_mentions"], 1)
+        self.assertEqual(insights["mention_rate"], 50.0)
+        self.assertEqual([item["name"] for item in insights["mentioned_entities"]], ["竞品A", "其他机构"])
+
+    def test_build_record_insights_filters_new_and_old_own_brand_entities(self):
+        from services.record_insights import build_record_insights
+
+        records = [
+            {
+                "id": "r1",
+                "brand": "旧品牌",
+                "source_platform": "qwen",
+                "brand_mentioned": False,
+                "answer": "旧品牌、旧品牌门店和竞品A都被提到。",
+                "refs": [],
+                "mentioned_entities": [
+                    {"name": "旧品牌", "type": "品牌", "evidence": "旧品牌"},
+                    {"name": "旧品牌门店", "type": "门店", "evidence": "旧品牌门店"},
+                    {"name": "竞品A", "type": "品牌", "evidence": "竞品A"},
+                ],
+            },
+            {
+                "id": "r2",
+                "brand": "新品牌",
+                "source_platform": "deepseek",
+                "brand_mentioned": True,
+                "answer": "新品牌和新品牌旗舰店被提到。",
+                "refs": [],
+                "mentioned_entities": [
+                    {"name": "新品牌", "type": "品牌", "evidence": "新品牌"},
+                    {"name": "新品牌旗舰店", "type": "门店", "evidence": "新品牌旗舰店"},
+                ],
+            },
+        ]
+
+        insights = build_record_insights(records, own_brand="新品牌")
+
+        self.assertEqual([item["name"] for item in insights["mentioned_entities"]], ["竞品A"])
+
+    def test_build_record_insights_hides_all_platform_when_configured_and_actual_single_ai(self):
+        from services.record_insights import build_record_insights
+
+        records = [
+            {
+                "id": "r1",
+                "source_platform": "qwen",
+                "brand_mentioned": False,
+                "answer": "回答",
+                "refs": [
+                    {"title": "文章A", "url": "https://a.example", "platform": "搜狐", "position": 1}
+                ],
+            }
+        ]
+
+        insights = build_record_insights(records, configured_platforms=["qwen"])
+
+        self.assertEqual(len(insights["ai_platforms"]), 1)
+        self.assertEqual(insights["ai_platforms"][0]["source_platform"], "qwen")
+
+    def test_build_record_insights_does_not_return_competitor_article_candidates(self):
         from services.record_insights import build_record_insights
 
         records = [
@@ -283,13 +388,10 @@ class RecordInsightsTests(unittest.TestCase):
 
         insights = build_record_insights(records)
 
-        self.assertEqual(insights["selected_competitors"], ["一号汽车音响", "三号汽车音响"])
-        self.assertEqual(len(insights["competitor_articles"]), 1)
-        self.assertEqual(insights["competitor_articles"][0]["title"], "三号汽车音响门店介绍")
-        self.assertEqual(insights["competitor_articles"][0]["related_entities"], ["三号汽车音响"])
-        self.assertEqual(insights["competitor_articles"][0]["match_types"], ["标题/URL命中"])
-        self.assertEqual(insights["weak_competitor_articles"][0]["title"], "扬州汽车音响改装店推荐榜")
-        self.assertEqual(insights["weak_competitor_articles"][0]["match_types"], ["回答共现"])
+        self.assertNotIn("selected_competitors", insights)
+        self.assertNotIn("competitor_articles", insights)
+        self.assertNotIn("weak_competitor_articles", insights)
+        self.assertEqual(insights["mentioned_entities"][0]["name"], "一号汽车音响")
 
 
 class ArticleBodyHitTests(unittest.TestCase):

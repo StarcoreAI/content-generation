@@ -8,6 +8,24 @@
 
 **Tech Stack:** Flask, Python 3.12, JSON files under `data/`, PDF extraction via `pdfplumber` / `PyMuPDF` / `pypdf` / `python-docx`, Docker or Ubuntu service deployment, optional Nginx reverse proxy, existing unittest suite.
 
+## 2026-07-06 Handoff Status
+
+Current state after the latest agent window:
+
+- Content generation is the active delivery surface. Crawler internals are intentionally paused.
+- Retired frontend modules and old `/api/articles/*` content-generation remnants have been removed from the usable UI/API surface.
+- Default page is now question group management.
+- Content generation history now uses SQLite via `services/content_generations.py`.
+- Article generation supports explicit `对比型` and `介绍型` buttons. The backend no longer infers type from operations text.
+- Article-type histories are isolated, but generated articles are still displayed together newest-first.
+- Generated result cards show the configured model and article type.
+- Startup scripts are simplified: use `run_dev.bat` for local development and `启动局域网.bat` only for LAN demos.
+- Latest full local verification: `.\run_tests.bat -> 133 tests OK`.
+
+Next agent should continue with Tasks 2, 4, 7, and 8 below. Task 3 is partly reduced by SQLite content-history storage and shared JSON-storage locking tests, but the production constraint remains: run one worker until all mutable app data is moved to a real database or protected by a cross-process lock.
+
+Do not use this plan to justify large cleanup. The current goal is cloud-readiness for a small internal operations team, not a rewrite.
+
 ## Global Constraints
 
 - Wednesday scope is content generation: login, customer materials, PDF parsing, sample article reference, multi-turn rewriting, and generation history.
@@ -27,6 +45,8 @@
 2. High-frequency reference articles are still needed, but they do not require this server to own all crawling. A colleague's stable crawler or a designated local crawler machine can provide raw answers and reference URLs.
 3. A lightweight account system is required before cloud exposure. Full customer-level permissions can wait if access is limited to internal operators.
 4. Docker is useful for reducing Windows-to-Linux deployment surprises, but it should not block local crawler experiments. Map cloud test ports away from the local Flask port when needed.
+5. Initial operations scale is under five people. Start with one shared internal customer view after login; defer account-to-customer permission isolation until the first login version is stable.
+6. Run the deployed app with one worker. Do not add multi-worker Gunicorn until mutable storage is fully database-backed or protected across processes.
 
 ## Company Inputs Needed
 
@@ -50,10 +70,12 @@
 - Consumes: leadership target of Wednesday content-generation delivery.
 - Produces: a scoped execution plan that later code changes must follow.
 
-- [ ] Add a dated section to `接手文档.md` stating that content generation is the delivery focus.
-- [ ] Link this plan from `接手文档.md`.
-- [ ] Explicitly mark cloud crawling and one-click multi-platform publishing as post-Wednesday tracks.
+- [x] Add a dated section to `接手文档.md` stating that content generation is the delivery focus.
+- [x] Link this plan from `接手文档.md`.
+- [x] Explicitly mark cloud crawling and one-click multi-platform publishing as post-Wednesday tracks.
 - [ ] Commit only the plan and handoff documentation changes.
+
+Status note: the document updates are done in the working tree. A commit was not made in the previous agent window because the repo already had many unrelated/uncommitted implementation changes.
 
 Verification:
 
@@ -83,6 +105,13 @@ Expected: only the new plan and the handoff pointer are shown.
 - [ ] Protect all app routes except health, login, static assets, and explicitly whitelisted checks.
 - [ ] Add `created_by` to content-generation records.
 - [ ] Add an admin-only initialization path or documented CLI/bootstrap step for the first users.
+
+Implementation note for the next agent:
+
+- Keep the first version intentionally small: username/password login, password hashes, session cookie, logout, current-user endpoint, and a bootstrap path for initial users.
+- Do not build a full role/customer permission matrix yet.
+- After login exists, record `created_by` on content-generation records if the current user is available.
+- Protect all business APIs. Keep `/api/health` public so server health checks still work.
 
 Verification:
 
@@ -144,6 +173,12 @@ Expected: tests pass and existing JSON behavior is unchanged for callers.
 - [ ] Map container port `5000` to host port `8080` for local Docker tests to avoid clashing with the Windows Flask service.
 - [ ] Add `.env.example` with placeholder values only.
 - [ ] Document Docker and non-Docker Ubuntu commands in `deploy/README.md`.
+
+Implementation note for the next agent:
+
+- User has not installed Docker yet. Ask them to install Docker only when the Docker files are ready to test, or when Aliyun ECS access arrives.
+- Local Docker test should map host `8080` to container `5000`, so it does not collide with the existing Windows service on `5000`.
+- If Docker is not available locally, still create the files and verify syntax/build assumptions as far as possible without network installs.
 
 Verification:
 
@@ -239,6 +274,8 @@ Expected after future import work: high-frequency reference articles remain avai
 - [ ] Create initial users.
 - [ ] Run acceptance tests manually from a non-developer machine.
 
+Status note: blocked until Aliyun ECS account details are provided by the user/company.
+
 Verification:
 
 ```bash
@@ -262,6 +299,12 @@ Expected: health endpoint returns success locally on the server; browser access 
 - [ ] Add a restore command.
 - [ ] Add a rollback command for the application container or service.
 - [ ] Run one backup/restore dry run on non-production data.
+
+Implementation note for the next agent:
+
+- Include the SQLite content-generation database in the backup list.
+- The minimum backup set is `data/`, `pdf/`, and `logs/`.
+- If crawler browser profiles or platform login states are later moved to server storage, document whether they should be backed up or deliberately re-created.
 
 Verification:
 

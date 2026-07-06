@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services.article_body_hits import check_article_body_hits
-from services.record_insights import build_record_insights, merge_body_hit_results
+from services.record_insights import build_record_insights, select_article_match_entities
 
 RAW_RECORDS = ROOT / "data" / "raw_records.json"
 BODY_HIT_STORE = ROOT / "data" / "competitor_article_body_hits.json"
@@ -50,23 +50,16 @@ def filter_records(records, client_id, date="", task_id="", group_id="", platfor
 
 def build_body_hit_report(records, limit=20, timeout=10):
     insights = build_record_insights(records)
-    selected_competitors = insights.get("selected_competitors", [])
+    selected_entities = select_article_match_entities(insights.get("mentioned_entities", []))
     top_articles = insights.get("top_articles", [])[:limit]
-    body_hits = check_article_body_hits(top_articles, selected_competitors, timeout=timeout)
-    strict_articles = merge_body_hit_results(
-        insights.get("competitor_articles", []),
-        body_hits,
-        selected_competitors,
-    )
+    body_hits = check_article_body_hits(top_articles, selected_entities, timeout=timeout)
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "total_records": insights.get("total_records", 0),
-        "selected_competitors": selected_competitors,
+        "selected_entities": selected_entities,
         "checked_article_count": len(top_articles),
         "matched_article_count": sum(1 for item in body_hits if item.get("status") == "matched"),
-        "strict_competitor_articles": strict_articles,
         "body_hits": body_hits,
-        "weak_competitor_articles": insights.get("weak_competitor_articles", []),
     }
 
 
@@ -120,7 +113,7 @@ def main():
         upsert_body_hit_report(BODY_HIT_STORE, report)
 
     print(f"records={report['total_records']}")
-    print(f"selected_competitors={','.join(report['selected_competitors'])}")
+    print(f"selected_entities={','.join(report['selected_entities'])}")
     print(f"checked={report['checked_article_count']} matched={report['matched_article_count']}")
     print(f"report={output}")
     if args.store:

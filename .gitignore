@@ -7,6 +7,7 @@ __pycache__/
 *.pid
 logs/
 reports/
+pdf/
 
 # Local runtime data: clients, settings, cookies, browser state, uploads.
 data/

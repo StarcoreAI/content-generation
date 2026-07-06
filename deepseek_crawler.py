@@ -420,13 +420,10 @@ async def crawl_worker(worker_id, questions, pw, results_dict, lock, send_lock=N
             for idx, q in questions:
                 results_dict[idx] = {"ok": False, "error": "need_login", "question": q}
         return
-
     print(f"  [DS Worker {worker_id}] 已登录，开始爬取 {len(questions)} 题")
 
     for i, (idx, question) in enumerate(questions):
         print(f"  [DS Worker {worker_id}] [{i+1}/{len(questions)}] #{idx} {question[:35]}...")
-
-        # 每题都开新对话（包括第一题，确保没有上下文干扰）
         await goto_new_chat(page)
 
         try:

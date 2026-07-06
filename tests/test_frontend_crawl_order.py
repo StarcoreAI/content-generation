@@ -8,6 +8,41 @@ INDEX_HTML = os.path.join(ROOT, "templates", "index.html")
 
 
 class FrontendCrawlOrderTests(unittest.TestCase):
+    def test_frontend_defaults_to_groups_and_removes_retired_modules(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn('class="page on" id="page-groups"', html)
+        self.assertNotIn('class="page on" id="page-dashboard"', html)
+        for retired in [
+            "数据总览",
+            "AI引用情报",
+            "数据看板",
+            "平台库工具箱",
+            "page-dashboard",
+            "page-intel",
+            "page-dashboard_full",
+            "page-platform",
+            "navTo('dashboard'",
+            "navTo('intel'",
+            "navTo('dashboard_full'",
+            "navTo('platform'",
+        ]:
+            self.assertNotIn(retired, html)
+
+    def test_client_switch_clears_open_group_detail(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn("function clearActiveGroupSelection()", html)
+        match = re.search(
+            r"function onClientChange\(\) \{(?P<body>.*?)\n\}",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(match)
+        self.assertIn("clearActiveGroupSelection();", match.group("body"))
+
     def test_crawl_platform_order_puts_doubao_last_for_all_entry_points(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
             html = f.read()
@@ -69,8 +104,11 @@ class FrontendCrawlOrderTests(unittest.TestCase):
 
         self.assertIn('id="dailyAiPlatformCompare"', html)
         self.assertIn('id="dailyEntityMentions"', html)
+        self.assertNotIn('id="dailyPlatformBars"', html)
         self.assertNotIn('id="dailyRefPlatformList"', html)
         self.assertIn("async function loadDailyInsights(", html)
+        self.assertIn("async function loadDailyTopArticles(", html)
+        self.assertNotIn("async function loadDailyRefStats(", html)
         self.assertIn("/api/daily/insights", html)
         self.assertIn("p.ref_platforms", html)
         self.assertIn("来源平台分布", html)
@@ -103,15 +141,15 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("未提到目标竞品", html)
         self.assertIn("正文未确认", html)
 
-    def test_daily_competitor_articles_have_separate_render_area(self):
+    def test_daily_competitor_articles_separate_area_is_removed(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
             html = f.read()
 
-        self.assertIn("优质竞品宣传文章（人工挑选）", html)
-        self.assertIn('id="dailyCompetitorArticles"', html)
-        self.assertIn("function renderDailyCompetitorArticles(", html)
-        self.assertIn("insights.competitor_articles", html)
-        self.assertIn("selected_competitors", html)
+        self.assertNotIn("优质竞品宣传文章（人工挑选）", html)
+        self.assertNotIn('id="dailyCompetitorArticles"', html)
+        self.assertNotIn("function renderDailyCompetitorArticles(", html)
+        self.assertNotIn("insights.competitor_articles", html)
+        self.assertNotIn("selected_competitors", html)
 
     def test_daily_kpi_mention_rate_uses_insights_scope(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
@@ -120,6 +158,22 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("insights.mention_rate", html)
         self.assertIn("document.getElementById('dk-mention').textContent", html)
 
+    def test_daily_record_rows_do_not_show_mention_or_geo_badges(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        match = re.search(
+            r"function renderDailyRecord\(r\) \{(?P<body>.*?)\n\}\n\nfunction renderDailyRecordPage",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(match)
+        body = match.group("body")
+        self.assertNotIn("未提及", body)
+        self.assertNotIn("已提及", body)
+        self.assertNotIn("GEO ${geoScore}", body)
+        self.assertNotIn("brand_mentioned", body)
+
     def test_content_page_uses_simplified_ops_opinion_generation_flow(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
             html = f.read()
@@ -127,10 +181,17 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="contentOpinion"', html)
         self.assertIn('id="contentSampleLinks"', html)
         self.assertIn('id="contentTop20Samples"', html)
+        self.assertIn('id="contentArticleTypeCompare"', html)
+        self.assertIn('id="contentArticleTypeIntro"', html)
+        self.assertIn("selectContentArticleType('对比型')", html)
+        self.assertIn("selectContentArticleType('介绍型')", html)
+        self.assertIn("article_type: selectedContentArticleType", html)
         self.assertIn("loadContentTop20Samples()", html)
         self.assertIn("getSelectedContentTopArticles()", html)
         self.assertIn("generateContentArticle()", html)
         self.assertIn('id="contentArticleList"', html)
+        self.assertIn("调用模型：${a.model || '未知模型'}", html)
+        self.assertIn("${a.article_type || '未标记类型'}", html)
         self.assertIn("/api/content/generate", html)
         self.assertIn("/api/content/generations", html)
         self.assertIn("/api/daily/ref_stats", html)
@@ -138,6 +199,48 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn('id="ct-platform-checks"', html)
         self.assertNotIn('id="ct-brand"', html)
         self.assertNotIn('id="topicInstruction"', html)
+
+    def test_content_material_library_auto_parses_and_only_exposes_delete(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn('id="materialUpload"', html)
+        self.assertIn("multiple", html)
+        self.assertIn('id="localMaterialList"', html)
+        self.assertIn("loadLocalMaterials()", html)
+        self.assertIn("importSelectedLocalMaterials()", html)
+        self.assertIn("/api/materials/local", html)
+        self.assertIn("/import-local", html)
+        self.assertNotIn("parseMaterial(", html)
+        self.assertNotIn("confirmMaterial(", html)
+        self.assertIn("delMaterial(", html)
+        self.assertIn("materialDisplayStatus(", html)
+
+    def test_retired_content_and_dashboard_api_calls_are_removed(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        retired_snippets = [
+            "/api/articles",
+            "/api/intel/",
+            "/api/platforms",
+            "/api/stats/",
+            "/api/content/gen_topics",
+            "batchGenerate(",
+            "loadArticles(",
+            "setStatus(",
+            "formatArticle(",
+            "viewArticle(",
+            "delArticle(",
+            "genSmartTopics(",
+            "ct-topics",
+            "ct-platform-checks",
+            "art-filter",
+            "articleList",
+            "formatModal",
+        ]
+        for snippet in retired_snippets:
+            self.assertNotIn(snippet, html)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,8 @@ if exist ".venv\Scripts\python.exe" (
 )
 
 if not exist logs mkdir logs
+set "GEO_HOST=0.0.0.0"
+set "GEO_PORT=5000"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
 

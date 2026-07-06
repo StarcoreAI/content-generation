@@ -307,7 +307,6 @@ async def crawl_worker(worker_id, questions, pw, results_dict, lock):
             for idx, q in questions:
                 results_dict[idx] = {"ok": False, "error": "need_login", "question": q}
         return
-
     print(f"  [QW Worker {worker_id}] 已登录，开始爬取 {len(questions)} 题")
 
     for i, (idx, question) in enumerate(questions):

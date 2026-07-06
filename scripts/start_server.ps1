@@ -1,7 +1,14 @@
 $ErrorActionPreference = "Stop"
 
 $root = Split-Path -Parent $PSScriptRoot
-$port = 5000
+if (-not $env:GEO_HOST) {
+    $env:GEO_HOST = "0.0.0.0"
+}
+if (-not $env:GEO_PORT) {
+    $env:GEO_PORT = "5000"
+}
+$hostValue = $env:GEO_HOST
+$port = [int]$env:GEO_PORT
 Set-Location $root
 
 function Get-ListenerPid {
@@ -45,10 +52,12 @@ function Get-LanIp {
 }
 
 function Write-AccessUrls {
-    Write-Host "Open local: http://localhost:5000"
-    $lanIp = Get-LanIp
-    if ($lanIp) {
-        Write-Host "Open LAN:   http://${lanIp}:5000"
+    Write-Host "Open local: http://localhost:$port"
+    if ($hostValue -in @("0.0.0.0", "::")) {
+        $lanIp = Get-LanIp
+        if ($lanIp) {
+            Write-Host "Open LAN:   http://${lanIp}:$port"
+        }
     }
 }
 
@@ -75,36 +84,17 @@ if (-not (Test-Path $logs)) {
     New-Item -ItemType Directory -Path $logs | Out-Null
 }
 
-$createdPid = $null
-$commandLine = "`"$python`" -u `"$app`""
+$psi = New-Object System.Diagnostics.ProcessStartInfo
+$psi.FileName = $python
+$psi.Arguments = "-u `"$app`""
+$psi.WorkingDirectory = $root
+$psi.UseShellExecute = $false
+$psi.CreateNoWindow = $true
+$psi.EnvironmentVariables["GEO_HOST"] = $hostValue
+$psi.EnvironmentVariables["GEO_PORT"] = [string]$port
 
-try {
-    $result = Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments @{
-        CommandLine = $commandLine
-        CurrentDirectory = $root
-    } -ErrorAction Stop
-
-    if ($result.ReturnValue -ne 0) {
-        throw "Win32_Process.Create returned $($result.ReturnValue)"
-    }
-    $createdPid = [int]$result.ProcessId
-}
-catch {
-    Write-Host "WMI start failed, falling back to clean ProcessStartInfo: $($_.Exception.Message)"
-
-    $outLog = Join-Path $logs "server.out.log"
-    $errLog = Join-Path $logs "server.err.log"
-
-    $psi = New-Object System.Diagnostics.ProcessStartInfo
-    $psi.FileName = "cmd.exe"
-    $psi.Arguments = "/c start `"GEO Agent`" /min `"$python`" -u `"$app`""
-    $psi.WorkingDirectory = $root
-    $psi.UseShellExecute = $false
-    $psi.CreateNoWindow = $true
-
-    $process = [System.Diagnostics.Process]::Start($psi)
-    $createdPid = [int]$process.Id
-}
+$process = [System.Diagnostics.Process]::Start($psi)
+$createdPid = [int]$process.Id
 
 Save-Pid -ProcessId $createdPid
 

@@ -248,14 +248,10 @@ tr:hover td{background:rgba(109,92,247,.02)}
   <div class="t-logo">✦ GEO Agent</div>
   <div class="t-div"></div>
   <div class="t-nav">
-    <div class="t-ni on" onclick="navTo('dashboard',this)">总览</div>
-    <div class="t-ni" onclick="navTo('groups',this)">问题组</div>
-    <div class="t-ni" onclick="navTo('intel',this)">引用情报</div>
+    <div class="t-ni on" onclick="navTo('groups',this)">问题组</div>
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
-    <div class="t-ni" onclick="navTo('dashboard_full',this)">数据看板</div>
-    <div class="t-ni" onclick="navTo('platform',this)">平台库</div>
   </div>
   <div class="t-right">
     <select class="t-sel" id="globalClient" onchange="onClientChange()">
@@ -278,15 +274,11 @@ tr:hover td{background:rgba(109,92,247,.02)}
     </div>
   </div>
   <div class="s-sec">核心功能</div>
-  <div class="s-nav on" onclick="navTo('dashboard',this)"><i class="ti ti-layout-dashboard"></i>数据总览</div>
-  <div class="s-nav" onclick="navTo('groups',this)"><i class="ti ti-folder"></i>问题组管理</div>
-  <div class="s-nav" onclick="navTo('intel',this)"><i class="ti ti-radar"></i>引用情报<span class="s-pip" style="background:var(--pri)">核心</span></div>
+  <div class="s-nav on" onclick="navTo('groups',this)"><i class="ti ti-folder"></i>问题组管理</div>
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
-  <div class="s-nav" onclick="navTo('dashboard_full',this)"><i class="ti ti-chart-bar"></i>数据看板</div>
   <div class="s-sec">配置</div>
-  <div class="s-nav" onclick="navTo('platform',this)"><i class="ti ti-apps"></i>平台库工具箱</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
   <div class="s-nav" onclick="navTo('settings',this)"><i class="ti ti-settings"></i>系统设置</div>
   <div class="s-gap"></div>
@@ -356,24 +348,10 @@ tr:hover td{background:rgba(109,92,247,.02)}
     </div>
   </div>
 
-  <!-- 引用源统计 -->
-  <div class="two-col">
-    <div class="card">
-      <div class="card-hd"><span class="card-title">平台引用权重</span></div>
-      <div id="dailyPlatformBars"><div class="empty"><i class="ti ti-chart-bar"></i><p>加载中...</p></div></div>
-    </div>
-    <div class="card">
-      <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
-      <div id="dailyTopArticles"><div class="empty"><i class="ti ti-file-text"></i><p>加载中...</p></div></div>
-    </div>
-  </div>
-
+  <!-- 高频引用文章 -->
   <div class="card">
-    <div class="card-hd">
-      <span class="card-title">优质竞品宣传文章（人工挑选）</span>
-      <span style="font-size:11px;color:var(--text3)" id="dailyCompetitorArticleNote">基于竞品榜第1和第3名筛选</span>
-    </div>
-    <div id="dailyCompetitorArticles"><div style="color:var(--text3);font-size:12px">暂无候选文章</div></div>
+    <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
+    <div id="dailyTopArticles"><div class="empty"><i class="ti ti-file-text"></i><p>加载中...</p></div></div>
   </div>
 
   <!-- 数据列表（可删除） -->
@@ -420,7 +398,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
 </div>
 
 <!-- ═══ 问题组管理 ═══ -->
-<div class="page" id="page-groups">
+<div class="page on" id="page-groups">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>问题组管理</em></div><div class="pg-sub">按主题分组管理手动录入的问题，爬取时可按组一次性执行</div></div>
     <button class="btn btn-p btn-sm" onclick="showCreateGroup()">+ 新建问题组</button>
@@ -583,161 +561,6 @@ tr:hover td{background:rgba(109,92,247,.02)}
   </div>
 </div>
 
-<!-- ═══ 总览 ═══ -->
-<div class="page on" id="page-dashboard">
-  <div class="pg-hd">
-    <div>
-      <div class="pg-title">你好呀 ✦ <em>今日数据总览</em></div>
-      <div class="pg-sub" id="dash-date">加载中...</div>
-    </div>
-    <div class="acts">
-      <button class="btn btn-o btn-sm" onclick="exportStats()">导出报告</button>
-      <button class="btn btn-p btn-sm" onclick="navTo('intel',null)">启动监测 ▶</button>
-    </div>
-  </div>
-  <div class="kpi-grid">
-    <div class="kpi">
-      <div class="kpi-top"><div class="kpi-ico" style="background:rgba(109,92,247,.1)">📡</div><div class="kpi-badge" style="background:rgba(74,222,128,.12);color:#16a34a" id="k-ref-d">--</div></div>
-      <div class="kpi-n" style="color:var(--pri)" id="k-ref">--</div>
-      <div class="kpi-lbl">累计引用源</div>
-      <div class="kpi-deco">📡</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-top"><div class="kpi-ico" style="background:rgba(244,114,182,.1)">⭐</div><div class="kpi-badge" style="background:rgba(74,222,128,.12);color:#16a34a" id="k-rate-d">--</div></div>
-      <div class="kpi-n" style="color:var(--pink)" id="k-rate">--%</div>
-      <div class="kpi-lbl">品牌提及率</div>
-      <div class="kpi-deco">⭐</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-top"><div class="kpi-ico" style="background:rgba(245,158,11,.1)">📝</div><div class="kpi-badge" style="background:rgba(245,158,11,.12);color:#92400e">待审核</div></div>
-      <div class="kpi-n" style="color:var(--amber)" id="k-pending">--</div>
-      <div class="kpi-lbl">待审核文章</div>
-      <div class="kpi-deco">📝</div>
-    </div>
-    <div class="kpi">
-      <div class="kpi-top"><div class="kpi-ico" style="background:rgba(52,211,153,.1)">🏆</div><div class="kpi-badge" style="background:rgba(52,211,153,.12);color:#065f46" id="k-score-d">--</div></div>
-      <div class="kpi-n" style="color:var(--teal)" id="k-score">--</div>
-      <div class="kpi-lbl">平均GEO评分</div>
-      <div class="kpi-deco">🏆</div>
-    </div>
-  </div>
-  <div class="two-col">
-    <div class="card">
-      <div class="card-hd"><span class="card-title">✦ 平台引用权重</span><span style="font-size:11px;color:var(--pri-l);cursor:pointer;font-weight:700" onclick="navTo('intel',null)">查看详情 →</span></div>
-      <div id="dash-platform-bars"><div class="empty"><i class="ti ti-chart-bar"></i><p>暂无数据</p></div></div>
-    </div>
-    <div class="card">
-      <div class="card-hd"><span class="card-title">✦ 主参考文章</span><span style="font-size:11px;color:var(--pri-l);cursor:pointer;font-weight:700" onclick="navTo('intel',null)">查看全部 →</span></div>
-      <div id="dash-ref-articles"><div class="empty"><i class="ti ti-file-text"></i><p>暂无数据</p></div></div>
-    </div>
-  </div>
-  <div class="three-col">
-    <div class="card" style="margin-bottom:0">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div class="kpi-ico" style="background:rgba(109,92,247,.1);width:38px;height:38px;border-radius:12px">🔍</div>
-        <div><div style="font-size:11px;color:var(--text2);font-weight:700;margin-bottom:2px">累计监测次数</div><div style="font-size:18px;font-weight:900;color:#312e81" id="k-total">--</div></div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:0">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div class="kpi-ico" style="background:rgba(244,114,182,.1);width:38px;height:38px;border-radius:12px">✍</div>
-        <div><div style="font-size:11px;color:var(--text2);font-weight:700;margin-bottom:2px">累计生产文章</div><div style="font-size:18px;font-weight:900;color:#312e81" id="k-articles">--</div></div>
-      </div>
-    </div>
-    <div class="card" style="margin-bottom:0">
-      <div style="display:flex;align-items:center;gap:10px">
-        <div class="kpi-ico" style="background:rgba(52,211,153,.1);width:38px;height:38px;border-radius:12px">✅</div>
-        <div><div style="font-size:11px;color:var(--text2);font-weight:700;margin-bottom:2px">已审核发布</div><div style="font-size:18px;font-weight:900;color:#312e81" id="k-approved">--</div></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-<!-- ═══ 引用情报 ═══ -->
-<div class="page" id="page-intel">
-  <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>AI引用情报</em></div><div class="pg-sub">录入 AI 回答 → 自动提取引用源 → 深度分析平台偏好规律</div></div>
-    <div class="acts">
-      <button class="btn btn-o btn-sm" onclick="genIntelReport()"><span class="spin" id="spReport" style="display:none"></span>生成偏好报告</button>
-    </div>
-  </div>
-  <!-- 单日数据分析面板 -->
-  <div class="card">
-    <div class="card-hd">
-      <span class="card-title">📅 单日数据分析</span>
-      <div style="display:flex;gap:8px;align-items:center">
-        <input type="date" id="dailyDatePicker" style="font-size:11px;padding:5px 8px;border-radius:var(--r-sm)" onchange="loadDailyList()">
-        <button class="btn btn-p btn-sm" onclick="analyzeDailyData()">
-          <span class="spin" id="spDaily" style="display:none"></span>一键分析
-        </button>
-      </div>
-    </div>
-    <div id="dailyDateList" style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px"></div>
-    <div id="intelDailyAnalysisResult" style="display:none">
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px" id="dailyStats"></div>
-      <div class="report-md" id="dailyReport"></div>
-    </div>
-  </div>
-
-  <div class="info-banner">手动模式：① 手动输入问题 → ② 去 AI 平台提问 → ③ 展开「参考资料/引用来源」→ ④ 把回答和引用标题/链接粘贴进来 → ⑤ 点击分析</div>
-  <div class="card">
-    <div class="card-hd"><span class="card-title">录入本次监测数据</span></div>
-    <div class="form-row">
-      <div class="fld"><label>手动输入问题</label><input id="intel-question" placeholder="输入向 AI 平台提问的问题"></div>
-    </div>
-    <div class="form-row">
-      <div class="fld"><label>豆包回答内容（完整粘贴）</label><textarea id="intel-answer" rows="5" placeholder="将豆包的完整回答粘贴到这里..."></textarea></div>
-    </div>
-    <div class="form-row">
-      <div class="fld">
-        <label>引用文章列表（每行一条，格式：标题 | 平台名 | 链接，链接可选）</label>
-        <textarea id="intel-refs" rows="5" placeholder="2026昆山装修权威榜单推荐+避坑 | 土巴兔 | https://...&#10;昆山十大装修公司推荐榜单 | 新浪家居&#10;..."></textarea>
-      </div>
-    </div>
-    <button class="btn btn-p" id="btnAnalyze" onclick="analyzeIntel()">
-      <span class="spin" id="spAnalyze" style="display:none"></span> 开始分析
-    </button>
-  </div>
-  <div class="card" id="intelResult" style="display:none">
-    <div class="card-hd"><span class="card-title">✦ 分析结果</span></div>
-    <div class="two-col" style="margin-bottom:14px">
-      <div>
-        <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">品牌引用状态</div>
-        <div id="ir-brand"></div>
-      </div>
-      <div>
-        <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">GEO 综合评分</div>
-        <div id="ir-score" style="font-size:28px;font-weight:900;color:var(--pri)">--</div>
-      </div>
-    </div>
-    <div style="margin-bottom:14px">
-      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px">主参考文章</div>
-      <div id="ir-main-ref"></div>
-    </div>
-    <div style="margin-bottom:14px">
-      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:8px">平台权重分布</div>
-      <div id="ir-platforms"></div>
-    </div>
-    <div>
-      <div style="font-size:11px;color:var(--text3);font-weight:700;margin-bottom:6px">优化建议</div>
-      <div id="ir-suggestion" style="font-size:13px;color:var(--pri);font-weight:700;padding:10px;background:var(--pri-ll);border-radius:var(--r-sm)"></div>
-    </div>
-  </div>
-  <div class="card" id="intelReportCard" style="display:none">
-    <div class="card-hd"><span class="card-title">✦ AI 平台偏好洞察报告</span><button class="btn btn-o btn-sm" onclick="copyReport()">复制</button></div>
-    <div class="report-md" id="intelReportContent"></div>
-  </div>
-  <div class="card">
-    <div class="card-hd"><span class="card-title">历史监测记录</span></div>
-    <div class="tbl-wrap">
-      <table>
-        <thead><tr><th>日期</th><th>问题</th><th>品牌提及</th><th>GEO评分</th><th>主参考平台</th><th>建议</th></tr></thead>
-        <tbody id="intelTable"><tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">暂无记录</td></tr></tbody>
-      </table>
-    </div>
-  </div>
-</div>
-
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
@@ -749,11 +572,15 @@ tr:hover td{background:rgba(109,92,247,.02)}
   <div class="card">
     <div class="card-hd">
       <div><span class="card-title">📁 客户品牌资料库</span><div class="card-sub">上传品牌介绍、产品手册等，AI生产文章时自动参考</div></div>
-      <label class="btn btn-o btn-sm" style="cursor:pointer">
-        上传资料
-        <input type="file" id="materialUpload" accept=".txt,.md,.pdf,.docx" style="display:none" onchange="uploadMaterial(this)">
-      </label>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" onclick="loadLocalMaterials()">导入本地 pdf/</button>
+        <label class="btn btn-o btn-sm" style="cursor:pointer">
+          上传资料
+          <input type="file" id="materialUpload" accept=".txt,.md,.pdf,.docx" multiple style="display:none" onchange="uploadMaterial(this)">
+        </label>
+      </div>
     </div>
+    <div id="localMaterialList" style="display:none;margin-bottom:12px;padding:10px;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm)"></div>
     <div id="materialList"><div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / docx</div></div>
   </div>
 
@@ -774,6 +601,15 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用当前客户的全部资料，并带上本客户历史生成内容</div></div>
     </div>
     <div class="form-row">
+      <div class="fld">
+        <label>文章类型</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button type="button" class="btn btn-p btn-sm" id="contentArticleTypeCompare" onclick="selectContentArticleType('对比型')">对比型</button>
+          <button type="button" class="btn btn-o btn-sm" id="contentArticleTypeIntro" onclick="selectContentArticleType('介绍型')">介绍型</button>
+        </div>
+      </div>
+    </div>
+    <div class="form-row">
       <div class="fld"><label>运营修改意见 / 生成要求</label><textarea id="contentOpinion" rows="7" placeholder="例如：写一篇面向扬州车主的汽车音响升级宣传文章，语气自然一点，重点写施工流程、调音能力和到店体验。"></textarea></div>
     </div>
     <div style="display:flex;align-items:center;gap:12px">
@@ -789,78 +625,6 @@ tr:hover td{background:rgba(109,92,247,.02)}
     </div>
     <div id="contentArticleList"><div class="empty"><i class="ti ti-writing"></i><p>暂无文章，请先生成</p></div></div>
   </div>
-</div>
-
-<!-- ═══ 数据看板 ═══ -->
-<div class="page" id="page-dashboard_full">
-  <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>数据看板</em></div><div class="pg-sub">自动汇总每日监测与生产数据，支持导出</div></div>
-    <button class="btn btn-o btn-sm" onclick="exportStats()">导出 CSV</button>
-  </div>
-  <div class="two-col">
-    <div class="chart-box">
-      <div class="chart-title">近7日品牌提及趋势</div>
-      <canvas id="trendChart" height="160"></canvas>
-    </div>
-    <div class="chart-box">
-      <div class="chart-title">平台引用权重分布</div>
-      <canvas id="platformChart" height="160"></canvas>
-    </div>
-  </div>
-  <div class="two-col">
-    <div class="chart-box">
-      <div class="chart-title">近7日文章生产量</div>
-      <canvas id="articleChart" height="160"></canvas>
-    </div>
-    <div class="card">
-      <div class="card-title" style="margin-bottom:14px">数据摘要</div>
-      <div id="statsTable"></div>
-    </div>
-  </div>
-  <!-- 跨平台对比 -->
-  <div class="card" style="margin-top:16px">
-    <div class="card-hd">
-      <span class="card-title">✦ 跨平台品牌表现对比</span>
-      <button class="btn btn-o btn-sm" onclick="loadPlatformCompare()" style="margin-left:auto">刷新对比</button>
-    </div>
-    <div id="platformCompareChart" style="margin-top:12px">
-      <canvas id="compareChart" height="120"></canvas>
-    </div>
-    <div id="platformCompareTable" style="margin-top:16px"></div>
-  </div>
-</div>
-
-<!-- ═══ 平台库 ═══ -->
-<div class="page" id="page-platform">
-  <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>平台库工具箱</em></div><div class="pg-sub">自由增删平台，AI自动补全规范，驱动内容生产</div></div>
-    <button class="btn btn-p btn-sm" onclick="showAddPlatform()">+ 添加平台</button>
-  </div>
-  <div class="card" id="addPlatformCard" style="display:none">
-    <div class="card-hd"><span class="card-title">添加新平台</span></div>
-    <div class="form-row col2">
-      <div class="fld"><label>平台名称</label><input id="pf-name" placeholder="如：今日头条、知乎、搜狐号"></div>
-      <div class="fld" style="display:flex;align-items:flex-end">
-        <button class="btn btn-o btn-sm" style="width:100%" onclick="aiFillPlatform()"><span class="spin" id="spPfFill" style="display:none"></span>AI 自动补全规范</button>
-      </div>
-    </div>
-    <div class="form-row col2">
-      <div class="fld"><label>内容风格</label><input id="pf-style" placeholder="如：资讯类、干货长文、生活化"></div>
-      <div class="fld"><label>推荐字数</label><input id="pf-words" placeholder="如：800-1500字"></div>
-    </div>
-    <div class="form-row col2">
-      <div class="fld"><label>标题规范</label><input id="pf-title" placeholder="如：含数字、含地名、疑问句式"></div>
-      <div class="fld"><label>禁忌事项</label><input id="pf-taboo" placeholder="如：不能含外链、不能广告色彩太重"></div>
-    </div>
-    <div class="form-row">
-      <div class="fld"><label>其他备注</label><input id="pf-notes" placeholder="其他注意事项"></div>
-    </div>
-    <div class="acts">
-      <button class="btn btn-p btn-sm" onclick="savePlatform()">保存</button>
-      <button class="btn btn-o btn-sm" onclick="document.getElementById('addPlatformCard').style.display='none'">取消</button>
-    </div>
-  </div>
-  <div id="platformList"><div class="empty"><i class="ti ti-apps"></i><p>暂无平台，点击「添加平台」开始</p></div></div>
 </div>
 
 <!-- ═══ 客户管理 ═══ -->
@@ -930,12 +694,8 @@ function navTo(page, el) {
   document.getElementById('page-' + page)?.classList.add('on');
   if (el) el.classList.add('on');
   // page-specific load
-  if (page === 'dashboard') loadDashboard();
-  if (page === 'intel') loadIntel();
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
-  if (page === 'dashboard_full') loadFullDashboard();
-  if (page === 'platform') loadPlatforms();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
@@ -1153,9 +913,10 @@ function onClientChange() {
   currentGoal = opt?.dataset?.goal || '';
   try { currentClientPlatforms = normalizeContractPlatforms(JSON.parse(opt?.dataset?.platforms || '[]')); }
   catch { currentClientPlatforms = []; }
+  clearActiveGroupSelection();
   renderGroupPlatformChoices();
   resetDailyTaskFilter();
-  loadDashboard();
+  loadGroups();
   loadDailyGroupFilter();  // 切换客户时刷新问题组筛选器
   // 如果当前在当日整理页面，自动刷新数据+模板
   if (document.getElementById('page-daily')?.classList.contains('on')) {
@@ -1224,57 +985,6 @@ async function delClient(id) {
   if (!confirm('确认删除？')) return;
   await api('/api/clients/'+id,'DELETE');
   toast('已删除'); loadClients(); loadClientsDropdown();
-}
-
-// ── Dashboard ─────────────────────────────────────────
-async function loadDashboard() {
-  const d = new Date();
-  document.getElementById('dash-date').textContent =
-    `${d.getFullYear()}年${d.getMonth()+1}月${d.getDate()}日 · ${currentBrand || '请先选择客户'} · 豆包引用监测`;
-  const s = await api('/api/stats/overview?client_id=' + currentClientId);
-  document.getElementById('k-ref').textContent = s.total_records;
-  document.getElementById('k-ref-d').textContent = s.total_records ? '有数据' : '暂无';
-  document.getElementById('k-rate').textContent = s.mention_rate + '%';
-  document.getElementById('k-rate-d').textContent = '↑ 监测中';
-  document.getElementById('k-pending').textContent = s.pending_articles;
-  document.getElementById('k-score').textContent = s.avg_geo_score || '--';
-  document.getElementById('k-score-d').textContent = s.avg_geo_score ? '已评分' : '--';
-  document.getElementById('k-total').textContent = s.total_records;
-  document.getElementById('k-articles').textContent = s.total_articles;
-  document.getElementById('k-approved').textContent = s.approved_articles;
-
-  // Platform bars
-  const pb = document.getElementById('dash-platform-bars');
-  if (s.platform_weights?.length) {
-    pb.innerHTML = s.platform_weights.map(p => `
-      <div class="bar-row">
-        <span class="b-lbl">${p.platform}</span>
-        <div class="b-track"><div class="b-fill" style="width:${p.pct}%;background:linear-gradient(90deg,var(--pri),var(--pri-l))"></div></div>
-        <span class="b-pct" style="color:var(--pri)">${p.pct}%</span>
-      </div>`).join('');
-  } else { pb.innerHTML = '<div class="empty"><i class="ti ti-chart-bar"></i><p>暂无数据</p></div>'; }
-
-  // Ref articles
-  const ra = document.getElementById('dash-ref-articles');
-  const records = await api(`/api/intel/records?client_id=${currentClientId}&platform=${currentPlatform}`);
-  const topRefs = [];
-  records.slice(0,5).forEach(r => {
-    const mr = r.analysis?.main_ref;
-    if (mr?.title) topRefs.push(mr);
-  });
-  if (topRefs.length) {
-    ra.innerHTML = topRefs.map((r,i) => `
-      <div class="ref-item">
-        <div class="ref-rank" style="background:rgba(109,92,247,.1);color:var(--pri)">${i+1}</div>
-        <div>
-          <div class="ref-ttl">${r.title}</div>
-          <div class="ref-tags">
-            <span class="badge badge-p">${r.platform||'未知'}</span>
-            <span style="font-size:10px;font-weight:800;color:var(--teal)">${r.match_score||'--'}% 符合</span>
-          </div>
-        </div>
-      </div>`).join('');
-  } else { ra.innerHTML = '<div class="empty"><i class="ti ti-file-text"></i><p>暂无数据</p></div>'; }
 }
 
 // ── 平台登录状态 ──────────────────────────────────────
@@ -1352,156 +1062,6 @@ async function checkAllLoginStatus() {
 }
 function checkLoginStatus() { checkAllLoginStatus(); }
 
-// ── 单日数据分析 ──────────────────────────────────────
-async function loadDailyList() {
-  if (!currentClientId) return;
-  const r = await api('/api/crawl/daily_list?client_id=' + currentClientId);
-  const el = document.getElementById('dailyDateList');
-  if (!r.dates?.length) {
-    el.innerHTML = '<span style="font-size:11px;color:var(--text3)">暂无历史数据</span>';
-    return;
-  }
-  el.innerHTML = r.dates.map(d => `
-    <span onclick="selectDailyDate('${d}')" style="padding:4px 10px;background:rgba(255,255,255,.8);border:1.5px solid var(--border2);border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;color:var(--pri)" id="date-${d}">${d}</span>
-  `).join('');
-  // 默认选今天或最新
-  if (r.dates.length) selectDailyDate(r.dates[0]);
-}
-
-function selectDailyDate(d) {
-  document.getElementById('dailyDatePicker').value = d;
-  document.querySelectorAll('[id^="date-"]').forEach(el => {
-    el.style.background = 'rgba(255,255,255,.8)';
-    el.style.borderColor = 'var(--border2)';
-    el.style.color = 'var(--pri)';
-  });
-  const sel = document.getElementById('date-' + d);
-  if (sel) {
-    sel.style.background = 'var(--pri-ll)';
-    sel.style.borderColor = 'var(--pri)';
-    sel.style.color = '#312e81';
-  }
-}
-
-async function analyzeDailyData() {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const date = document.getElementById('dailyDatePicker').value || new Date().toISOString().slice(0,10);
-  spin('spDaily', true);
-  try {
-    const r = await api('/api/crawl/daily_analyze', 'POST', {
-      client_id: currentClientId, date
-    });
-    if (r.error) { toast(r.error, 'err'); return; }
-    const result = document.getElementById('intelDailyAnalysisResult');
-    result.style.display = 'block';
-    const s = r.stats;
-    document.getElementById('dailyStats').innerHTML = [
-      ['监测次数', s.total, '次', 'var(--pri)'],
-      ['品牌提及', s.mentioned, '次', 'var(--teal)'],
-      ['提及率', s.mention_rate, '%', 'var(--pink)'],
-      ['平均评分', s.avg_score, '分', 'var(--amber)'],
-    ].map(([l,v,u,c]) => `
-      <div style="padding:12px;background:rgba(255,255,255,.85);border-radius:var(--r-sm);border:1.5px solid var(--border2);text-align:center">
-        <div style="font-size:20px;font-weight:900;color:${c}">${v}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
-        <div style="font-size:10px;color:var(--text2);font-weight:700;margin-top:3px">${l}</div>
-      </div>`).join('');
-    document.getElementById('dailyReport').innerHTML = marked.parse(r.report);
-    toast(`${date} 单日分析完成 ✦`);
-  } finally { spin('spDaily', false); }
-}
-
-// ── 豆包自动爬取 end ──────────────────────────────────
-async function loadIntel() {
-  checkAllLoginStatus();
-  loadIntelTable();
-}
-function parseRefs(raw) {
-  return raw.split('\n').filter(l => l.trim()).map(l => {
-    const parts = l.split('|').map(s => s.trim());
-    return {title: parts[0]||'', platform: parts[1]||'未知', url: parts[2]||''};
-  });
-}
-async function analyzeIntel() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  const question = document.getElementById('intel-question').value.trim();
-  const answer = document.getElementById('intel-answer').value.trim();
-  const refsRaw = document.getElementById('intel-refs').value.trim();
-  if (!question || !answer) { toast('请填写问题和回答内容','err'); return; }
-  const refs = parseRefs(refsRaw);
-  spin('spAnalyze',true); disableBtn('btnAnalyze',true);
-  try {
-    const r = await api('/api/intel/analyze','POST',{
-      question, answer, refs, brand: currentBrand, client_id: currentClientId
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    showIntelResult(r.analysis);
-    loadIntelTable();
-    toast('分析完成，已保存 ✦');
-  } finally { spin('spAnalyze',false); disableBtn('btnAnalyze',false); }
-}
-function showIntelResult(a) {
-  const card = document.getElementById('intelResult');
-  card.style.display = 'block';
-  document.getElementById('ir-brand').innerHTML = a.brand_mentioned
-    ? `<span class="badge badge-g">✓ 已提及</span> <span style="font-size:12px;color:var(--text2)">${a.brand_snippet||''}</span>`
-    : '<span class="badge badge-r">✗ 未提及</span>';
-  const score = a.geo_score||0;
-  const sc = score>=60?'var(--teal)':score>0?'var(--amber)':'var(--red)';
-  document.getElementById('ir-score').style.color = sc;
-  document.getElementById('ir-score').textContent = score;
-  const mr = a.main_ref||{};
-  document.getElementById('ir-main-ref').innerHTML = mr.title ? `
-    <div style="padding:10px;background:var(--pri-ll);border-radius:var(--r-sm)">
-      <div style="font-size:13px;font-weight:800;color:#312e81;margin-bottom:5px">${mr.title}</div>
-      <div style="display:flex;gap:8px;align-items:center">
-        <span class="badge badge-p">${mr.platform||'未知'}</span>
-        <span style="font-size:11px;font-weight:800;color:var(--teal)">${mr.match_score}% 符合</span>
-        <span style="font-size:11px;color:var(--text2)">${mr.match_reason||''}</span>
-      </div>
-    </div>` : '<span style="color:var(--text3)">无</span>';
-  const pws = a.platform_weights||[];
-  document.getElementById('ir-platforms').innerHTML = pws.map(p => `
-    <div class="bar-row">
-      <span class="b-lbl">${p.platform}</span>
-      <div class="b-track"><div class="b-fill" style="width:${p.pct}%;background:linear-gradient(90deg,var(--pri),var(--pri-l))"></div></div>
-      <span class="b-pct" style="color:var(--pri)">${p.pct}%</span>
-    </div>`).join('') || '<span style="color:var(--text3);font-size:12px">暂无平台数据</span>';
-  document.getElementById('ir-suggestion').textContent = a.suggestion||'--';
-}
-async function loadIntelTable() {
-  const records = await api(`/api/intel/records?client_id=${currentClientId}&platform=${currentPlatform}`);
-  const tbody = document.getElementById('intelTable');
-  if (!records.length) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--text3);padding:20px">暂无记录</td></tr>'; return; }
-  tbody.innerHTML = records.slice(0,20).map(r => {
-    const a = r.analysis||{};
-    const sc = !a.brand_mentioned ? 'var(--red)' : (a.geo_score||0)>=60 ? 'var(--teal)' : 'var(--amber)';
-    const mr = a.main_ref||{};
-    return `<tr>
-      <td style="color:var(--text3);font-size:11px;white-space:nowrap">${r.date}</td>
-      <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${r.question}">${r.question}</td>
-      <td>${a.brand_mentioned?'<span class="badge badge-g">是</span>':'<span class="badge badge-r">否</span>'}</td>
-      <td><span style="font-weight:900;color:${sc}">${a.geo_score??'--'}</span></td>
-      <td>${mr.platform?`<span class="badge badge-p">${mr.platform}</span>`:'--'}</td>
-      <td style="max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text2)" title="${a.suggestion||''}">${a.suggestion||'--'}</td>
-    </tr>`;
-  }).join('');
-}
-async function genIntelReport() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  spin('spReport',true);
-  try {
-    const r = await api('/api/intel/ai_report','POST',{client_id: currentClientId});
-    if (r.error) { toast(r.error,'err'); return; }
-    document.getElementById('intelReportCard').style.display = 'block';
-    document.getElementById('intelReportContent').innerHTML = marked.parse(r.report);
-    toast('报告生成完成 ✦');
-  } finally { spin('spReport',false); }
-}
-function copyReport() {
-  navigator.clipboard.writeText(document.getElementById('intelReportContent').innerText)
-    .then(() => toast('报告已复制 ✦'));
-}
-
 // ── Content ───────────────────────────────────────────
 let contentTop20Articles = [];
 
@@ -1568,6 +1128,16 @@ async function loadContentTop20Samples() {
   }
 }
 
+let selectedContentArticleType = '对比型';
+function selectContentArticleType(type) {
+  selectedContentArticleType = type === '介绍型' ? '介绍型' : '对比型';
+  const compareBtn = document.getElementById('contentArticleTypeCompare');
+  const introBtn = document.getElementById('contentArticleTypeIntro');
+  if (!compareBtn || !introBtn) return;
+  compareBtn.className = selectedContentArticleType === '对比型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+  introBtn.className = selectedContentArticleType === '介绍型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+}
+
 async function generateContentArticle() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
   const opinionEl = document.getElementById('contentOpinion');
@@ -1576,11 +1146,12 @@ async function generateContentArticle() {
   spin('spContentGenerate', true);
   disableBtn('btnContentGenerate', true);
   const statusEl = document.getElementById('contentGenerateStatus');
-  statusEl.textContent = 'deepseek-pro 生成中，请稍候...';
+  statusEl.textContent = '当前模型生成中，请稍候...';
   try {
     const r = await api('/api/content/generate', 'POST', {
       client_id: currentClientId,
       opinion,
+      article_type: selectedContentArticleType,
       sample_links: getContentSampleLinks(),
       selected_articles: getSelectedContentTopArticles()
     });
@@ -1618,7 +1189,8 @@ function renderContentGenerations(articles) {
     <div class="article-card">
       <div class="article-title">${a.title || '未命名文章'}</div>
       <div class="article-meta">
-        <span class="badge badge-p">${a.model || 'deepseek-pro'}</span>
+        <span class="badge badge-p">调用模型：${a.model || '未知模型'}</span>
+        <span class="badge badge-g">${a.article_type || '未标记类型'}</span>
         <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
         <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
         <span style="font-size:10px;color:var(--text3)">${a.created_at || ''}</span>
@@ -1641,224 +1213,6 @@ function copyContentGeneration(id) {
   if (!a) return;
   navigator.clipboard.writeText(a.content || '').then(() => toast('文章已复制 ✦'));
 }
-async function batchGenerate() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  const topicsRaw = document.getElementById('ct-topics').value.trim();
-  const topics = topicsRaw.split('\n').map(t=>t.trim()).filter(Boolean);
-  const pids = Array.from(document.querySelectorAll('#ct-platform-checks input:checked')).map(el=>el.value);
-  if (!topics.length) { toast('请填写文章主题','err'); return; }
-  if (!pids.length) { toast('请选择至少一个平台','err'); return; }
-  const brand = document.getElementById('ct-brand').value || currentBrand;
-  if (!brand) { toast('请填写品牌名称','err'); return; }
-  spin('spBatch',true); disableBtn('btnBatch',true);
-  document.getElementById('batchStatus').textContent = `并发生成中，共 ${topics.length}×${pids.length} = ${topics.length*pids.length} 篇，请稍候...`;
-  try {
-    const r = await api('/api/articles/batch','POST',{
-      topics, platform_ids: pids, brand, client_id: currentClientId,
-      selling_points: document.getElementById('ct-selling').value,
-      content_pattern: document.getElementById('ct-pattern').value
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    document.getElementById('batchStatus').textContent = `完成！成功 ${r.success} 篇，失败 ${r.errors} 篇`;
-    if (r.errors > 0 && r.error_details?.length) {
-      const firstErr = r.error_details[0];
-      toast(`生成失败：${firstErr.error || '未知错误'}`, 'err');
-    } else {
-      toast(`批量生成完成：成功 ${r.success} 篇 ✦`);
-    }
-    loadArticles();
-  } finally { spin('spBatch',false); disableBtn('btnBatch',false); }
-}
-async function loadArticles() {
-  const filter = document.getElementById('art-filter')?.value || '';
-  let articles = await api('/api/articles?client_id='+currentClientId);
-  window._articleCache = articles;  // 缓存供格式转换用
-  if (filter) articles = articles.filter(a => a.status === filter);
-  document.getElementById('article-count').textContent = articles.length + ' 篇';
-  const el = document.getElementById('articleList');
-  if (!articles.length) { el.innerHTML = '<div class="empty"><i class="ti ti-writing"></i><p>暂无文章</p></div>'; return; }
-  el.innerHTML = articles.map(a => {
-    const statusMap = {pending:'<span class="badge badge-a">待审核</span>',approved:'<span class="badge badge-g">已通过</span>',rejected:'<span class="badge badge-r">已拒绝</span>'};
-    return `<div class="article-card">
-      <div class="article-title">${a.title}</div>
-      <div class="article-meta">
-        <span class="badge badge-p">${a.platform_name}</span>
-        ${statusMap[a.status]||''}
-        <span style="font-size:10px;color:var(--text3)">${a.created}</span>
-        <span style="font-size:10px;color:var(--text3)">主题：${a.topic}</span>
-      </div>
-      <div class="article-summary">${a.summary||a.content?.slice(0,80)+'...'}</div>
-      <div class="article-acts">
-        <button class="btn btn-o btn-sm" onclick="viewArticle('${a.id}')">查看全文</button>
-        ${a.status==='pending'?`<button class="btn btn-p btn-sm" onclick="setStatus('${a.id}','approved')">✓ 通过</button><button class="btn btn-danger btn-sm" onclick="setStatus('${a.id}','rejected')">✗ 拒绝</button>`:''}
-        <button class="btn btn-o btn-sm" onclick="formatArticle('${a.id}', '${a.platform_name}')">📋 格式</button>
-        <button class="btn btn-danger btn-sm" onclick="delArticle('${a.id}')">删除</button>
-      </div>
-    </div>`;
-  }).join('');
-}
-async function setStatus(id, status) {
-  await api('/api/articles/'+id+'/status','PUT',{status});
-  toast(status==='approved'?'已通过审核 ✦':'已拒绝');
-  loadArticles();
-}
-async function delArticle(id) {
-  if (!confirm('确认删除？')) return;
-  await api('/api/articles/'+id,'DELETE');
-  toast('已删除'); loadArticles();
-}
-function viewArticle(id) {
-  api('/api/articles?client_id='+currentClientId).then(articles => {
-    const a = articles.find(x => x.id === id);
-    if (!a) return;
-    const win = window.open('','_blank','width=700,height=600');
-    win.document.write(`<html><head><title>${a.title}</title><style>body{font-family:sans-serif;padding:30px;line-height:1.8;max-width:700px;margin:auto}h1{font-size:20px;margin-bottom:12px}pre{white-space:pre-wrap}</style></head><body><h1>${a.title}</h1><pre>${a.content}</pre>
-<!-- 格式优化弹窗 -->
-<div id="formatModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;overflow-y:auto">
-  <div style="background:white;max-width:760px;margin:40px auto;border-radius:var(--r);padding:24px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div>
-        <div style="font-size:16px;font-weight:800;color:#312e81">📋 格式优化</div>
-        <div style="font-size:11px;color:var(--text3)">选择目标格式，一键转换为可直接发布的内容</div>
-      </div>
-      <button onclick="document.getElementById('formatModal').style.display='none'" style="font-size:20px;background:none;border:none;cursor:pointer;color:var(--text3)">✕</button>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      <button class="btn btn-p btn-sm" id="fmt-plain" onclick="applyFormat('plain',this)">纯文本<br><span style="font-size:9px;font-weight:400">土巴兔/新浪家居</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-html" onclick="applyFormat('html',this)">HTML富文本<br><span style="font-size:9px;font-weight:400">头条/搜狐/百家号</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-xiaohongshu" onclick="applyFormat('xiaohongshu',this)">小红书<br><span style="font-size:9px;font-weight:400">emoji+话题标签</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-zhihu" onclick="applyFormat('zhihu',this)">知乎<br><span style="font-size:9px;font-weight:400">保留结构</span></button>
-    </div>
-    <div style="font-size:12px;font-weight:700;color:#312e81;margin-bottom:6px" id="formatTitle"></div>
-    <!-- 纯文本模式：textarea -->
-    <textarea id="formatContent" style="width:100%;height:400px;font-size:12px;line-height:1.8;padding:12px;border:1.5px solid var(--border);border-radius:var(--r-sm);resize:vertical;font-family:monospace"></textarea>
-    <!-- HTML 预览模式：渲染真实表格 -->
-    <div id="formatPreview" style="display:none;width:100%;min-height:400px;max-height:520px;overflow-y:auto;font-size:13px;line-height:1.8;padding:14px;border:1.5px solid #c7d2fe;border-radius:var(--r-sm);background:#fafafa"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px">
-      <div id="formatModeHint" style="font-size:11px;color:var(--text3)"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-o btn-sm" onclick="copyFormatContent()">复制内容</button>
-        <button class="btn btn-p btn-sm" onclick="document.getElementById('formatModal').style.display='none'">完成</button>
-      </div>
-    </div>
-  </div>
-</div>
-</body></html>`);
-  });
-}
-
-// ── Full Dashboard ────────────────────────────────────
-async function loadFullDashboard() {
-  const s = await api('/api/stats/overview?client_id='+currentClientId);
-  // 同时加载跨平台对比
-  loadPlatformCompare();
-
-  // Trend chart
-  const tLabels = s.trend.map(d => d.date.slice(5));
-  const tMentioned = s.trend.map(d => d.mentioned);
-  const tTotal = s.trend.map(d => d.total);
-  if (trendChart) trendChart.destroy();
-  const ctx1 = document.getElementById('trendChart').getContext('2d');
-  trendChart = new Chart(ctx1, {
-    type:'line', data:{labels:tLabels,datasets:[
-      {label:'品牌提及',data:tMentioned,borderColor:'#6d5cf7',backgroundColor:'rgba(109,92,247,.08)',fill:true,tension:.4,pointRadius:4},
-      {label:'总监测',data:tTotal,borderColor:'#a78bfa',backgroundColor:'rgba(167,139,250,.05)',fill:true,tension:.4,pointRadius:4}
-    ]},
-    options:{responsive:true,plugins:{legend:{labels:{font:{size:11},color:'#6b7280'}}},scales:{x:{ticks:{color:'#9ca3af',font:{size:10}}},y:{ticks:{color:'#9ca3af',font:{size:10}},beginAtZero:true}}}
-  });
-
-  // Platform chart
-  const pLabels = s.platform_weights.map(p => p.platform);
-  const pData = s.platform_weights.map(p => p.pct);
-  const pColors = ['#818cf8','#60a5fa','#f472b6','#34d399','#f59e0b','#f87171'];
-  if (platformChart) platformChart.destroy();
-  const ctx2 = document.getElementById('platformChart').getContext('2d');
-  platformChart = new Chart(ctx2, {
-    type:'doughnut', data:{labels:pLabels,datasets:[{data:pData,backgroundColor:pColors,borderWidth:2,borderColor:'#fff'}]},
-    options:{responsive:true,plugins:{legend:{position:'right',labels:{font:{size:11},color:'#6b7280'}}}}
-  });
-
-  // Article chart
-  const aData = s.trend.map(d => d.articles||0);
-  if (articleChart) articleChart.destroy();
-  const ctx3 = document.getElementById('articleChart').getContext('2d');
-  articleChart = new Chart(ctx3, {
-    type:'bar', data:{labels:tLabels,datasets:[{label:'生产篇数',data:aData,backgroundColor:'rgba(244,114,182,.6)',borderColor:'#f472b6',borderWidth:1,borderRadius:6}]},
-    options:{responsive:true,plugins:{legend:{labels:{font:{size:11},color:'#6b7280'}}},scales:{x:{ticks:{color:'#9ca3af',font:{size:10}}},y:{ticks:{color:'#9ca3af',font:{size:10}},beginAtZero:true}}}
-  });
-
-  document.getElementById('statsTable').innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:8px">
-      ${[['累计监测',s.total_records,'次'],['品牌被提及',s.mentioned,'次'],['提及率',s.mention_rate,'%'],['平均GEO评分',s.avg_geo_score,'分'],['生产文章',s.total_articles,'篇'],['已审核通过',s.approved_articles,'篇']].map(([l,v,u])=>`
-        <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 0;border-bottom:1px solid var(--border2)">
-          <span style="font-size:12px;color:var(--text2);font-weight:700">${l}</span>
-          <span style="font-size:15px;font-weight:900;color:#312e81">${v}<span style="font-size:11px;color:var(--text3);margin-left:2px">${u}</span></span>
-        </div>`).join('')}
-    </div>`;
-}
-
-// ── Platforms ─────────────────────────────────────────
-async function loadPlatforms() {
-  const platforms = await api('/api/platforms');
-  const el = document.getElementById('platformList');
-  if (!platforms.length) { el.innerHTML = '<div class="empty"><i class="ti ti-apps"></i><p>暂无平台，点击「添加平台」开始</p></div>'; return; }
-  el.innerHTML = platforms.map(p => `
-    <div class="platform-card">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-        <div class="platform-name">${p.name}</div>
-        <div style="display:flex;gap:8px">
-          <button class="btn btn-o btn-sm" onclick="editPlatform('${p.id}')">编辑</button>
-          <button class="btn btn-danger btn-sm" onclick="delPlatform('${p.id}')">删除</button>
-        </div>
-      </div>
-      <div class="platform-row"><span class="platform-label">内容风格</span><span class="platform-val">${p.style||'—'}</span></div>
-      <div class="platform-row"><span class="platform-label">推荐字数</span><span class="platform-val">${p.word_count||'—'}</span></div>
-      <div class="platform-row"><span class="platform-label">标题规范</span><span class="platform-val">${p.title_rule||'—'}</span></div>
-      <div class="platform-row"><span class="platform-label">禁忌事项</span><span class="platform-val">${p.taboos||'—'}</span></div>
-      <div class="platform-row"><span class="platform-label">备注</span><span class="platform-val">${p.notes||'—'}</span></div>
-    </div>`).join('');
-}
-function showAddPlatform() {
-  const c = document.getElementById('addPlatformCard');
-  c.style.display = c.style.display==='none'?'block':'none';
-}
-async function aiFillPlatform() {
-  const name = document.getElementById('pf-name').value.trim();
-  if (!name) { toast('请先填写平台名称','err'); return; }
-  spin('spPfFill',true);
-  try {
-    const r = await api('/api/platforms/ai_fill','POST',{name});
-    if (r.error) { toast(r.error,'err'); return; }
-    document.getElementById('pf-style').value = r.style||'';
-    document.getElementById('pf-words').value = r.word_count||'';
-    document.getElementById('pf-title').value = r.title_rule||'';
-    document.getElementById('pf-taboo').value = r.taboos||'';
-    document.getElementById('pf-notes').value = r.notes||'';
-    toast('AI已自动补全平台规范 ✦');
-  } finally { spin('spPfFill',false); }
-}
-async function savePlatform() {
-  const name = document.getElementById('pf-name').value.trim();
-  if (!name) { toast('请填写平台名称','err'); return; }
-  await api('/api/platforms','POST',{
-    name, style: document.getElementById('pf-style').value,
-    word_count: document.getElementById('pf-words').value,
-    title_rule: document.getElementById('pf-title').value,
-    taboos: document.getElementById('pf-taboo').value,
-    notes: document.getElementById('pf-notes').value
-  });
-  toast('平台已添加 ✦');
-  ['pf-name','pf-style','pf-words','pf-title','pf-taboo','pf-notes'].forEach(id => document.getElementById(id).value='');
-  document.getElementById('addPlatformCard').style.display='none';
-  loadPlatforms();
-}
-async function delPlatform(id) {
-  if (!confirm('确认删除该平台？')) return;
-  await api('/api/platforms/'+id,'DELETE');
-  toast('已删除'); loadPlatforms();
-}
-function editPlatform(id) { toast('编辑功能：请删除后重新添加','ok'); }
-
 // ── Settings ──────────────────────────────────────────
 const PRESETS = {
   deepseek:{label:'DeepSeek',base_url:'https://api.deepseek.com',model:'deepseek-chat'},
@@ -1937,11 +1291,6 @@ async function testApi() {
   finally { spin('spTest',false); }
 }
 
-// ── Export ────────────────────────────────────────────
-function exportStats() { window.location.href = '/api/stats/export?client_id=' + currentClientId; }
-
-
-
 // ══════════════════════════════════════════════════════
 // 平台颜色配置 & 引用标签渲染
 // ══════════════════════════════════════════════════════
@@ -2003,6 +1352,22 @@ function renderRefTag(ref, brand) {
 // ══════════════════════════════════════════════════════
 let currentGroupId = '';
 let currentGroupQuestions = [];
+
+function clearActiveGroupSelection() {
+  currentGroupId = '';
+  currentGroupQuestions = [];
+  const card = document.getElementById('groupDetailCard');
+  if (card) card.style.display = 'none';
+  const questionList = document.getElementById('groupQuestionList');
+  if (questionList) questionList.innerHTML = '<div class="empty"><i class="ti ti-list"></i><p>暂无问题</p></div>';
+  const status = document.getElementById('grpCrawlStatus');
+  if (status) status.textContent = '';
+  const result = document.getElementById('grpCrawlResult');
+  if (result) {
+    result.style.display = 'none';
+    result.innerHTML = '';
+  }
+}
 
 function showCreateGroup() {
   const c = document.getElementById('createGroupCard');
@@ -2326,7 +1691,7 @@ async function crawlByGroup() {
       `✦ 完成！${targetPlatforms.length} 个平台，成功分析 ${totalAnalyzed} 题，失败样本 ${totalErrors} 条${failedPlatforms ? `，异常平台 ${failedPlatforms} 个` : ''}`;
     toast(failedPlatforms ? '问题组爬取完成，部分平台失败' : '✦ 问题组爬取完成，数据已录入记录库', failedPlatforms ? 'err' : 'ok');
     if (hasLoginError) checkAllLoginStatus();
-    loadDashboard();
+    loadGroups();
     if (document.getElementById('page-records')?.classList.contains('on')) loadRawRecords();
     if (document.getElementById('page-daily')?.classList.contains('on')) loadDailyPage();
   } finally {
@@ -2645,29 +2010,35 @@ async function loadMaterials() {
     return;
   }
   el.innerHTML = files.map(f => `
-    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border2)">
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--border2)">
       <i class="ti ti-file-text" style="color:var(--pri);font-size:16px"></i>
       <div style="flex:1">
-        <div style="font-size:12px;font-weight:700;color:var(--text)">${f.name}</div>
-        <div style="font-size:10px;color:var(--text3)">${(f.size/1024).toFixed(1)}KB · ${f.uploaded}</div>
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${escHtml(f.original_name || f.name)}</div>
+        <div style="font-size:10px;color:var(--text3)">${(f.size/1024).toFixed(1)}KB · ${escHtml(f.uploaded || '')} · ${escHtml(f.source || 'upload')}</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:5px">
+          <span class="badge ${materialStatusClass(f)}" style="font-size:9px">${escHtml(materialDisplayStatus(f))}</span>
+          ${materialIssueText(f) ? `<span class="badge badge-r" style="font-size:9px">${escHtml(materialIssueText(f))}</span>` : ''}
+        </div>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="delMaterial('${f.name}')">删除</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        <button class="btn btn-danger btn-sm" onclick="delMaterial('${encodeURIComponent(f.id || f.name)}')">删除</button>
+      </div>
     </div>`).join('');
 }
 
 async function uploadMaterial(input) {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
-  const file = input.files[0];
-  if (!file) return;
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
   const formData = new FormData();
-  formData.append('file', file);
+  files.forEach(file => formData.append('file', file));
   try {
     const res = await fetch('/api/materials/' + currentClientId + '/upload', {
       method: 'POST', body: formData
     });
     const r = await res.json();
     if (r.error) { toast(r.error,'err'); return; }
-    toast('资料上传成功 ✦');
+    toast(`资料上传成功：${(r.materials||[]).length || 1} 份 ✦`);
     loadMaterials();
   } catch(e) {
     toast('上传失败：' + e.message, 'err');
@@ -2677,66 +2048,68 @@ async function uploadMaterial(input) {
 
 async function delMaterial(filename) {
   if (!confirm('确认删除该资料？')) return;
-  await api(`/api/materials/${currentClientId}/${encodeURIComponent(filename)}`, 'DELETE');
+  await api(`/api/materials/${currentClientId}/${filename}`, 'DELETE');
   toast('已删除');
   loadMaterials();
 }
 
-async function genSmartTopics() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  spin('spGenTopics', true);
-  disableBtn('btnGenTopics', true);
+function materialDisplayStatus(file) {
+  if (file?.confirmed && file?.cache_dir) return '可用';
+  if (file?.diagnostics?.dependency_error) return '解析失败';
+  if (file?.status === '解析失败' || file?.status === '文本过少' || file?.status === '疑似扫描件') return file.status;
+  return '不可用';
+}
+
+function materialStatusClass(file) {
+  const status = materialDisplayStatus(file);
+  if (status === '可用') return 'badge-g';
+  if (status === '解析失败' || status === '文本过少' || status === '疑似扫描件' || status === '不可用') return 'badge-r';
+  return 'badge-p';
+}
+
+function materialIssueText(file) {
+  if (file?.diagnostics?.dependency_error) return '解析依赖缺失';
+  if (file?.status === '文本过少') return '正文过少，未参与生成';
+  if (file?.status === '疑似扫描件') return '疑似扫描件，未参与生成';
+  return '';
+}
+
+async function loadLocalMaterials() {
+  const box = document.getElementById('localMaterialList');
+  box.style.display = 'block';
+  box.innerHTML = '<div style="font-size:11px;color:var(--text3)">读取本地 pdf/ 文件夹中...</div>';
   try {
-    const count = document.getElementById('topicCount').value;
-    const instruction = document.getElementById('topicInstruction')?.value?.trim() || '';
-    const r = await api('/api/content/gen_topics', 'POST', {
-      client_id: currentClientId,
-      brand: currentBrand,
-      count: parseInt(count),
-      instruction: instruction  // 用户自定义指令
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    smartTopics = r.topics;
-    document.getElementById('smartTopicList').style.display = 'block';
-    document.getElementById('smartTopicTags').innerHTML = smartTopics.map((t,i) => `
-      <div style="display:flex;align-items:center;gap:4px;padding:5px 10px;background:rgba(255,255,255,.85);border:1.5px solid var(--border2);border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;color:#312e81" onclick="toggleTopic(${i},this)" id="topic-tag-${i}">
-        ${t}
-      </div>`).join('');
-    toast(`已生成 ${smartTopics.length} 个主题 ✦`);
-  } finally {
-    spin('spGenTopics', false);
-    disableBtn('btnGenTopics', false);
+    const r = await api('/api/materials/local');
+    const files = r.files || [];
+    if (!files.length) {
+      box.innerHTML = '<div style="font-size:11px;color:var(--text3)">本地 pdf/ 文件夹暂无可导入资料</div>';
+      return;
+    }
+    box.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+        <div style="font-size:11px;font-weight:800;color:var(--text2)">本地 pdf/ 文件夹资料</div>
+        <button class="btn btn-p btn-sm" onclick="importSelectedLocalMaterials()">导入选中</button>
+      </div>
+      ${files.map(f => `
+        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2);font-size:11px;color:var(--text2)">
+          <input type="checkbox" class="local-material-choice" value="${escHtml(f.name)}" style="width:auto">
+          <span style="flex:1;font-weight:700;color:var(--text)">${escHtml(f.name)}</span>
+          <span style="color:var(--text3)">${(f.size/1024).toFixed(1)}KB</span>
+        </label>`).join('')}
+    `;
+  } catch(e) {
+    box.innerHTML = `<div style="font-size:11px;color:var(--red)">读取失败：${escHtml(e.message)}</div>`;
   }
 }
 
-const selectedTopicIdx = new Set();
-function toggleTopic(i, el) {
-  if (selectedTopicIdx.has(i)) {
-    selectedTopicIdx.delete(i);
-    el.style.background = 'rgba(255,255,255,.85)';
-    el.style.borderColor = 'var(--border2)';
-    el.style.color = '#312e81';
-  } else {
-    selectedTopicIdx.add(i);
-    el.style.background = 'var(--pri-ll)';
-    el.style.borderColor = 'var(--pri)';
-    el.style.color = 'var(--pri)';
-  }
+async function importSelectedLocalMaterials() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const filenames = Array.from(document.querySelectorAll('.local-material-choice:checked')).map(el => el.value);
+  if (!filenames.length) { toast('请选择要导入的本地资料','err'); return; }
+  const r = await api('/api/materials/' + currentClientId + '/import-local', 'POST', {filenames});
+  toast(`已导入 ${r.materials?.length || filenames.length} 份资料 ✦`);
+  loadMaterials();
 }
-
-function useAllTopics() {
-  const topics = selectedTopicIdx.size > 0
-    ? [...selectedTopicIdx].map(i => smartTopics[i])
-    : smartTopics;
-  const textarea = document.getElementById('ct-topics');
-  const existing = textarea.value.trim();
-  textarea.value = existing ? (existing + '\n' + topics.join('\n')) : topics.join('\n');
-  toast(`已导入 ${topics.length} 个主题 ✦`);
-  document.getElementById('smartTopicList').style.display = 'none';
-  selectedTopicIdx.clear();
-}
-
-
 
 // ══════════════════════════════════════════════════════
 // 软文模板管理
@@ -2892,8 +2265,6 @@ let dailyAnalysisData = null;
 const DAILY_PAGE_SIZE = 20;
 
 function renderDailyRecord(r) {
-  const geoScore = r.brand_mentioned ? (r.geo_score||0) : 0;
-  const sc = !r.brand_mentioned ? 'var(--red)' : geoScore>=60 ? 'var(--teal)' : 'var(--amber)';
   const div = document.createElement('div');
   div.id = 'rec-' + r.id;
   div.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:10px;background:rgba(255,255,255,.8);border:1.5px solid var(--border2);border-radius:var(--r-sm);margin-bottom:6px';
@@ -2902,8 +2273,6 @@ function renderDailyRecord(r) {
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">
         <span style="font-size:12px;font-weight:800;color:#312e81">${r.question}</span>
-        ${r.brand_mentioned ? '<span class="badge badge-g">✦ 已提及</span>' : '<span class="badge badge-r">未提及</span>'}
-        <span style="font-weight:900;color:${sc};font-size:12px">GEO ${geoScore}</span>
         ${r.round > 1 ? `<span class="badge badge-pk">第${r.round}次</span>` : ''}
         <span style="font-size:10px;color:var(--text3);margin-left:auto">${r.crawl_time||''}</span>
       </div>
@@ -3006,7 +2375,6 @@ async function loadDailyData() {
     el.innerHTML = '<div class="empty"><i class="ti ti-database"></i><p>当日暂无数据</p></div>';
     window._dailyRecords = [];
     window._dailyPage = 0;
-    document.getElementById('dailyPlatformBars').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
     return;
@@ -3024,8 +2392,8 @@ async function loadDailyData() {
     mainEl.addEventListener('scroll', onDailyScroll, { passive: true });
   }
 
-  // 加载引用源统计（带问题组过滤，复用上方已声明的 groupId）
-  loadDailyRefStats(date, groupId, taskId);
+  // 加载高频引用文章（来源平台分布已合并到 AI 平台分类）
+  loadDailyTopArticles(date, groupId, taskId);
   loadDailyInsights(date, groupId, taskId);
 }
 
@@ -3071,7 +2439,6 @@ async function deleteDailyEntity(entityName) {
 function renderDailyInsights(insights) {
   const platforms = insights.ai_platforms || [];
   const entities = insights.mentioned_entities || [];
-  renderDailyCompetitorArticles(insights);
   const note = document.getElementById('dailyAiPlatformNote');
   if (note) note.textContent = `共 ${insights.total_records || 0} 条记录`;
   if (typeof insights.mention_rate !== 'undefined') {
@@ -3118,68 +2485,12 @@ function renderDailyInsights(insights) {
   }
 }
 
-function renderDailyCompetitorArticles(insights) {
-  const el = document.getElementById('dailyCompetitorArticles');
-  if (!el) return;
-  const articles = insights.competitor_articles || [];
-  const selected = insights.selected_competitors || [];
-  const note = document.getElementById('dailyCompetitorArticleNote');
-  if (note) {
-    note.textContent = selected.length
-      ? `目标竞品：${selected.map(escHtml).join('、')}`
-      : '基于竞品榜第1和第3名筛选';
-  }
-  if (!articles.length) {
-    el.innerHTML = '<div style="color:var(--text3);font-size:12px">Top20 中暂无标题/URL命中或正文命中的候选文章。</div>';
-    return;
-  }
-  el.innerHTML = articles.slice(0, 12).map((a, i) => {
-    const aiLabels = (a.ai_platforms || []).map(pid => CRAWL_PLATFORM_NAMES[pid] || pid).join(' / ');
-    const entities = (a.related_entities || []).join('、');
-    const matchTypes = (a.match_types || []).map(t => `<span class="badge ${t === '标题/URL命中' ? 'badge-g' : 'badge-a'}" style="font-size:9px">${escHtml(t)}</span>`).join('');
-    const questions = (a.questions || []).slice(0, 2).map(q => `<div style="font-size:10px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(q)}">问题：${escHtml(q)}</div>`).join('');
-    return `
-      <div style="display:flex;align-items:flex-start;gap:10px;padding:10px 0;border-bottom:1px solid var(--border2)">
-        <span style="width:22px;height:22px;border-radius:7px;background:var(--pink-l);color:var(--pink);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
-        <div style="flex:1;min-width:0">
-          <a href="${escHtml(a.url || '#')}" target="_blank" style="font-size:12px;font-weight:900;color:#312e81;text-decoration:none;line-height:1.45;display:block">${escHtml(a.title || '未命名文章')}</a>
-          <div style="display:flex;gap:5px;align-items:center;flex-wrap:wrap;margin-top:5px">
-            <span class="badge badge-p" style="font-size:9px">${escHtml(a.platform || '未知来源')}</span>
-            ${entities ? `<span class="badge badge-pk" style="font-size:9px">关联：${escHtml(entities)}</span>` : ''}
-            ${aiLabels ? `<span class="badge badge-g" style="font-size:9px">AI：${escHtml(aiLabels)}</span>` : ''}
-            ${matchTypes}
-          </div>
-          <div style="font-size:10px;color:var(--text2);line-height:1.6;margin-top:5px">${escHtml(a.reason || '高频引用 Top20 中与目标竞品存在关联')}</div>
-          ${questions}
-        </div>
-        <div style="display:flex;flex-direction:column;align-items:flex-end;gap:3px;flex-shrink:0">
-          <span style="font-size:12px;font-weight:900;color:var(--pri)">×${escHtml(a.count || 0)}</span>
-          <span style="font-size:10px;color:var(--text3)">共现 ${escHtml(a.cooccurrence_count || 0)}</span>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-async function loadDailyRefStats(date, groupId, taskId='') {
+async function loadDailyTopArticles(date, groupId, taskId='') {
   try {
     const gParam = groupId ? `&group_id=${groupId}` : '';
     const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
     const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
     const totalRecords = stats.total_records || 0;
-
-    // 平台权重
-    const pb = document.getElementById('dailyPlatformBars');
-    if (stats.platform_weights?.length) {
-      pb.innerHTML = stats.platform_weights.slice(0,8).map(p => `
-      <div class="bar-row">
-        <span class="b-lbl">${p.platform}</span>
-        <div class="b-track"><div class="b-fill" style="width:${p.pct}%;background:linear-gradient(90deg,var(--pri),var(--pri-l))"></div></div>
-        <span class="b-pct" style="color:var(--pri)">${p.pct}%</span>
-        <span style="font-size:10px;color:var(--text3);width:30px">${p.count}次</span>
-      </div>`).join('');
-    } else {
-      pb.innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
-    }
 
     // 高频文章（含提及率）
     const ta = document.getElementById('dailyTopArticles');
@@ -3218,7 +2529,6 @@ async function loadDailyRefStats(date, groupId, taskId='') {
       ta.innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     }
   } catch(e) {
-    document.getElementById('dailyPlatformBars').innerHTML = '<div style="color:var(--text3);font-size:12px">加载失败，请刷新重试</div>';
     document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">加载失败，请刷新重试</div>';
   }
 }
@@ -3467,164 +2777,11 @@ async function importDailyToContent() {
 }
 
 
-// 格式优化（纯前端转换，零延迟）
-let _formatArticleId = null;
-let _formatRawContent = '';
-let _formatRawTitle = '';
-
-// 各格式转换函数
-const formatters = {
-  plain(text) {
-    text = text.replace(/^#{1,6}\s+/gm, '');
-    text = text.replace(/\*\*(.*?)\*\*/g, '【$1】');
-    text = text.replace(/\*(.*?)\*/g, '$1');
-    text = text.replace(/^\|[-:| ]+\|$/gm, '');
-    text = text.replace(/^\|(.*)\|$/gm, (_, m) => m.split('|').map(c=>c.trim()).filter(Boolean).join('  '));
-    text = text.replace(/^- /gm, '• ');
-    text = text.replace(/^> /gm, '');
-    text = text.replace(/\n{3,}/g, '\n\n');
-    return text.trim();
-  },
-  html(text) {
-    // ── 步骤1：识别纯文本表格块（【xxx表】标题 + 下方空格对齐行）──
-    // 用 RegExp 构造避免正则字面量含换行导致 SyntaxError
-    const plainTableReg = new RegExp(
-      '(【[^】]*(?:表|总结|对比|汇总|清单|列表)[^】]*】\\n)((?:[^\\n]*(?:  {2,}|\\t)[^\\n]*\\n?){2,})',
-      'g'
-    );
-    text = text.replace(plainTableReg, (match, title, tableBlock) => {
-      const rows = tableBlock.trim().split('\n').filter(r => r.trim());
-      const parsed = rows.map(r => r.trim().split(/  +|\t+/).map(c => c.trim()).filter(Boolean));
-      const maxCols = Math.max(...parsed.map(r => r.length));
-      if (maxCols < 2) return match;
-      const TABLE_STYLE = 'border-collapse:collapse;width:100%;margin:12px 0;font-size:13px';
-      const TH_STYLE = 'background:#eef2ff;color:#312e81;font-weight:700;padding:7px 10px;border:1px solid #c7d2fe;text-align:left';
-      const TD_STYLE = 'padding:6px 10px;border:1px solid #e5e7eb;vertical-align:top';
-      let html = title + '<table style="' + TABLE_STYLE + '">';
-      parsed.forEach((cells, i) => {
-        html += '<tr>';
-        for (let c = 0; c < maxCols; c++) {
-          const val = cells[c] || '';
-          html += i === 0
-            ? '<th style="' + TH_STYLE + '">' + val + '</th>'
-            : '<td style="' + TD_STYLE + '">' + val + '</td>';
-        }
-        html += '</tr>';
-      });
-      html += '</table>';
-      return html;
-    });
-        // ── 步骤2：原有 Markdown 管道符表格处理 ──
-    const lines = text.split('\n');
-    const result = [];
-    let inTable = false, tableRows = [];
-    for (let line of lines) {
-      if (/^\|/.test(line)) {
-        if (/^\|[-:| ]+\|/.test(line)) continue;
-        const cells = line.replace(/^\||\|$/g, '').split('|').map(c=>c.trim());
-        if (!inTable) { inTable = true; tableRows = [cells]; }
-        else tableRows.push(cells);
-        continue;
-      } else if (inTable) {
-        const TABLE_STYLE = 'border-collapse:collapse;width:100%;margin:12px 0';
-        const TH_STYLE = 'background:#eef2ff;color:#312e81;font-weight:700;padding:7px 10px;border:1px solid #c7d2fe;text-align:left';
-        const TD_STYLE = 'padding:6px 10px;border:1px solid #e5e7eb';
-        result.push(`<table style="${TABLE_STYLE}">`);
-        tableRows.forEach((row, i) => {
-          result.push('<tr>' + row.map(c => i===0
-            ? `<th style="${TH_STYLE}">${c}</th>`
-            : `<td style="${TD_STYLE}">${c}</td>`).join('') + '</tr>');
-        });
-        result.push('</table>');
-        inTable = false; tableRows = [];
-      }
-      if (/^## /.test(line)) result.push(`<h2 style="font-size:18px;font-weight:bold;margin:16px 0 8px">${line.slice(3)}</h2>`);
-      else if (/^# /.test(line)) result.push(`<h1 style="font-size:22px;font-weight:bold;margin:20px 0 10px">${line.slice(2)}</h1>`);
-      else if (/^- /.test(line)) result.push(`<li style="margin:4px 0">${line.slice(2).replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</li>`);
-      else if (/^> /.test(line)) result.push(`<blockquote style="border-left:3px solid #ccc;padding-left:12px;color:#666">${line.slice(2)}</blockquote>`);
-      else if (line.trim()) result.push(`<p style="line-height:1.8;margin:8px 0">${line.replace(/\*\*(.*?)\*\*/g,'<strong>$1</strong>')}</p>`);
-      else result.push('');
-    }
-    return result.join('\n');
-  },
-  xiaohongshu(text) {
-    text = text.replace(/^#{1,6}\s+/gm, '✨ ');
-    text = text.replace(/\*\*(.*?)\*\*/g, '「$1」');
-    text = text.replace(/^\|[-:| ]+\|$/gm, '');
-    text = text.replace(/^\|(.*)\|$/gm, '');
-    text = text.replace(/^- /gm, '💡 ');
-    text = text.replace(/^> /gm, '📌 ');
-    text = text.replace(/\n{3,}/g, '\n\n');
-    return text.trim();
-  },
-  zhihu(text) {
-    text = text.replace(/^## (.*)/gm, '**$1**');
-    text = text.replace(/^\|[-:| ]+\|$/gm, '');
-    text = text.replace(/^\|(.*)\|$/gm, (_, m) => '> ' + m.split('|').map(c=>c.trim()).filter(Boolean).join(' | '));
-    text = text.replace(/\n{3,}/g, '\n\n');
-    return text.trim();
-  }
-};
-
-const PLATFORM_FMT_MAP = {
-  '土巴兔':'plain','新浪家居':'plain','装修之家':'plain','红商网':'plain',
-  '网易新闻':'html','今日头条':'html','搜狐':'html','百家号':'html','腾讯新闻':'html','凤凰网':'html',
-  '小红书':'xiaohongshu',
-  '知乎':'zhihu'
-};
-
-async function formatArticle(id, platformName) {
-  _formatArticleId = id;
-  document.getElementById('formatModal').style.display = 'block';
-  document.getElementById('formatContent').value = '加载中...';
-  // 直接请求单篇文章数据，不依赖缓存
-  const articles = await api('/api/articles?client_id=' + currentClientId);
-  const article = articles.find(a => a.id === id);
-  if (!article) { toast('找不到文章数据', 'err'); return; }
-  window._articleCache = articles;
-  _formatRawContent = article.content || '';
-  _formatRawTitle = article.title || '';
-  const autoFmt = PLATFORM_FMT_MAP[platformName] || 'plain';
-  applyFormat(autoFmt);
-}
-
-function applyFormat(fmt) {
-  ['plain','html','xiaohongshu','zhihu'].forEach(f => {
-    const b = document.getElementById('fmt-' + f);
-    if (b) b.className = f === fmt ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
-  });
-  const fn = formatters[fmt] || formatters.plain;
-  const converted = fn(_formatRawContent);
-  document.getElementById('formatTitle').textContent = _formatRawTitle;
-
-  const textarea = document.getElementById('formatContent');
-  const preview  = document.getElementById('formatPreview');
-  const hint     = document.getElementById('formatModeHint');
-
-  if (fmt === 'html') {
-    // HTML模式：显示渲染预览，隐藏textarea（复制时仍用HTML源码）
-    textarea.style.display = 'none';
-    preview.style.display  = 'block';
-    preview.innerHTML = converted;
-    textarea.value = converted; // 保留给复制按钮用
-    if (hint) hint.textContent = '👁 预览模式：表格/样式已渲染，复制的是HTML源码';
-  } else {
-    textarea.style.display = 'block';
-    preview.style.display  = 'none';
-    textarea.value = converted;
-    if (hint) hint.textContent = '';
-  }
-}
-
-function copyFormatContent() {
-  navigator.clipboard.writeText(document.getElementById('formatContent').value)
-    .then(() => toast('复制成功，直接去平台粘贴发布就好啦 喵～✦'));
-}
 // ── Init ──────────────────────────────────────────────
 refreshApiStatus();
 loadClientsDropdown();
 renderContractPlatformChoices('cl-platforms', ['deepseek'], 'new-client');
-loadDashboard();
+loadGroups();
 // 设置当日数据整理的默认日期
 const _dailyDateEl = document.getElementById('dailyDate');
 if (_dailyDateEl) _dailyDateEl.value = new Date().toISOString().slice(0,10);
@@ -3633,37 +2790,6 @@ document.getElementById('globalClient').addEventListener('change', () => {
   loadGroups();
 });
 </script>
-
-<!-- 格式优化弹窗 -->
-<div id="formatModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:9999;overflow-y:auto">
-  <div style="background:white;max-width:760px;margin:40px auto;border-radius:var(--r);padding:24px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
-      <div>
-        <div style="font-size:16px;font-weight:800;color:#312e81">📋 格式优化</div>
-        <div style="font-size:11px;color:var(--text3)">选择目标格式，一键转换为可直接发布的内容</div>
-      </div>
-      <button onclick="document.getElementById('formatModal').style.display='none'" style="font-size:20px;background:none;border:none;cursor:pointer;color:var(--text3)">✕</button>
-    </div>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
-      <button class="btn btn-p btn-sm" id="fmt-plain" onclick="applyFormat('plain',this)">纯文本<br><span style="font-size:9px;font-weight:400">土巴兔/新浪家居</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-html" onclick="applyFormat('html',this)">HTML富文本<br><span style="font-size:9px;font-weight:400">头条/搜狐/百家号</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-xiaohongshu" onclick="applyFormat('xiaohongshu',this)">小红书<br><span style="font-size:9px;font-weight:400">emoji+话题标签</span></button>
-      <button class="btn btn-o btn-sm" id="fmt-zhihu" onclick="applyFormat('zhihu',this)">知乎<br><span style="font-size:9px;font-weight:400">保留结构</span></button>
-    </div>
-    <div style="font-size:12px;font-weight:700;color:#312e81;margin-bottom:6px" id="formatTitle"></div>
-    <!-- 纯文本模式：textarea -->
-    <textarea id="formatContent" style="width:100%;height:400px;font-size:12px;line-height:1.8;padding:12px;border:1.5px solid var(--border);border-radius:var(--r-sm);resize:vertical;font-family:monospace"></textarea>
-    <!-- HTML 预览模式：渲染真实表格 -->
-    <div id="formatPreview" style="display:none;width:100%;min-height:400px;max-height:520px;overflow-y:auto;font-size:13px;line-height:1.8;padding:14px;border:1.5px solid #c7d2fe;border-radius:var(--r-sm);background:#fafafa"></div>
-    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:12px">
-      <div id="formatModeHint" style="font-size:11px;color:var(--text3)"></div>
-      <div style="display:flex;gap:8px">
-        <button class="btn btn-o btn-sm" onclick="copyFormatContent()">复制内容</button>
-        <button class="btn btn-p btn-sm" onclick="document.getElementById('formatModal').style.display='none'">完成</button>
-      </div>
-    </div>
-  </div>
-</div>
 
 <!-- ═══════════════════════════════════════════════════════
      GEO Agent Bot 悬浮球

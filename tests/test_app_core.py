@@ -24,6 +24,9 @@ def isolated_app_data():
         "F_COMPETITOR_ARTICLE_BODY_HITS": geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
         "F_CONTENT_GENERATIONS": getattr(geo_app, "F_CONTENT_GENERATIONS", None),
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
+        "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
+        "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
+        "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "BASE_CRAWLER_DATA_DIR": base_crawler.DATA_DIR,
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -40,6 +43,13 @@ def isolated_app_data():
         geo_app.F_CONTENT_GENERATIONS = os.path.join(tmp, "content_generations.json")
         if hasattr(geo_app, "UPLOAD_FOLDER"):
             geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
+        if hasattr(geo_app, "LOCAL_PDF_FOLDER"):
+            geo_app.LOCAL_PDF_FOLDER = os.path.join(tmp, "pdf")
+            os.makedirs(geo_app.LOCAL_PDF_FOLDER, exist_ok=True)
+        if hasattr(geo_app, "F_MATERIALS_INDEX"):
+            geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
+        if hasattr(geo_app, "MATERIAL_CACHE_FOLDER"):
+            geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
         base_crawler.DATA_DIR = tmp
         try:
             yield tmp
@@ -160,7 +170,49 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(listing.status_code, 200)
             articles = listing.get_json()["articles"]
             self.assertEqual([a["content"] for a in articles], ["第二版文章", "第一版文章"])
-            self.assertEqual(articles[0]["model"], "deepseek-pro")
+            self.assertEqual(articles[0]["model"], "deepseek-chat")
+
+    def test_content_generate_records_configured_model(self):
+        with isolated_app_data():
+            cid = "client-model"
+            geo_app.save(geo_app.F_SETTINGS, {
+                "api_key": "test-key",
+                "base_url": "https://api.example.com",
+                "model": "deepseek-v4-pro",
+            })
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Rabbit Dental"}])
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                return "Generated article"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "write a test article"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["article"]["model"], "deepseek-v4-pro")
+
+    def test_content_generate_persists_to_sqlite_history_store(self):
+        with isolated_app_data():
+            cid = "client-sqlite"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Rabbit Dental"}])
+
+            with patch.object(geo_app, "ai_deepseek_pro", return_value="SQLite article", create=True):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "write a sqlite-backed article"},
+                )
+
+            db_path = os.path.splitext(geo_app.F_CONTENT_GENERATIONS)[0] + ".sqlite3"
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(os.path.exists(db_path))
+            self.assertFalse(os.path.exists(geo_app.F_CONTENT_GENERATIONS))
+            self.assertEqual(
+                [item["content"] for item in geo_app.load_content_session(cid)["articles"]],
+                ["SQLite article"],
+            )
 
     def test_content_generate_includes_sample_links_and_selected_top_articles(self):
         with isolated_app_data():
@@ -198,6 +250,214 @@ class CoreFunctionTests(unittest.TestCase):
             article = response.get_json()["article"]
             self.assertEqual(article["sample_link_count"], 1)
             self.assertEqual(article["selected_article_count"], 1)
+
+    def test_content_generate_uses_explicit_article_type(self):
+        with isolated_app_data():
+            cid = "client-article-type"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "介绍型文章"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "写一篇牙齿矫正服务文章",
+                        "article_type": "介绍型",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("文章类型：介绍型", payload)
+            self.assertIn("标题必须包含品牌名：兔博士", payload)
+
+    def test_content_generate_history_is_isolated_by_article_type_but_listing_is_combined(self):
+        with isolated_app_data():
+            cid = "client-history-type"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "对比型旧文章" if len(captured_messages) == 1 else "介绍型新文章"
+
+            client = geo_app.app.test_client()
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                first = client.post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "写一篇对比型文章",
+                        "article_type": "对比型",
+                    },
+                )
+                second = client.post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "写一篇介绍型文章",
+                        "article_type": "介绍型",
+                    },
+                )
+
+            self.assertEqual(first.status_code, 200)
+            self.assertEqual(second.status_code, 200)
+            second_payload = json.dumps(captured_messages[1], ensure_ascii=False)
+            self.assertIn("写一篇介绍型文章", second_payload)
+            self.assertNotIn("对比型旧文章", second_payload)
+            self.assertNotIn("写一篇对比型文章", second_payload)
+
+            listing = client.get(f"/api/content/generations?client_id={cid}")
+            self.assertEqual(listing.status_code, 200)
+            articles = listing.get_json()["articles"]
+            self.assertEqual([a["content"] for a in articles], ["介绍型新文章", "对比型旧文章"])
+
+    def test_content_generation_material_bundle_uses_confirmed_fact_cards(self):
+        with isolated_app_data():
+            cid = "client-1"
+            local_file = os.path.join(geo_app.LOCAL_PDF_FOLDER, "doctor.txt")
+            with open(local_file, "w", encoding="utf-8") as f:
+                f.write(
+                    "兔博士口腔成立于2003年。\n"
+                    "李璞医生，隐适美认证医师，从事正畸专科13年。\n"
+                    "擅长儿童牙齿矫正、种植牙、根管治疗。\n"
+                    "禁止写保证治愈、全市第一、最低价。\n"
+                )
+            service = geo_app.material_service()
+            material = service.import_local_material(cid, "doctor.txt")
+            service.parse_material(cid, material["id"])
+            service.confirm_material(cid, material["id"], True)
+
+            bundle = geo_app.read_material_bundle(cid)
+            messages = geo_app.build_content_generation_messages(
+                {"id": cid, "name": "兔博士口腔", "brand": "兔博士口腔"},
+                bundle,
+                [],
+                "写一篇正畸科普文章",
+            )
+
+            payload = json.dumps(messages, ensure_ascii=False)
+            self.assertIn("【客户事实卡】", payload)
+            self.assertIn("李璞", payload)
+            self.assertIn("医疗内容需避免效果承诺", payload)
+            self.assertIn("保证治愈", payload)
+            self.assertIn("资料状态：已确认", payload)
+
+    def test_content_generation_system_prompt_starts_with_default_geo_rules(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "客户", "brand": "测试品牌"},
+            {"text": "客户资料PDF：测试品牌只提供本地安装服务。", "files": ["profile.pdf"]},
+            [],
+            "生成一篇本地服务文章",
+        )
+
+        self.assertEqual(messages[0]["role"], "system")
+        system_prompt = messages[0]["content"]
+        self.assertTrue(system_prompt.startswith("【默认 GEO 内容生成规则】"))
+        self.assertIn("有本地用户决策价值", system_prompt)
+        self.assertIn("文章主体必须服从运营指定的文章类型", system_prompt)
+        self.assertNotIn("标题优先包含城市/区域、项目/服务和用户决策词", system_prompt)
+        self.assertIn("客户事实只能来自客户资料、样例文章和运营意见", system_prompt)
+        self.assertIn("不要编造案例、资质、价格、地址、设备、评价或承诺", system_prompt)
+
+    def test_content_generation_defaults_to_comparison_type_prompt(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            [],
+            "请参考高频引用文章生成一篇西安牙齿矫正内容",
+            selected_articles=[
+                {
+                    "title": "西安牙齿矫正医院全攻略（2026最新）",
+                    "url": "https://m.sohu.com/a/1046143123_122828553/",
+                    "platform": "搜狐",
+                    "count": 8,
+                }
+            ],
+        )
+
+        payload = json.dumps(messages, ensure_ascii=False)
+        self.assertIn("文章类型：对比型", payload)
+        self.assertIn("标题必须严格模仿高引用文章标题", payload)
+        self.assertIn("全攻略", payload)
+        self.assertIn("少量攻略型开头 + 大量分类对比", payload)
+        self.assertIn("主体分类对比必须充分展开", payload)
+        self.assertIn("不能只有一个对比对象", payload)
+        self.assertIn("不要写成单一品牌介绍稿", payload)
+
+    def test_content_generation_intro_type_requires_brand_title_and_brand_body(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            [],
+            "请写一篇兔博士口腔牙齿矫正服务介绍",
+            article_type="介绍型",
+        )
+
+        payload = json.dumps(messages, ensure_ascii=False)
+        self.assertIn("文章类型：介绍型", payload)
+        self.assertIn("标题必须包含品牌名：兔博士", payload)
+        self.assertIn("少量攻略型开头 + 大量品牌结构化介绍", payload)
+        self.assertIn("开头必须先写目标用户在该业务场景里的真实痛点和决策难点", payload)
+        self.assertIn("用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑", payload)
+        self.assertIn("资历、资质、团队、流程、设备、服务记录等只能作为证据", payload)
+        self.assertIn("不要一上来写品牌履历", payload)
+        self.assertIn("不能写成硬广", payload)
+        self.assertIn("避免营销口号", payload)
+        self.assertIn("不要写成医院榜单、第三方排名或多机构对比", payload)
+
+    def test_content_generation_does_not_parse_article_type_from_opinion(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            [],
+            "运营备注里写了介绍型三个字，但没有选择按钮参数",
+        )
+
+        payload = json.dumps(messages, ensure_ascii=False)
+        self.assertIn("文章类型：对比型", payload)
+        self.assertNotIn("标题必须包含品牌名：兔博士", payload)
+
+    def test_retired_frontend_modules_do_not_expose_backend_routes(self):
+        retired_routes = {
+            "/api/intel/analyze",
+            "/api/intel/records",
+            "/api/intel/platform_report",
+            "/api/intel/ai_report",
+            "/api/platforms",
+            "/api/platforms/<pid>",
+            "/api/platforms/ai_fill",
+            "/api/articles",
+            "/api/articles/generate",
+            "/api/articles/batch",
+            "/api/articles/<aid>/status",
+            "/api/articles/<aid>",
+            "/api/articles/<aid>/format",
+            "/api/content/gen_topics",
+            "/api/stats/overview",
+            "/api/stats/export",
+            "/api/doubao/login",
+            "/api/doubao/check_login",
+            "/api/doubao/crawl",
+            "/api/doubao/daily",
+            "/api/doubao/daily_list",
+            "/api/doubao/daily_analyze",
+            "/api/doubao/progress/<session_id>",
+            "/api/crawl/daily",
+            "/api/crawl/daily_list",
+            "/api/crawl/daily_analyze",
+            "/api/settings/rawpath",
+        }
+        active_routes = {str(rule.rule) for rule in geo_app.app.url_map.iter_rules()}
+
+        self.assertTrue(retired_routes.isdisjoint(active_routes))
+        self.assertIn("/api/content/generate", active_routes)
+        self.assertIn("/api/platform/crawl", active_routes)
 
     def test_basic_brand_analysis_without_api_marks_pending(self):
         analysis = geo_app.basic_brand_analysis_without_api(
@@ -601,24 +861,6 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 400)
             self.assertIn("问题组", response.get_json()["error"])
 
-    def test_platform_neutral_daily_list_alias(self):
-        with isolated_app_data():
-            geo_app.save_daily_raw(
-                "client-1",
-                "测试品牌",
-                "测试问题",
-                "测试回答",
-                [],
-                {"geo_score": 0, "main_ref": {}},
-            )
-
-            new_response = self.client.get("/api/crawl/daily_list?client_id=client-1")
-            old_response = self.client.get("/api/doubao/daily_list?client_id=client-1")
-
-            self.assertEqual(new_response.status_code, 200)
-            self.assertEqual(new_response.get_json(), old_response.get_json())
-            self.assertEqual(new_response.get_json()["dates"], [geo_app.today_str()])
-
     def test_clear_daily_records_respects_source_platform(self):
         with isolated_app_data():
             geo_app.save(
@@ -988,7 +1230,46 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(payload["insights"]["top_articles"][0]["title"], "文章A")
             self.assertEqual(payload["insights"]["mentioned_entities"][0]["name"], "竞品汽车音响")
 
-    def test_daily_insights_merges_stored_competitor_article_body_hits(self):
+    def test_daily_insights_uses_client_contract_platforms_for_all_platform_visibility(self):
+        with isolated_app_data():
+            date = geo_app.today_str()
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": date,
+                        "source_platform": "qwen",
+                        "answer": "回答",
+                        "refs": [{"title": "文章A", "url": "https://a.example", "platform": "搜狐"}],
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-2",
+                        "today": date,
+                        "source_platform": "qwen",
+                        "answer": "回答",
+                        "refs": [{"title": "文章B", "url": "https://b.example", "platform": "知乎"}],
+                    },
+                ],
+            )
+            geo_app.save(
+                geo_app.F_CLIENTS,
+                [
+                    {"id": "client-1", "name": "单平台客户", "contract_platforms": ["qwen"]},
+                    {"id": "client-2", "name": "多平台客户", "contract_platforms": ["qwen", "doubao"]},
+                ],
+            )
+
+            single = self.client.get(f"/api/daily/insights?client_id=client-1&date={date}").get_json()
+            multi = self.client.get(f"/api/daily/insights?client_id=client-2&date={date}").get_json()
+
+            self.assertEqual(single["insights"]["ai_platforms"][0]["source_platform"], "qwen")
+            self.assertEqual(multi["insights"]["ai_platforms"][0]["source_platform"], "all")
+            self.assertEqual(multi["insights"]["ai_platforms"][0]["platform_name"], "全部平台")
+
+    def test_daily_insights_does_not_return_competitor_article_section_payload(self):
         with isolated_app_data():
             date = geo_app.today_str()
             geo_app.save(
@@ -1052,12 +1333,59 @@ class FlaskApiTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
-            articles = payload["insights"]["competitor_articles"]
-            self.assertEqual(len(articles), 1)
-            self.assertEqual(articles[0]["title"], "高频文章A")
-            self.assertEqual(articles[0]["related_entities"], ["第一竞品"])
-            self.assertIn("正文命中", articles[0]["match_types"])
-            self.assertEqual(payload["insights"]["body_hit_report"]["matched_article_count"], 1)
+            self.assertNotIn("competitor_articles", payload["insights"])
+            self.assertNotIn("weak_competitor_articles", payload["insights"])
+            self.assertNotIn("selected_competitors", payload["insights"])
+            self.assertNotIn("body_hit_report", payload["insights"])
+
+    def test_daily_insights_filters_current_and_historical_own_brand_entities(self):
+        with isolated_app_data():
+            date = geo_app.today_str()
+            geo_app.save(
+                geo_app.F_CLIENTS,
+                [
+                    {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+                ],
+            )
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": date,
+                        "source_platform": "qwen",
+                        "brand": "西安兔博士口腔",
+                        "brand_mentioned": False,
+                        "answer": "兔博士口腔和竞品A被提到。",
+                        "refs": [],
+                        "mentioned_entities": [
+                            {"name": "兔博士口腔", "type": "品牌", "evidence": "兔博士口腔"},
+                            {"name": "竞品A", "type": "品牌", "evidence": "竞品A"},
+                        ],
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "today": date,
+                        "source_platform": "deepseek",
+                        "brand": "西安兔博士口腔",
+                        "brand_mentioned": True,
+                        "answer": "西安兔博士口腔被提到。",
+                        "refs": [],
+                        "mentioned_entities": [
+                            {"name": "西安兔博士口腔", "type": "门店", "evidence": "西安兔博士口腔"},
+                        ],
+                    },
+                ],
+            )
+
+            response = self.client.get(f"/api/daily/insights?client_id=client-1&date={date}")
+
+            self.assertEqual(response.status_code, 200)
+            insights = response.get_json()["insights"]
+            self.assertEqual(insights["brand_mentions"], 2)
+            self.assertEqual([item["name"] for item in insights["mentioned_entities"]], ["竞品A"])
 
     def test_delete_daily_entity_removes_name_within_filtered_scope(self):
         with isolated_app_data():

@@ -224,6 +224,9 @@ def run_node_crawler(
         env["OUTPUT_DIR"] = str(output_path)
         env["GEO_NODE_BRIDGE"] = "1"
         env["FOLLOWUP_API_ENABLED"] = os.environ.get("GEO_NODE_CRAWLER_FOLLOWUP_API", "false")
+        env["GEO_NODE_NEW_CONVERSATION_EVERY"] = os.environ.get(
+            "GEO_NODE_NEW_CONVERSATION_EVERY", "1"
+        )
         storage_state_path = prepare_storage_state_for_node(platform, tmp_path)
         if storage_state_path and not env.get("STORAGE_STATE_PATH"):
             env["STORAGE_STATE_PATH"] = storage_state_path

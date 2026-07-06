@@ -194,9 +194,63 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             self.assertEqual(captured["env"]["OUTPUT_DIR"], str(output_dir))
             self.assertEqual(captured["env"]["GEO_NODE_BRIDGE"], "1")
             self.assertEqual(captured["env"]["FOLLOWUP_API_ENABLED"], "false")
+            self.assertNotIn("GEO_NODE_NEW_PAGE_PER_QUERY", captured["env"])
+            self.assertEqual(captured["env"]["GEO_NODE_NEW_CONVERSATION_EVERY"], "1")
             self.assertTrue((output_dir / "qwen-test.md").exists())
             self.assertEqual((output_dir / "node-stdout.log").read_text(encoding="utf-8"), "node stdout")
             self.assertEqual((output_dir / "node-stderr.log").read_text(encoding="utf-8"), "node stderr")
+
+    def test_run_node_crawler_passes_all_questions_to_one_node_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            query_batches = []
+
+            def fake_subprocess_run(cmd, **kwargs):
+                query_file = Path(cmd[cmd.index("--query-file") + 1])
+                queries = query_file.read_text(encoding="utf-8").splitlines()
+                query_batches.append(queries)
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                out.mkdir(parents=True, exist_ok=True)
+                blocks = []
+                for index, query in enumerate(queries, start=1):
+                    blocks.append(
+                        f"""## {index}. {query}
+
+### 主问题回答
+
+回答 {index}
+
+### 参考来源
+
+(empty)
+"""
+                    )
+                (out / "qwen-test.md").write_text(
+                    """# Crawl Result - qwen
+
+- Platform: `qwen`
+
+""" + "\n".join(blocks),
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0, stdout=f"stdout {len(query_batches)}", stderr="")
+
+            with patch("services.node_crawler_bridge.subprocess.run", side_effect=fake_subprocess_run):
+                result = run_node_crawler(
+                    "qwen",
+                    ["问题A", "问题B"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                )
+
+            self.assertEqual(query_batches, [["问题A", "问题B"]])
+            self.assertEqual(result["total"], 2)
+            self.assertEqual(result["success"], 2)
+            self.assertEqual([item["question"] for item in result["results"]], ["问题A", "问题B"])
 
 
 if __name__ == "__main__":

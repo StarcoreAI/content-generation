@@ -323,6 +323,7 @@ async def get_refs(page):
         print(f"  [元宝] 引用提取异常: {e}")
     return refs
 
+
 # ── 登录 ─────────────────────────────────────────────────
 async def login_yuanbao_async():
     """打开浏览器让用户手动登录元宝，自动检测成功后保存状态。"""
@@ -382,13 +383,11 @@ async def crawl_worker(worker_id, questions, pw, results_dict, lock):
             for idx, q in questions:
                 results_dict[idx] = {"ok": False, "error": "need_login", "question": q}
         return
-
     print(f"  [YB Worker {worker_id}] 已登录，开始爬取 {len(questions)} 题")
 
     for i, (idx, question) in enumerate(questions):
         print(f"  [YB Worker {worker_id}] [{i+1}/{len(questions)}] #{idx} {question[:35]}...")
-        if i > 0:
-            await goto_new_chat(page)
+        await goto_new_chat(page)
 
         try:
             input_box = None
