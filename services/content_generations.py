@@ -9,30 +9,36 @@ class ContentGenerationStore:
         self.db_path = os.fspath(db_path)
         self.legacy_json_path = os.fspath(legacy_json_path) if legacy_json_path else None
 
-    def load_session(self, client_id):
+    def load_session(self, client_id, date=None):
         with self._connection() as conn:
             self._import_legacy_client(conn, client_id)
             conn.commit()
-            messages = self._load_messages(conn, client_id)
+            day = self._normalize_date(date)
+            messages = self._load_messages(conn, client_id, date=day)
+            params = [client_id]
+            where = "client_id = ?"
+            if day:
+                where += " AND created_at LIKE ?"
+                params.append(f"{day}%")
             articles = [
                 self._article_from_row(row)
                 for row in conn.execute(
-                    """
+                    f"""
                     SELECT *
                     FROM content_articles
-                    WHERE client_id = ?
+                    WHERE {where}
                     ORDER BY sequence ASC, created_at ASC
                     """,
-                    (client_id,),
+                    params,
                 )
             ]
         return {"messages": messages, "articles": articles}
 
-    def load_messages(self, client_id, article_type=None):
+    def load_messages(self, client_id, article_type=None, date=None):
         with self._connection() as conn:
             self._import_legacy_client(conn, client_id)
             conn.commit()
-            return self._load_messages(conn, client_id, article_type=article_type)
+            return self._load_messages(conn, client_id, article_type=article_type, date=date)
 
     def append_generation(self, client_id, article, user_message, assistant_message):
         article = dict(article or {})
@@ -60,6 +66,72 @@ class ContentGenerationStore:
                 conn.rollback()
                 raise
         return article
+
+    def delete_generation(self, client_id, article_id):
+        client_id = str(client_id or "")
+        article_id = str(article_id or "")
+        if not client_id or not article_id:
+            return False
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                article = conn.execute(
+                    """
+                    SELECT operator_opinion, created_at
+                    FROM content_articles
+                    WHERE client_id = ? AND id = ?
+                    """,
+                    (client_id, article_id),
+                ).fetchone()
+                if not article:
+                    conn.rollback()
+                    return False
+                linked_message_ids = [
+                    row["id"]
+                    for row in conn.execute(
+                        """
+                        SELECT id
+                        FROM content_messages
+                        WHERE client_id = ? AND article_id = ? AND role = 'assistant'
+                        """,
+                        (client_id, article_id),
+                    )
+                ]
+                conn.execute(
+                    "DELETE FROM content_articles WHERE client_id = ? AND id = ?",
+                    (client_id, article_id),
+                )
+                conn.execute(
+                    "DELETE FROM content_messages WHERE client_id = ? AND article_id = ?",
+                    (client_id, article_id),
+                )
+                conn.execute(
+                    """
+                    DELETE FROM content_messages
+                    WHERE client_id = ?
+                      AND role = 'user'
+                      AND article_id = ''
+                      AND created_at = ?
+                      AND content = ?
+                    """,
+                    (client_id, article["created_at"], article["operator_opinion"]),
+                )
+                for message_id in linked_message_ids:
+                    conn.execute(
+                        """
+                        DELETE FROM content_messages
+                        WHERE client_id = ?
+                          AND id = ?
+                          AND role = 'user'
+                          AND article_id = ''
+                        """,
+                        (client_id, int(message_id) - 1),
+                    )
+                conn.commit()
+                return True
+            except Exception:
+                conn.rollback()
+                raise
 
     @contextmanager
     def _connection(self):
@@ -162,13 +234,17 @@ class ContentGenerationStore:
             if isinstance(item, dict):
                 self._insert_message(conn, client_id, item)
 
-    def _load_messages(self, conn, client_id, article_type=None):
+    def _load_messages(self, conn, client_id, article_type=None, date=None):
         article_type = self._normalize_article_type(article_type)
+        day = self._normalize_date(date)
         params = [client_id]
         where = "client_id = ?"
         if article_type:
             where += " AND article_type = ?"
             params.append(article_type)
+        if day:
+            where += " AND created_at LIKE ?"
+            params.append(f"{day}%")
         return [
             self._message_from_row(row)
             for row in conn.execute(
@@ -267,6 +343,13 @@ class ContentGenerationStore:
 
     def _normalize_article_type(self, article_type):
         return article_type if article_type in {"对比型", "介绍型"} else ""
+
+    def _normalize_date(self, value):
+        value = str(value or "").strip()
+        if len(value) != 10 or value[4] != "-" or value[7] != "-":
+            return ""
+        y, m, d = value[:4], value[5:7], value[8:10]
+        return value if y.isdigit() and m.isdigit() and d.isdigit() else ""
 
     def _loads_list(self, value):
         try:

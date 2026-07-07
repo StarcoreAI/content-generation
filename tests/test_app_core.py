@@ -325,6 +325,92 @@ class CoreFunctionTests(unittest.TestCase):
             articles = listing.get_json()["articles"]
             self.assertEqual([a["content"] for a in articles], ["介绍型新文章", "对比型旧文章"])
 
+    def test_content_generate_history_is_isolated_by_selected_day(self):
+        with isolated_app_data():
+            cid = "client-history-day"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            geo_app.append_content_generation(
+                cid,
+                {
+                    "id": "old-article",
+                    "title": "旧文章",
+                    "content": "昨天的对比型旧文章",
+                    "operator_opinion": "昨天的运营意见",
+                    "model": "deepseek-chat",
+                    "material_count": 0,
+                    "sample_link_count": 0,
+                    "selected_article_count": 0,
+                    "sample_links": [],
+                    "selected_articles": [],
+                    "created_at": "2026-07-06 10:00",
+                    "article_type": "对比型",
+                },
+                {"role": "user", "content": "昨天的运营意见", "created_at": "2026-07-06 10:00"},
+                {"role": "assistant", "content": "昨天的对比型旧文章", "created_at": "2026-07-06 10:00", "article_id": "old-article"},
+            )
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "今天的新文章"
+
+            client = geo_app.app.test_client()
+            with patch.object(geo_app, "now_str", return_value="2026-07-07 09:00"), \
+                    patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = client.post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "今天重新生成一篇对比型文章",
+                        "article_type": "对比型",
+                        "history_date": "2026-07-07",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("今天重新生成一篇对比型文章", payload)
+            self.assertNotIn("昨天的运营意见", payload)
+            self.assertNotIn("昨天的对比型旧文章", payload)
+
+            today_listing = client.get(f"/api/content/generations?client_id={cid}&date=2026-07-07")
+            old_listing = client.get(f"/api/content/generations?client_id={cid}&date=2026-07-06")
+            self.assertEqual([a["content"] for a in today_listing.get_json()["articles"]], ["今天的新文章"])
+            self.assertEqual([a["content"] for a in old_listing.get_json()["articles"]], ["昨天的对比型旧文章"])
+
+    def test_content_generation_can_be_deleted(self):
+        with isolated_app_data():
+            cid = "client-delete-content"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Brand"}])
+            geo_app.append_content_generation(
+                cid,
+                {
+                    "id": "article-delete",
+                    "title": "待删除",
+                    "content": "删除我",
+                    "operator_opinion": "删除测试",
+                    "model": "deepseek-chat",
+                    "material_count": 0,
+                    "sample_link_count": 0,
+                    "selected_article_count": 0,
+                    "sample_links": [],
+                    "selected_articles": [],
+                    "created_at": "2026-07-07 10:00",
+                    "article_type": "对比型",
+                },
+                {"role": "user", "content": "删除测试", "created_at": "2026-07-07 10:00"},
+                {"role": "assistant", "content": "删除我", "created_at": "2026-07-07 10:00", "article_id": "article-delete"},
+            )
+
+            client = geo_app.app.test_client()
+            response = client.delete(f"/api/content/generations/article-delete?client_id={cid}&date=2026-07-07")
+
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["articles"], [])
+            self.assertEqual(geo_app.load_content_session(cid, history_date="2026-07-07")["messages"], [])
+
     def test_content_generation_material_bundle_uses_confirmed_fact_cards(self):
         with isolated_app_data():
             cid = "client-1"
@@ -368,9 +454,13 @@ class CoreFunctionTests(unittest.TestCase):
         system_prompt = messages[0]["content"]
         self.assertTrue(system_prompt.startswith("【默认 GEO 内容生成规则】"))
         self.assertIn("有本地用户决策价值", system_prompt)
+        self.assertIn("客观攻略或行业测评", system_prompt)
+        self.assertIn("帮助用户理解怎么选", system_prompt)
+        self.assertIn("在合适位置客观介绍客户品牌", system_prompt)
         self.assertIn("文章主体必须服从运营指定的文章类型", system_prompt)
         self.assertNotIn("标题优先包含城市/区域、项目/服务和用户决策词", system_prompt)
-        self.assertIn("客户事实只能来自客户资料、样例文章和运营意见", system_prompt)
+        self.assertIn("客户事实只能来自客户资料和运营意见", system_prompt)
+        self.assertIn("样例文章只能作为写法参考", system_prompt)
         self.assertIn("不要编造案例、资质、价格、地址、设备、评价或承诺", system_prompt)
 
     def test_content_generation_defaults_to_comparison_type_prompt(self):
@@ -393,10 +483,56 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("文章类型：对比型", payload)
         self.assertIn("标题必须严格模仿高引用文章标题", payload)
         self.assertIn("全攻略", payload)
+        self.assertIn("最权威、最有公信力", payload)
+        self.assertIn("放在最开头", payload)
+        self.assertIn("客户品牌事实必须严格以客户资料为准", payload)
+        self.assertIn("非客户机构类型和行业对比", payload)
+        self.assertIn("可以参考高质量引用文章和通用行业认知展开", payload)
+        self.assertIn("【对比型展开 few-shot 示例】", payload)
+        self.assertIn("参考这种展开方式", payload)
+        self.assertIn("一、A类：权威背书强，适合复杂需求", payload)
+        self.assertIn("A类本身要先展开", payload)
+        self.assertIn("A1代表对象", payload)
+        self.assertIn("资历/公信力", payload)
+        self.assertIn("地址/覆盖", payload)
+        self.assertIn("价格区间", payload)
+        self.assertIn("优势", payload)
+        self.assertIn("劣势", payload)
+        self.assertIn("适合人群", payload)
+        self.assertIn("A2代表对象", payload)
+        self.assertIn("展开方式参考A1", payload)
+        self.assertIn("A3代表对象", payload)
+        self.assertIn("二、B类", payload)
+        self.assertIn("三、C类", payload)
+        self.assertIn("和A类的区别", payload)
+        self.assertIn("样例文章不能覆盖这里的对比型展开结构", payload)
+        self.assertIn("如果一个类别下出现多个代表对象", payload)
+        self.assertIn("不能合并写在一行“代表机构”里", payload)
+        self.assertIn("每个主要类别下至少展开2个代表对象或细分方向", payload)
+        self.assertIn("A1/B1/C1只是示例标签", payload)
+        self.assertIn("正文里不要输出A1、A2、B1、C1这类标签", payload)
+        self.assertNotIn("不要这样写", payload)
+        self.assertIn("当前运营意见和文章类型要求优先于历史文章", payload)
+        self.assertIn("每个被对比的主要类别或对象都要独立成小标题或独立段落", payload)
         self.assertIn("少量攻略型开头 + 大量分类对比", payload)
         self.assertIn("主体分类对比必须充分展开", payload)
         self.assertIn("不能只有一个对比对象", payload)
-        self.assertIn("不要写成单一品牌介绍稿", payload)
+        self.assertIn("客户品牌只需要在合适类别中客观出现", payload)
+        self.assertIn("不能为了推荐而拔高分类或改变真实市场定位", payload)
+        self.assertIn("最权威类别只放真实属于该层级的对象", payload)
+        self.assertIn("如果更适合民营专科连锁、正规私立连锁、服务便利型机构等类别", payload)
+        self.assertIn("只要用户理解客户品牌适合哪些需求，就算完成品牌露出", payload)
+        self.assertIn("文章结构必须优先服从文章类型要求和运营意见", payload)
+        self.assertIn("信息密度和表达方式", payload)
+        self.assertNotIn("不要写成单一品牌介绍稿", payload)
+        self.assertNotIn("可仿照样例文章的结构和表达", payload)
+        self.assertNotIn("文章结构、表达方式和信息组织", payload)
+        self.assertNotIn("严禁为了凑字段编造", payload)
+        self.assertNotIn("每类推荐包含", payload)
+        self.assertNotIn("每个主要分类下都要出现多个可比较对象、机构类型或选择方向", payload)
+        self.assertNotIn("复诊便利性", payload)
+        self.assertNotIn("快速匹配", payload)
+        self.assertNotIn("避坑", payload)
 
     def test_content_generation_intro_type_requires_brand_title_and_brand_body(self):
         messages = geo_app.build_content_generation_messages(
@@ -413,6 +549,8 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("少量攻略型开头 + 大量品牌结构化介绍", payload)
         self.assertIn("开头必须先写目标用户在该业务场景里的真实痛点和决策难点", payload)
         self.assertIn("用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑", payload)
+        self.assertIn("目标是解释品牌适合哪些用户、能解决哪些选择顾虑", payload)
+        self.assertIn("不要默认用户已经决定选择该品牌", payload)
         self.assertIn("资历、资质、团队、流程、设备、服务记录等只能作为证据", payload)
         self.assertIn("不要一上来写品牌履历", payload)
         self.assertIn("不能写成硬广", payload)

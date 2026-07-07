@@ -72,6 +72,53 @@ class ContentGenerationStoreTests(unittest.TestCase):
             self.assertEqual([item["content"] for item in store.load_session("client-a")["articles"]], ["Content shared-id"])
             self.assertEqual([item["content"] for item in store.load_session("client-b")["articles"]], ["Content shared-id"])
 
+    def test_load_session_and_messages_can_filter_by_day(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+
+            store.append_generation(
+                "client-a",
+                {**article("old", "2026-01-01 10:00:00"), "article_type": "对比型"},
+                {"role": "user", "content": "old request", "created_at": "2026-01-01 10:00:00"},
+                {"role": "assistant", "content": "old article", "created_at": "2026-01-01 10:00:00", "article_id": "old"},
+            )
+            store.append_generation(
+                "client-a",
+                {**article("today", "2026-01-02 10:00:00"), "article_type": "对比型"},
+                {"role": "user", "content": "today request", "created_at": "2026-01-02 10:00:00"},
+                {"role": "assistant", "content": "today article", "created_at": "2026-01-02 10:00:00", "article_id": "today"},
+            )
+
+            session = store.load_session("client-a", date="2026-01-02")
+            messages = store.load_messages("client-a", article_type="对比型", date="2026-01-02")
+
+            self.assertEqual([item["id"] for item in session["articles"]], ["today"])
+            self.assertEqual([item["content"] for item in messages], ["today request", "today article"])
+
+    def test_delete_generation_removes_article_and_messages(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+
+            store.append_generation(
+                "client-a",
+                {**article("a1", "2026-01-01 10:00:00"), "article_type": "对比型"},
+                {"role": "user", "content": "request a1", "created_at": "2026-01-01 10:00:00"},
+                {"role": "assistant", "content": "article a1", "created_at": "2026-01-01 10:00:00", "article_id": "a1"},
+            )
+            store.append_generation(
+                "client-a",
+                {**article("a2", "2026-01-01 10:05:00"), "article_type": "对比型"},
+                {"role": "user", "content": "request a2", "created_at": "2026-01-01 10:05:00"},
+                {"role": "assistant", "content": "article a2", "created_at": "2026-01-01 10:05:00", "article_id": "a2"},
+            )
+
+            self.assertTrue(store.delete_generation("client-a", "a1"))
+
+            session = store.load_session("client-a")
+            self.assertEqual([item["id"] for item in session["articles"]], ["a2"])
+            self.assertEqual([item["content"] for item in session["messages"]], ["request a2", "article a2"])
+            self.assertFalse(store.delete_generation("client-a", "missing"))
+
     def test_load_session_imports_legacy_json_once_for_client(self):
         with tempfile.TemporaryDirectory() as tmp:
             legacy_path = os.path.join(tmp, "content_generations.json")

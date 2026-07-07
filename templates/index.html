@@ -598,7 +598,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用当前客户的全部资料，并带上本客户历史生成内容</div></div>
+      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用当前客户的全部资料，并只带上所选日期的历史生成内容</div></div>
     </div>
     <div class="form-row">
       <div class="fld">
@@ -607,6 +607,10 @@ tr:hover td{background:rgba(109,92,247,.02)}
           <button type="button" class="btn btn-p btn-sm" id="contentArticleTypeCompare" onclick="selectContentArticleType('对比型')">对比型</button>
           <button type="button" class="btn btn-o btn-sm" id="contentArticleTypeIntro" onclick="selectContentArticleType('介绍型')">介绍型</button>
         </div>
+      </div>
+      <div class="fld" style="max-width:180px">
+        <label>历史日期</label>
+        <input type="date" id="contentHistoryDate" onchange="loadContentGenerations()">
       </div>
     </div>
     <div class="form-row">
@@ -1066,9 +1070,20 @@ function checkLoginStatus() { checkAllLoginStatus(); }
 let contentTop20Articles = [];
 
 async function loadContent() {
+  ensureContentHistoryDate();
   loadMaterials();
   loadContentTop20Samples();
   loadContentGenerations();
+}
+
+function ensureContentHistoryDate() {
+  const el = document.getElementById('contentHistoryDate');
+  if (el && !el.value) el.value = getLocalDateString();
+}
+
+function getContentHistoryDate() {
+  ensureContentHistoryDate();
+  return document.getElementById('contentHistoryDate')?.value || getLocalDateString();
 }
 
 function getContentSampleLinks() {
@@ -1151,6 +1166,7 @@ async function generateContentArticle() {
     const r = await api('/api/content/generate', 'POST', {
       client_id: currentClientId,
       opinion,
+      history_date: getContentHistoryDate(),
       article_type: selectedContentArticleType,
       sample_links: getContentSampleLinks(),
       selected_articles: getSelectedContentTopArticles()
@@ -1171,7 +1187,7 @@ async function loadContentGenerations() {
     if (el) el.innerHTML = '<div class="empty"><i class="ti ti-writing"></i><p>请先选择客户</p></div>';
     return;
   }
-  const r = await api('/api/content/generations?client_id=' + currentClientId);
+  const r = await api('/api/content/generations?client_id=' + currentClientId + '&date=' + encodeURIComponent(getContentHistoryDate()));
   if (r.error) { toast(r.error, 'err'); return; }
   renderContentGenerations(r.articles || []);
 }
@@ -1199,6 +1215,7 @@ function renderContentGenerations(articles) {
       <div class="article-acts">
         <button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button>
         <button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button>
+        <button class="btn btn-danger btn-sm" onclick="deleteContentGeneration('${a.id}')">删除</button>
       </div>
     </div>`).join('');
 }
@@ -1212,6 +1229,14 @@ function copyContentGeneration(id) {
   const a = (window._contentGenerationCache || []).find(x => x.id === id);
   if (!a) return;
   navigator.clipboard.writeText(a.content || '').then(() => toast('文章已复制 ✦'));
+}
+async function deleteContentGeneration(id) {
+  if (!currentClientId || !id) return;
+  if (!confirm('确认删除这篇历史生成结果？')) return;
+  const r = await api('/api/content/generations/' + encodeURIComponent(id) + '?client_id=' + encodeURIComponent(currentClientId) + '&date=' + encodeURIComponent(getContentHistoryDate()), 'DELETE');
+  if (r.error) { toast(r.error, 'err'); return; }
+  renderContentGenerations(r.articles || []);
+  toast('已删除');
 }
 // ── Settings ──────────────────────────────────────────
 const PRESETS = {
