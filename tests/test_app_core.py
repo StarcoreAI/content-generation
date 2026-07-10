@@ -1,6 +1,8 @@
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import contextmanager
 from unittest.mock import patch
@@ -23,6 +25,8 @@ def isolated_app_data():
         "F_RAW_RECORDS": geo_app.F_RAW_RECORDS,
         "F_COMPETITOR_ARTICLE_BODY_HITS": geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
         "F_CONTENT_GENERATIONS": getattr(geo_app, "F_CONTENT_GENERATIONS", None),
+        "F_CRAWL_JOBS": getattr(geo_app, "F_CRAWL_JOBS", None),
+        "F_REFERENCE_INTELLIGENCE": getattr(geo_app, "F_REFERENCE_INTELLIGENCE", None),
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
@@ -42,6 +46,8 @@ def isolated_app_data():
         geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
         geo_app.F_COMPETITOR_ARTICLE_BODY_HITS = os.path.join(tmp, "competitor_article_body_hits.json")
         geo_app.F_CONTENT_GENERATIONS = os.path.join(tmp, "content_generations.json")
+        geo_app.F_CRAWL_JOBS = os.path.join(tmp, "crawl_jobs.json")
+        geo_app.F_REFERENCE_INTELLIGENCE = os.path.join(tmp, "reference_intelligence")
         if hasattr(geo_app, "UPLOAD_FOLDER"):
             geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
         if hasattr(geo_app, "LOCAL_PDF_FOLDER"):
@@ -72,6 +78,19 @@ def isolated_app_data():
 
 
 class CoreFunctionTests(unittest.TestCase):
+    def test_uid_is_unique_when_clock_timestamp_repeats(self):
+        class FixedDatetime:
+            @staticmethod
+            def now():
+                from datetime import datetime
+                return datetime(2026, 7, 9, 11, 30, 0, 123456)
+
+        with patch.object(geo_app, "datetime", FixedDatetime):
+            ids = [geo_app.uid() for _ in range(3)]
+
+        self.assertEqual(len(set(ids)), 3)
+        self.assertTrue(all(item.startswith("20260709113000123456") for item in ids))
+
     def test_build_node_output_dir_returns_absolute_path_for_relative_data_dir(self):
         path = geo_app.build_node_output_dir("data", "task-1", "qwen")
         self.assertTrue(os.path.isabs(path))
@@ -85,6 +104,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertTrue(geo_app.should_use_node_crawler("deepseek"))
             self.assertTrue(geo_app.should_use_node_crawler("yuanbao"))
             self.assertTrue(geo_app.should_use_node_crawler("qwen"))
+            self.assertTrue(geo_app.should_use_node_crawler("kimi"))
 
             os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "none"
             self.assertFalse(geo_app.should_use_node_crawler("doubao"))
@@ -488,7 +508,8 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("客户品牌事实必须严格以客户资料为准", payload)
         self.assertIn("非客户机构类型和行业对比", payload)
         self.assertIn("可以参考高质量引用文章和通用行业认知展开", payload)
-        self.assertIn("【对比型展开 few-shot 示例】", payload)
+        self.assertIn("【文章子类型：攻略对比型】", payload)
+        self.assertIn("【攻略对比型展开 few-shot 示例】", payload)
         self.assertIn("参考这种展开方式", payload)
         self.assertIn("一、A类：权威背书强，适合复杂需求", payload)
         self.assertIn("A类本身要先展开", payload)
@@ -505,7 +526,7 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("二、B类", payload)
         self.assertIn("三、C类", payload)
         self.assertIn("和A类的区别", payload)
-        self.assertIn("样例文章不能覆盖这里的对比型展开结构", payload)
+        self.assertIn("样例文章不能覆盖这里的攻略对比型展开结构", payload)
         self.assertIn("如果一个类别下出现多个代表对象", payload)
         self.assertIn("不能合并写在一行“代表机构”里", payload)
         self.assertIn("每个主要类别下至少展开2个代表对象或细分方向", payload)
@@ -533,6 +554,49 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertNotIn("复诊便利性", payload)
         self.assertNotIn("快速匹配", payload)
         self.assertNotIn("避坑", payload)
+
+    def test_content_generation_can_insert_reference_plugin_subtype(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            [],
+            "请参考引用情报插件写一篇内容",
+            article_type="对比型",
+            article_subtype="本地机构筛选标准型",
+            article_subtype_plugin={
+                "subtype_name": "本地机构筛选标准型",
+                "prompt_text": "先按机构类型和适合人群拆解。",
+                "few_shot": "用户问怎么选时，先写选择困难，再按本地老牌机构和连锁标准化机构展开。",
+            },
+        )
+
+        payload = json.dumps(messages, ensure_ascii=False)
+        self.assertIn("【文章子类型：本地机构筛选标准型】", payload)
+        self.assertIn("先按机构类型和适合人群拆解。", payload)
+        self.assertIn("用户问怎么选时，先写选择困难", payload)
+        self.assertNotIn("【攻略对比型展开 few-shot 示例】", payload)
+
+    def test_content_generation_can_insert_reference_plugin_subtype_for_intro_type(self):
+        messages = geo_app.build_content_generation_messages(
+            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            [],
+            "请参考引用情报插件写一篇品牌介绍",
+            article_type="介绍型",
+            article_subtype="痛点回应介绍型",
+            article_subtype_plugin={
+                "parent_type": "介绍型",
+                "subtype_name": "痛点回应介绍型",
+                "prompt_text": "先写用户顾虑，再用品牌资料逐项回应。",
+                "few_shot": "用户担心服务是否正规时，先写选择顾虑，再按流程、团队和售后说明品牌如何回应。",
+            },
+        )
+
+        payload = json.dumps(messages, ensure_ascii=False)
+        self.assertIn("文章类型：介绍型", payload)
+        self.assertIn("【文章子类型：痛点回应介绍型】", payload)
+        self.assertIn("先写用户顾虑，再用品牌资料逐项回应。", payload)
+        self.assertIn("用户担心服务是否正规时", payload)
 
     def test_content_generation_intro_type_requires_brand_title_and_brand_body(self):
         messages = geo_app.build_content_generation_messages(
@@ -700,7 +764,7 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_save_raw_record_raises_when_main_raw_store_write_fails(self):
         with isolated_app_data():
-            with patch("services.records.save_json", return_value=False):
+            with patch("services.storage.save_json", return_value=False):
                 with self.assertRaises(RuntimeError):
                     geo_app.save_raw_record(
                         client_id="client-1",
@@ -843,16 +907,16 @@ class FlaskApiTests(unittest.TestCase):
             )
             self.assertEqual(response.status_code, 200)
             client = response.get_json()["client"]
-            self.assertEqual(client["contract_platforms"], ["doubao", "qwen"])
+            self.assertEqual(client["contract_platforms"], ["qwen", "doubao"])
 
             update_response = self.client.put(
                 f"/api/clients/{client['id']}",
-                json={"contract_platforms": ["deepseek", "yuanbao"]},
+                json={"contract_platforms": ["deepseek", "kimi", "yuanbao"]},
             )
             self.assertEqual(update_response.status_code, 200)
 
             clients = self.client.get("/api/clients").get_json()
-            self.assertEqual(clients[0]["contract_platforms"], ["deepseek", "yuanbao"])
+            self.assertEqual(clients[0]["contract_platforms"], ["deepseek", "yuanbao", "kimi"])
 
     def test_platform_list_shape(self):
         with isolated_app_data():
@@ -860,7 +924,7 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
             platform_ids = {item["id"] for item in payload}
-            self.assertEqual(platform_ids, {"doubao", "deepseek", "yuanbao", "qwen"})
+            self.assertEqual(platform_ids, {"doubao", "deepseek", "yuanbao", "qwen", "kimi"})
             self.assertTrue(all("logged_in" in item for item in payload))
             self.assertTrue(all("status" in item for item in payload))
             self.assertTrue(all("state_file_exists" in item for item in payload))
@@ -1215,6 +1279,68 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(payload["top_articles"][0]["count"], 2)
             self.assertEqual(payload["top_articles"][0]["ai_platforms"], ["deepseek", "qwen"])
 
+    def test_daily_ref_stats_groups_top_articles_by_ai_platform_with_limit(self):
+        with isolated_app_data():
+            deepseek_refs = [
+                {
+                    "title": f"DeepSeek Article {i:02d}",
+                    "url": f"https://deepseek.example/{i}",
+                    "platform": "Sohu",
+                    "position": i + 1,
+                }
+                for i in range(13)
+            ]
+            geo_app.save(
+                geo_app.F_RAW_RECORDS,
+                [
+                    {
+                        "id": "raw-1",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "deepseek",
+                        "question": "q1",
+                        "answer": "a1",
+                        "refs": deepseek_refs,
+                    },
+                    {
+                        "id": "raw-2",
+                        "client_id": "client-1",
+                        "today": geo_app.today_str(),
+                        "source_platform": "qwen",
+                        "question": "q2",
+                        "answer": "a2",
+                        "refs": [
+                            {
+                                "title": "Qwen Article",
+                                "url": "https://qwen.example/article",
+                                "platform": "Zhihu",
+                                "position": 1,
+                            }
+                        ],
+                    },
+                ],
+            )
+
+            response = self.client.get(
+                f"/api/daily/ref_stats?client_id=client-1&date={geo_app.today_str()}"
+            )
+
+            payload = response.get_json()
+            grouped = {
+                item["source_platform"]: item["top_articles"]
+                for item in payload["top_articles_by_ai"]
+            }
+            self.assertEqual(len(grouped["deepseek"]), 12)
+            self.assertEqual(grouped["deepseek"][0]["title"], "DeepSeek Article 00")
+            self.assertEqual(grouped["deepseek"][-1]["title"], "DeepSeek Article 11")
+            self.assertEqual(len(grouped["qwen"]), 1)
+            self.assertEqual(grouped["qwen"][0]["title"], "Qwen Article")
+            self.assertEqual(grouped["qwen"][0]["url"], "https://qwen.example/article")
+            self.assertEqual(grouped["qwen"][0]["platform"], "Zhihu")
+            self.assertEqual(grouped["qwen"][0]["count"], 1)
+            self.assertEqual(grouped["qwen"][0]["avg_position"], 1.0)
+            self.assertEqual(grouped["qwen"][0]["ai_platforms"], ["qwen"])
+
     def test_daily_ref_stats_merges_same_article_url_variants_across_ai(self):
         with isolated_app_data():
             geo_app.save(
@@ -1332,6 +1458,11 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(by_title["命中文章"]["competitor_matched_entities"], ["第一竞品"])
             self.assertEqual(by_title["未命中文章"]["competitor_match_status"], "not_matched")
             self.assertEqual(by_title["失败文章"]["competitor_match_status"], "unconfirmed")
+            grouped_qwen = next(
+                item for item in payload["top_articles_by_ai"] if item["source_platform"] == "qwen"
+            )
+            grouped_by_title = {item["title"]: item for item in grouped_qwen["top_articles"]}
+            self.assertEqual(grouped_by_title["命中文章"]["competitor_match_status"], "matched")
 
     def test_daily_insights_filters_by_task_id(self):
         with isolated_app_data():
@@ -1646,8 +1777,9 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(report["status"], "blocked")
             self.assertEqual(report["error"], "cookie_expired")
 
-    def test_crawl_rejects_when_global_lock_is_busy(self):
-        acquired = geo_app.crawl_run_lock.acquire(blocking=False)
+    def test_crawl_rejects_when_same_platform_lock_is_busy(self):
+        lock = geo_app.get_crawl_platform_lock("qwen")
+        acquired = lock.acquire(blocking=False)
         self.assertTrue(acquired)
         try:
             response = self.client.post(
@@ -1662,12 +1794,253 @@ class FlaskApiTests(unittest.TestCase):
                 },
             )
         finally:
-            geo_app.crawl_run_lock.release()
+            lock.release()
 
         self.assertEqual(response.status_code, 409)
         payload = response.get_json()
         self.assertEqual(payload["error"], "crawl_busy")
-        self.assertIn("已有爬取任务进行中", payload["message"])
+        self.assertEqual(payload["platform"], "qwen")
+
+    def test_crawl_allows_different_platform_while_other_platform_is_busy(self):
+        lock = geo_app.get_crawl_platform_lock("deepseek")
+        acquired = lock.acquire(blocking=False)
+        self.assertTrue(acquired)
+        try:
+            with patch.object(geo_app, "platform_crawl_impl") as impl:
+                impl.side_effect = lambda: geo_app.jsonify({"ok": True})
+                response = self.client.post(
+                    "/api/platform/crawl",
+                    json={
+                        "client_id": "client-1",
+                        "brand": "测试品牌",
+                        "questions": ["测试问题"],
+                        "platform": "qwen",
+                        "repeat_count": 1,
+                        "parallel": 1,
+                    },
+                )
+        finally:
+            lock.release()
+
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.get_json()["ok"])
+
+    def test_crawl_job_create_claim_and_result_flow(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            geo_app.save(geo_app.F_GROUPS, {
+                "client-1": [
+                    {
+                        "id": "group-1",
+                        "name": "核心问题",
+                        "questions": ["问题一", "问题二"],
+                    }
+                ]
+            })
+
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "group_id": "group-1",
+                "platform": "qwen",
+                "repeat_count": 2,
+            })
+
+            self.assertEqual(create_response.status_code, 200)
+            created = create_response.get_json()
+            self.assertTrue(created["ok"])
+            self.assertEqual(created["job"]["status"], "pending")
+            self.assertEqual(created["job"]["brand"], "测试品牌")
+            self.assertEqual(created["job"]["questions"], ["问题一", "问题二"])
+            self.assertEqual(created["job"]["repeat_count"], 2)
+
+            claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+            self.assertEqual(claim_response.status_code, 200)
+            claimed = claim_response.get_json()
+            self.assertTrue(claimed["ok"])
+            self.assertEqual(claimed["job"]["id"], created["job"]["id"])
+            self.assertEqual(claimed["job"]["status"], "running")
+            self.assertEqual(claimed["job"]["assigned_to"], "ops-laptop-1")
+
+            empty_claim = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-2&platform=qwen")
+            self.assertEqual(empty_claim.status_code, 200)
+            self.assertFalse(empty_claim.get_json()["job"])
+
+            result_response = self.client.post(f"/api/crawl_jobs/{created['job']['id']}/result", json={
+                "status": "completed",
+                "summary": {"total": 2, "success": 2},
+                "results": [
+                    {
+                        "question": "问题一",
+                        "answer": "测试品牌被提到",
+                        "refs": [{"title": "引用文章", "url": "https://example.com/a"}],
+                        "cookies": [{"name": "session", "value": "secret"}],
+                    }
+                ],
+                "storage_state": {"cookies": [{"name": "session", "value": "secret"}]},
+                "password": "secret",
+            })
+
+            self.assertEqual(result_response.status_code, 200)
+            finished = result_response.get_json()["job"]
+            self.assertEqual(finished["status"], "completed")
+            self.assertEqual(finished["result_summary"], {"total": 2, "success": 2})
+            self.assertEqual(finished["persisted_records"], 1)
+            self.assertEqual(finished["persisted_errors"], 0)
+            self.assertEqual(finished["persist_result"]["saved"], 1)
+            self.assertEqual(finished["result_payload"]["results"][0]["question"], "问题一")
+            serialized = json.dumps(finished, ensure_ascii=False)
+            self.assertNotIn("secret", serialized)
+            self.assertNotIn("storage_state", serialized)
+            self.assertNotIn("cookies", serialized)
+
+            raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+            self.assertEqual(len(raw_records), 1)
+            self.assertEqual(raw_records[0]["client_id"], "client-1")
+            self.assertEqual(raw_records[0]["group_id"], "group-1")
+            self.assertEqual(raw_records[0]["brand"], "测试品牌")
+            self.assertEqual(raw_records[0]["question"], "问题一")
+            self.assertEqual(raw_records[0]["answer"], "测试品牌被提到")
+            self.assertEqual(raw_records[0]["source_platform"], "qwen")
+            self.assertEqual(raw_records[0]["crawler_engine"], "local_worker_node")
+
+    def test_cloud_can_create_login_job_for_local_worker(self):
+        with isolated_app_data():
+            create_response = self.client.post("/api/crawl_jobs/login", json={"platform": "qwen"})
+
+            self.assertEqual(create_response.status_code, 200)
+            created = create_response.get_json()
+            self.assertTrue(created["ok"])
+            self.assertEqual(created["job"]["job_type"], "login")
+            self.assertEqual(created["job"]["platform"], "qwen")
+            self.assertEqual(created["job"]["questions"], [])
+
+            claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+            self.assertEqual(claim_response.status_code, 200)
+            claimed = claim_response.get_json()["job"]
+            self.assertEqual(claimed["id"], created["job"]["id"])
+            self.assertEqual(claimed["job_type"], "login")
+            self.assertEqual(claimed["assigned_to"], "ops-laptop-1")
+
+            result_response = self.client.post(f"/api/crawl_jobs/{created['job']['id']}/result", json={
+                "status": "completed",
+                "summary": {"total": 1, "success": 1},
+                "results": [],
+            })
+
+            self.assertEqual(result_response.status_code, 200)
+            finished = result_response.get_json()
+            self.assertEqual(finished["job"]["status"], "completed")
+            self.assertTrue(finished["persisted"]["skipped"])
+            self.assertEqual(geo_app.load(geo_app.F_RAW_RECORDS, []), [])
+
+    def test_crawl_job_result_does_not_duplicate_raw_records(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "platform": "qwen",
+                "questions": ["问题一"],
+                "repeat_count": 1,
+            })
+            job_id = create_response.get_json()["job"]["id"]
+            self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+
+            payload = {
+                "status": "completed",
+                "summary": {"total": 1, "success": 1},
+                "results": [
+                    {"ok": True, "question": "问题一", "answer": "测试品牌被提到", "refs": []}
+                ],
+            }
+            first_response = self.client.post(f"/api/crawl_jobs/{job_id}/result", json=payload)
+            second_response = self.client.post(f"/api/crawl_jobs/{job_id}/result", json=payload)
+
+            self.assertEqual(first_response.status_code, 200)
+            self.assertEqual(second_response.status_code, 200)
+            raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+            self.assertEqual(len(raw_records), 1)
+            self.assertEqual(second_response.get_json()["persisted"]["reason"], "already_persisted")
+
+    def test_crawl_job_cancel_pending_prevents_claim(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "platform": "qwen",
+                "questions": ["问题一"],
+            })
+            job_id = create_response.get_json()["job"]["id"]
+
+            cancel_response = self.client.post(f"/api/crawl_jobs/{job_id}/cancel")
+            claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+
+            self.assertEqual(cancel_response.status_code, 200)
+            self.assertEqual(cancel_response.get_json()["job"]["status"], "canceled")
+            self.assertIsNone(claim_response.get_json()["job"])
+
+    def test_canceled_crawl_job_result_does_not_persist_raw_records(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "platform": "qwen",
+                "questions": ["问题一"],
+            })
+            job_id = create_response.get_json()["job"]["id"]
+            self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+            self.client.post(f"/api/crawl_jobs/{job_id}/cancel")
+
+            result_response = self.client.post(f"/api/crawl_jobs/{job_id}/result", json={
+                "status": "completed",
+                "summary": {"total": 1, "success": 1},
+                "results": [
+                    {"ok": True, "question": "问题一", "answer": "测试品牌被提到", "refs": []}
+                ],
+            })
+
+            self.assertEqual(result_response.status_code, 200)
+            self.assertEqual(result_response.get_json()["job"]["status"], "canceled")
+            self.assertEqual(result_response.get_json()["persisted"]["reason"], "job_not_completed")
+            self.assertEqual(geo_app.load(geo_app.F_RAW_RECORDS, []), [])
+
+    def test_kimi_crawl_job_result_persists_raw_records(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "platform": "kimi",
+                "questions": ["问题一"],
+            })
+            self.assertEqual(create_response.status_code, 200)
+            job_id = create_response.get_json()["job"]["id"]
+
+            claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=kimi")
+            self.assertEqual(claim_response.status_code, 200)
+            self.assertEqual(claim_response.get_json()["job"]["platform"], "kimi")
+
+            result_response = self.client.post(f"/api/crawl_jobs/{job_id}/result", json={
+                "status": "completed",
+                "summary": {"total": 1, "success": 1},
+                "results": [
+                    {"ok": True, "question": "问题一", "answer": "测试品牌被 Kimi 提到", "refs": []}
+                ],
+            })
+
+            self.assertEqual(result_response.status_code, 200)
+            raw_records = geo_app.load(geo_app.F_RAW_RECORDS, [])
+            self.assertEqual(len(raw_records), 1)
+            self.assertEqual(raw_records[0]["source_platform"], "kimi")
 
     def test_crawl_uses_node_bridge_when_platform_flag_enabled(self):
         old_value = os.environ.get("GEO_NODE_CRAWLER_PLATFORMS")
@@ -1711,14 +2084,14 @@ class FlaskApiTests(unittest.TestCase):
                         ],
                     }
 
-                entity_result = {
+                queued_result = {
                     "ok": True,
-                    "skipped": False,
-                    "changed": 1,
-                    "report_path": os.path.join(tmp, "reports", "entity.json"),
+                    "status": "queued",
+                    "queued": True,
                 }
                 with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler), \
-                        patch.object(geo_app, "auto_normalize_task_entities", return_value=entity_result) as auto_entities:
+                        patch.object(geo_app, "queue_entity_normalize_task", return_value=queued_result) as queue_entities, \
+                        patch.object(geo_app, "auto_normalize_task_entities") as auto_entities:
                     response = self.client.post(
                         "/api/platform/crawl",
                         json={
@@ -1740,8 +2113,12 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertIn("output_dir", calls[0]["kwargs"])
                 self.assertTrue(os.path.isabs(calls[0]["kwargs"]["output_dir"]))
                 self.assertTrue(calls[0]["kwargs"]["output_dir"].endswith(os.path.join("tasks", "node", payload["task_id"], "qwen")))
-                auto_entities.assert_called_once_with("client-1", geo_app.today_str(), payload["task_id"])
-                self.assertEqual(payload["entity_normalize"], entity_result)
+                queue_entities.assert_called_once()
+                queue_args = queue_entities.call_args.args
+                self.assertEqual(queue_args[:3], ("client-1", geo_app.today_str(), payload["task_id"]))
+                self.assertEqual(queue_args[3], payload["task_report"])
+                auto_entities.assert_not_called()
+                self.assertEqual(payload["entity_normalize"], queued_result)
 
                 records = geo_app.load(geo_app.F_RAW_RECORDS, [])
                 self.assertEqual(len(records), 1)
@@ -1753,7 +2130,7 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertEqual(report["crawler_engine"], "node")
                 self.assertEqual(report["node_output_dir"], calls[0]["kwargs"]["output_dir"])
                 self.assertEqual(report["status"], "completed")
-                self.assertEqual(report["entity_normalize"], entity_result)
+                self.assertEqual(report["entity_normalize"], queued_result)
         finally:
             if old_value is None:
                 os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
@@ -1868,7 +2245,7 @@ class FlaskApiTests(unittest.TestCase):
 
                 with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler), \
                         patch.object(geo_app, "analyze_brand_intel", side_effect=ValueError("Invalid control character")) as analyze, \
-                        patch.object(geo_app, "auto_normalize_task_entities", return_value={"ok": True, "changed": 0}):
+                        patch.object(geo_app, "queue_entity_normalize_task", return_value={"ok": True, "status": "queued", "queued": True}):
                     response = self.client.post(
                         "/api/platform/crawl",
                         json={
@@ -2004,6 +2381,525 @@ class FlaskApiTests(unittest.TestCase):
                 os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)
             else:
                 os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
+
+    def test_reference_intelligence_plugins_can_be_saved_and_loaded(self):
+        with isolated_app_data():
+            client = geo_app.app.test_client()
+            payload = {
+                "client_id": "c1",
+                "date": "2026-07-08",
+                "task_id": "task-1",
+                "clusters": [
+                    {
+                        "cluster_name": "需求场景匹配型",
+                        "structure_actions": ["先按用户需求场景拆分"],
+                        "abstract_rules": ["具体机构名改写成机构类型"],
+                    }
+                ],
+                "plugins": [
+                    {
+                        "parent_type": "介绍型",
+                        "subtype_name": "需求场景匹配型",
+                        "prompt_text": "先按用户需求场景拆分。",
+                        "few_shot": "用户问预算时，先列选择标准。",
+                        "source_articles": [
+                            {
+                                "title": "来源文章",
+                                "url": "https://example.com/source",
+                                "platform": "不展示",
+                                "citation_count": 5,
+                            }
+                        ],
+                    }
+                ],
+            }
+
+            response = client.post("/api/reference_intelligence/plugins", json=payload)
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["ok"])
+
+            response = client.get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08&task_id=task-1")
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertEqual(data["clusters"][0]["cluster_name"], "需求场景匹配型")
+            self.assertEqual(data["plugins"][0]["parent_type"], "介绍型")
+            self.assertEqual(data["plugins"][0]["subtype_name"], "需求场景匹配型")
+            self.assertEqual(data["plugins"][0]["prompt_text"], "先按用户需求场景拆分。")
+            self.assertEqual(data["plugins"][0]["few_shot"], "用户问预算时，先列选择标准。")
+            self.assertEqual(data["plugins"][0]["source_articles"], [
+                {"title": "来源文章", "url": "https://example.com/source"}
+            ])
+            self.assertNotIn("platform", data["plugins"][0]["source_articles"][0])
+            self.assertNotIn("citation_count", data["plugins"][0]["source_articles"][0])
+
+    def test_reference_intelligence_analyze_starts_background_stage_job(self):
+        with isolated_app_data():
+            with patch.object(geo_app, "queue_reference_analysis_job", return_value={
+                "ok": True,
+                "job_id": "job-1",
+                "status": "running",
+                "progress": 3,
+            }) as queue_job:
+                response = geo_app.app.test_client().post("/api/reference_intelligence/analyze", json={
+                    "client_id": "c1",
+                    "date": "2026-07-08",
+                })
+
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertEqual(data["job_id"], "job-1")
+            self.assertEqual(data["status"], "running")
+            self.assertEqual(data["progress"], 3)
+            self.assertNotIn("plugins", data)
+            queue_job.assert_called_once()
+            self.assertEqual(queue_job.call_args.kwargs["client_id"], "c1")
+            self.assertEqual(queue_job.call_args.kwargs["date_str"], "2026-07-08")
+
+    def test_reference_intelligence_analyze_status_and_cancel_endpoints(self):
+        with isolated_app_data():
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+
+            status_response = geo_app.app.test_client().get(f"/api/reference_intelligence/analyze_status?job_id={job_id}")
+            self.assertEqual(status_response.status_code, 200)
+            self.assertEqual(status_response.get_json()["job_id"], job_id)
+
+            cancel_response = geo_app.app.test_client().post("/api/reference_intelligence/analyze_cancel", json={
+                "job_id": job_id,
+            })
+            self.assertEqual(cancel_response.status_code, 200)
+            self.assertEqual(cancel_response.get_json()["status"], "canceled")
+
+            missing_response = geo_app.app.test_client().get("/api/reference_intelligence/analyze_status?job_id=missing")
+            self.assertEqual(missing_response.status_code, 404)
+
+    def test_reference_intelligence_queue_reuses_running_job_for_same_scope(self):
+        with isolated_app_data():
+            with geo_app.reference_analysis_jobs_guard:
+                geo_app.reference_analysis_jobs.clear()
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "", username="u1")
+            geo_app.update_reference_analysis_job(job_id, status="running", progress=40)
+
+            with patch.object(geo_app.threading, "Thread") as thread_cls:
+                result = geo_app.queue_reference_analysis_job("c1", "2026-07-08", "", username="u2")
+
+            self.assertEqual(result["job_id"], job_id)
+            self.assertEqual(result["progress"], 40)
+            thread_cls.assert_not_called()
+
+    def test_reference_intelligence_background_job_runs_new_stage_pipeline(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "r1",
+                    "client_id": "c1",
+                    "today": "2026-07-08",
+                    "source_platform": "deepseek",
+                    "question": "口腔门店怎么选？",
+                    "refs": [
+                        {"title": "西安口腔门店选择攻略", "url": "https://example.com/a", "platform": "媒体", "position": 1}
+                    ],
+                }
+            ])
+            ai_results = [
+                {
+                    "parent_type": "对比型",
+                    "opening": "先写用户选择困难。",
+                    "body": ["再按机构类型分层对比。"],
+                    "ending": "最后给选择建议。",
+                },
+                {
+                    "clusters": [
+                        {
+                            "parent_type": "对比型",
+                            "subtype_name": "本地机构筛选标准型",
+                            "article_indexes": [1],
+                            "shared_structure": {
+                                "opening": "先写用户选择困难。",
+                                "body": ["再按机构类型分层对比。"],
+                                "ending": "最后给选择建议。",
+                            },
+                        }
+                    ]
+                },
+                {
+                    "plugins": [
+                        {
+                            "cluster_index": 1,
+                            "parent_type": "对比型",
+                            "subtype_name": "本地机构筛选标准型",
+                            "prompt_text": "先按机构类型和适合人群拆解。",
+                            "few_shot": "用户问题场景：某地用户不知道怎么选服务机构。",
+                        }
+                    ]
+                },
+            ]
+
+            def fake_fetch(url, **kwargs):
+                return {
+                    "ok": True,
+                    "title": "西安口腔门店选择攻略",
+                    "description": "",
+                    "content": "这是一篇足够长的文章正文。" * 30,
+                    "fetch_method": "test",
+                }
+
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+            geo_app.run_reference_analysis_job(
+                job_id,
+                client_id="c1",
+                date_str="2026-07-08",
+                task_id="",
+                username="",
+                fetch_fn=fake_fetch,
+                ai_json_fn=lambda prompt, max_tokens: ai_results.pop(0),
+            )
+
+            status = geo_app.get_reference_analysis_job(job_id)
+            self.assertEqual(status["status"], "completed")
+            self.assertEqual(status["progress"], 100)
+
+            loaded = geo_app.app.test_client().get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08").get_json()
+            self.assertEqual(loaded["clusters"], [])
+            self.assertEqual(loaded["plugins"][0]["parent_type"], "对比型")
+            self.assertEqual(loaded["plugins"][0]["prompt_text"], "先按机构类型和适合人群拆解。")
+            self.assertEqual(loaded["plugins"][0]["source_articles"], [
+                {"title": "西安口腔门店选择攻略", "url": "https://example.com/a"}
+            ])
+
+            stage_dir = os.path.join(geo_app.F_REFERENCE_INTELLIGENCE, "c1", "2026-07-08")
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "fetched_articles.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage1_article_structures.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage2_structure_clusters.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage3_prompt_plugins.json")))
+
+    def test_reference_intelligence_fetch_reuses_cache_and_backfills_candidates(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "r1",
+                    "client_id": "c1",
+                    "today": "2026-07-08",
+                    "source_platform": "deepseek",
+                    "question": "服务机构怎么选？",
+                    "refs": [
+                        {"title": "缓存成功文章", "url": "https://example.com/a", "position": 1},
+                        {"title": "当前失败文章", "url": "https://example.com/b", "position": 2},
+                        {"title": "补抓成功文章", "url": "https://example.com/c", "position": 3},
+                    ],
+                }
+            ])
+            stage_dir = geo_app.reference_stage_dir("c1", "2026-07-08")
+            geo_app.save(os.path.join(stage_dir, "fetched_articles.json"), {
+                "articles": [
+                    {
+                        "url": "https://example.com/a",
+                        "ok": True,
+                        "title": "缓存成功文章",
+                        "description": "",
+                        "content": "缓存正文" * 120,
+                        "content_len": 480,
+                        "fetch_method": "browser",
+                    }
+                ]
+            })
+            fetched_urls = []
+
+            def fake_fetch(url, **kwargs):
+                fetched_urls.append(url)
+                if url.endswith("/b"):
+                    return {
+                        "ok": False,
+                        "title": "当前失败文章",
+                        "content": "",
+                        "error": "content_too_short",
+                        "fetch_method": "browser",
+                    }
+                return {
+                    "ok": True,
+                    "title": "补抓成功文章",
+                    "description": "",
+                    "content": "补抓正文" * 120,
+                    "error": "",
+                    "fetch_method": "browser",
+                }
+
+            ai_results = [
+                {"parent_type": "对比型", "opening": "缓存开头", "body": ["缓存结构"], "ending": "缓存结尾"},
+                {"parent_type": "对比型", "opening": "补抓开头", "body": ["补抓结构"], "ending": "补抓结尾"},
+                {
+                    "clusters": [
+                        {
+                            "parent_type": "对比型",
+                            "subtype_name": "补抓合并型",
+                            "article_indexes": [1, 2],
+                            "shared_structure": {"opening": "开头", "body": ["正文"], "ending": "结尾"},
+                        }
+                    ]
+                },
+                {
+                    "plugins": [
+                        {
+                            "cluster_index": 1,
+                            "parent_type": "对比型",
+                            "subtype_name": "补抓合并型",
+                            "prompt_text": "按补抓后的结构写。",
+                            "few_shot": "示例正文。",
+                        }
+                    ]
+                },
+            ]
+
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+            geo_app.run_reference_analysis_job(
+                job_id,
+                client_id="c1",
+                date_str="2026-07-08",
+                task_id="",
+                username="",
+                fetch_fn=fake_fetch,
+                ai_json_fn=lambda prompt, max_tokens: ai_results.pop(0),
+                limit=2,
+                candidate_limit=3,
+            )
+
+            self.assertEqual(set(fetched_urls), {"https://example.com/b", "https://example.com/c"})
+            fetched = geo_app.load(os.path.join(stage_dir, "fetched_articles.json"), {})
+            self.assertEqual(fetched["total"], 3)
+            self.assertEqual(fetched["fetched_ok"], 2)
+            self.assertEqual(fetched["fetched_failed"], 1)
+            self.assertEqual(fetched["articles"][0]["fetch_method"], "cache")
+            self.assertEqual([item["url"] for item in fetched["articles"]], [
+                "https://example.com/a",
+                "https://example.com/b",
+                "https://example.com/c",
+            ])
+
+            stage1 = geo_app.load(os.path.join(stage_dir, "stage1_article_structures.json"), {})
+            self.assertEqual(stage1["total_analyzed"], 2)
+            loaded = geo_app.app.test_client().get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08").get_json()
+            self.assertEqual(loaded["plugins"][0]["source_articles"], [
+                {"title": "缓存成功文章", "url": "https://example.com/a"},
+                {"title": "补抓成功文章", "url": "https://example.com/c"},
+            ])
+
+    def test_reference_intelligence_fetches_uncached_candidates_in_parallel(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "r1",
+                    "client_id": "c1",
+                    "today": "2026-07-08",
+                    "source_platform": "deepseek",
+                    "question": "服务机构怎么选？",
+                    "refs": [
+                        {"title": "文章A", "url": "https://example.com/a"},
+                        {"title": "文章B", "url": "https://example.com/b"},
+                        {"title": "文章C", "url": "https://example.com/c"},
+                        {"title": "文章D", "url": "https://example.com/d"},
+                    ],
+                }
+            ])
+            active = 0
+            max_active = 0
+            lock = threading.Lock()
+
+            def fake_fetch(url, **kwargs):
+                nonlocal active, max_active
+                with lock:
+                    active += 1
+                    max_active = max(max_active, active)
+                time.sleep(0.05)
+                with lock:
+                    active -= 1
+                return {
+                    "ok": True,
+                    "title": url.rsplit("/", 1)[-1],
+                    "description": "",
+                    "content": "并行正文" * 120,
+                    "error": "",
+                    "fetch_method": "browser",
+                }
+
+            ai_results = [
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {
+                    "clusters": [
+                        {
+                            "parent_type": "对比型",
+                            "subtype_name": "并行抓取型",
+                            "article_indexes": [1, 2, 3, 4],
+                            "shared_structure": {"opening": "开头", "body": ["正文"], "ending": "结尾"},
+                        }
+                    ]
+                },
+                {
+                    "plugins": [
+                        {
+                            "cluster_index": 1,
+                            "parent_type": "对比型",
+                            "subtype_name": "并行抓取型",
+                            "prompt_text": "按并行抓取后的结构写。",
+                            "few_shot": "示例正文。",
+                        }
+                    ]
+                },
+            ]
+
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+            geo_app.run_reference_analysis_job(
+                job_id,
+                client_id="c1",
+                date_str="2026-07-08",
+                fetch_fn=fake_fetch,
+                ai_json_fn=lambda prompt, max_tokens: ai_results.pop(0),
+                limit=4,
+                candidate_limit=4,
+            )
+
+            self.assertGreaterEqual(max_active, 2)
+            fetched = geo_app.load(os.path.join(geo_app.reference_stage_dir("c1", "2026-07-08"), "fetched_articles.json"), {})
+            self.assertEqual([item["url"] for item in fetched["articles"]], [
+                "https://example.com/a",
+                "https://example.com/b",
+                "https://example.com/c",
+                "https://example.com/d",
+            ])
+
+    def test_reference_intelligence_progress_anchors_match_parallel_pipeline(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "r1",
+                    "client_id": "c1",
+                    "today": "2026-07-08",
+                    "source_platform": "deepseek",
+                    "question": "服务机构怎么选？",
+                    "refs": [
+                        {"title": "文章A", "url": "https://example.com/a"},
+                        {"title": "文章B", "url": "https://example.com/b"},
+                    ],
+                }
+            ])
+            progresses = []
+            original_update = geo_app.update_reference_analysis_job
+
+            def record_update(job_id, **fields):
+                if "progress" in fields:
+                    progresses.append(fields["progress"])
+                return original_update(job_id, **fields)
+
+            ai_results = [
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {"parent_type": "对比型", "opening": "开头", "body": ["结构"], "ending": "结尾"},
+                {
+                    "clusters": [
+                        {
+                            "parent_type": "对比型",
+                            "subtype_name": "进度锚点型",
+                            "article_indexes": [1, 2],
+                            "shared_structure": {"opening": "开头", "body": ["正文"], "ending": "结尾"},
+                        }
+                    ]
+                },
+                {
+                    "plugins": [
+                        {
+                            "cluster_index": 1,
+                            "parent_type": "对比型",
+                            "subtype_name": "进度锚点型",
+                            "prompt_text": "按结构写。",
+                            "few_shot": "示例正文。",
+                        }
+                    ]
+                },
+            ]
+
+            with patch.object(geo_app, "update_reference_analysis_job", side_effect=record_update):
+                job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+                geo_app.run_reference_analysis_job(
+                    job_id,
+                    client_id="c1",
+                    date_str="2026-07-08",
+                    fetch_fn=lambda url, **kwargs: {
+                        "ok": True,
+                        "title": url.rsplit("/", 1)[-1],
+                        "description": "",
+                        "content": "正文" * 120,
+                        "error": "",
+                        "fetch_method": "browser",
+                    },
+                    ai_json_fn=lambda prompt, max_tokens: ai_results.pop(0),
+                    limit=2,
+                    candidate_limit=2,
+                )
+
+            self.assertIn(30, progresses)
+            self.assertIn(80, progresses)
+            self.assertIn(88, progresses)
+            self.assertNotIn(76, progresses)
+
+    def test_reference_intelligence_prompt_requires_detailed_few_shot_like_comparison_prompt(self):
+        prompt = geo_app.build_reference_plugin_prompt([
+            {
+                "cluster_name": "本地机构筛选标准型",
+                "article_pattern": "按机构类型和适合人群拆解。",
+                "structure_actions": ["先写选择困难", "再按机构类型分层"],
+                "abstract_rules": ["具体机构名改写成机构类型"],
+            }
+        ])
+
+        self.assertIn("few_shot", prompt)
+        self.assertIn("parent_type", prompt)
+        self.assertIn("对比型", prompt)
+        self.assertIn("介绍型", prompt)
+        self.assertIn("参考对比型展开 few-shot 示例的详细程度", prompt)
+        self.assertIn("【示例插件：攻略对比型】", prompt)
+        self.assertIn("仅作为示例", prompt)
+        self.assertIn("不要把示例插件作为输出结果", prompt)
+        self.assertIn("多个服务方", prompt)
+        self.assertIn("必须归为“对比型”", prompt)
+        self.assertIn("正文采用", prompt)
+        self.assertIn("3-5", prompt)
+        self.assertIn("500-900字", prompt)
+        self.assertIn("用户问题场景", prompt)
+        self.assertIn("可直接模仿的正文片段", prompt)
+        self.assertIn("不能只写一句方法说明", prompt)
+        self.assertIn("权威背书强，适合复杂需求", prompt)
+        self.assertIn("把A类/B类/C类和A1/A2/A3替换成当前行业里的真实机构类型", prompt)
+        self.assertIn("禁止出现具体机构名", prompt)
+        self.assertIn("具体文章名", prompt)
+        self.assertIn("本地老牌机构", prompt)
+
+    def test_daily_entity_status_reads_latest_task_report(self):
+        with isolated_app_data() as tmp:
+            report_dir = os.path.join(tmp, "tasks")
+            os.makedirs(report_dir, exist_ok=True)
+            geo_app.save(os.path.join(report_dir, "2026-07-08_old.json"), {
+                "client_id": "c1",
+                "date": "2026-07-08",
+                "task_id": "old",
+                "entity_normalize": {"status": "queued"},
+            })
+            geo_app.save(os.path.join(report_dir, "2026-07-08_new.json"), {
+                "client_id": "c1",
+                "date": "2026-07-08",
+                "task_id": "new",
+                "created_at": "2026-07-08 15:00",
+                "entity_normalize": {"ok": True, "changed": 2},
+                "entity_normalize_finished_at": "2026-07-08 15:03",
+            })
+
+            response = geo_app.app.test_client().get("/api/daily/entity_status?client_id=c1&date=2026-07-08")
+
+            self.assertEqual(response.status_code, 200)
+            data = response.get_json()
+            self.assertTrue(data["ok"])
+            self.assertEqual(data["status"], "completed")
+            self.assertEqual(data["task_id"], "new")
+            self.assertEqual(data["changed"], 2)
 
 
 if __name__ == "__main__":

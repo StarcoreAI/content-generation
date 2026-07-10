@@ -12,7 +12,7 @@ from pathlib import Path
 DEFAULT_BASE_URL = "http://127.0.0.1:5000"
 DEFAULT_CLIENT_ID = "20260701152718423132"
 DEFAULT_GROUP_ID = "20260701152826201973"
-PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "doubao"]
+PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
 
 
 def timestamp():

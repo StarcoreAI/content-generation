@@ -6,8 +6,10 @@ __pycache__/
 *.log
 *.pid
 logs/
+operator_logs/
 reports/
 pdf/
+deploy_artifacts/
 
 # Local runtime data: clients, settings, cookies, browser state, uploads.
 data/

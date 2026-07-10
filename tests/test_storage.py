@@ -29,6 +29,14 @@ class StorageTests(unittest.TestCase):
 
             self.assertEqual(lock.events, ["enter", "exit"])
 
+    def test_update_json_raises_when_save_fails(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "data.json"
+
+            with patch.object(storage, "save_json", return_value=False):
+                with self.assertRaises(RuntimeError):
+                    storage.update_json(str(path), [], lambda data: (data, None))
+
     def test_material_index_uses_shared_json_storage(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

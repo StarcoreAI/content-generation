@@ -10,7 +10,7 @@ class CrawlerSmokeTests(unittest.TestCase):
     def test_parse_platforms_expands_all_in_stable_order(self):
         self.assertEqual(
             crawler_smoke.parse_platforms("all"),
-            ["deepseek", "yuanbao", "qwen", "doubao"],
+            ["deepseek", "yuanbao", "qwen", "kimi", "doubao"],
         )
         self.assertEqual(
             crawler_smoke.parse_platforms("qwen,doubao"),

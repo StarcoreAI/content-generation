@@ -16,7 +16,7 @@
 - `/api/health`, login/logout/me, `/login`, and static assets remain anonymous.
 - Other main pages and business APIs require login.
 - Out-of-scope customer access returns 404.
-- No public registration, customer-transfer UI, feature permission matrix, or large refactor.
+- Public registration creates non-admin operator accounts only; no customer-transfer UI, feature permission matrix, or large refactor.
 
 ---
 

@@ -39,24 +39,71 @@ function Save-Pid {
     Set-Content -Path (Join-Path $root "server.pid") -Value $ProcessId -Encoding ASCII
 }
 
-function Get-LanIp {
+function Test-ExcludedLanIp {
+    param([string]$IpAddress)
+
+    if (-not $IpAddress) { return $true }
+    if ($IpAddress -like "127.*") { return $true }
+    if ($IpAddress -like "169.254.*") { return $true }
+    if ($IpAddress -match "^198\.(18|19)\.") { return $true }
+    return $false
+}
+
+function Test-PrivateLanIp {
+    param([string]$IpAddress)
+
+    if ($IpAddress -match "^10\.") { return $true }
+    if ($IpAddress -match "^192\.168\.") { return $true }
+    if ($IpAddress -match "^172\.(1[6-9]|2[0-9]|3[0-1])\.") { return $true }
+    return $false
+}
+
+function Test-ExcludedInterface {
+    param([string]$InterfaceAlias)
+
+    return [bool]($InterfaceAlias -match "vEthernet|Virtual|VMware|VirtualBox|Loopback|Bluetooth|Tailscale|ZeroTier|Clash|Sakura|VPN|Wintun|TAP|Hyper-V|Docker|WSL")
+}
+
+function Get-LanIps {
+    $ips = @()
     try {
-        $ip = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
-            Where-Object { $_.IPAddress -notlike "127.*" -and $_.IPAddress -notlike "169.254.*" } |
-            Select-Object -First 1 -ExpandProperty IPAddress
-        return $ip
+        $ips = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction Stop |
+            Where-Object {
+                -not (Test-ExcludedLanIp $_.IPAddress) -and
+                -not (Test-ExcludedInterface $_.InterfaceAlias)
+            } |
+            Sort-Object @{Expression={ if (Test-PrivateLanIp $_.IPAddress) { 0 } else { 1 } }}, IPAddress |
+            Select-Object -ExpandProperty IPAddress
     }
     catch {
-        return $null
+        $ips = ipconfig |
+            Select-String -Pattern "IPv4" |
+            ForEach-Object {
+                $parts = $_.ToString() -split ":"
+                if ($parts.Count -ge 2) { $parts[-1].Trim() }
+            } |
+            Where-Object { -not (Test-ExcludedLanIp $_) -and (Test-PrivateLanIp $_) }
     }
+
+    $uniqueIps = @($ips | Select-Object -Unique)
+    $preferredIps = @($uniqueIps | Where-Object { $_ -match "^192\.168\." -or $_ -match "^10\." })
+    if ($preferredIps.Count -gt 0) {
+        return $preferredIps
+    }
+    return $uniqueIps
 }
 
 function Write-AccessUrls {
     Write-Host "Open local: http://localhost:$port"
     if ($hostValue -in @("0.0.0.0", "::")) {
-        $lanIp = Get-LanIp
-        if ($lanIp) {
-            Write-Host "Open LAN:   http://${lanIp}:$port"
+        $lanIps = Get-LanIps
+        if ($lanIps.Count -gt 0) {
+            foreach ($lanIp in $lanIps) {
+                Write-Host "Open LAN:   http://${lanIp}:$port"
+            }
+        }
+        else {
+            Write-Host "Open LAN:   no usable LAN IPv4 found"
         }
     }
 }

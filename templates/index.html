@@ -251,6 +251,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
     <div class="t-ni on" onclick="navTo('groups',this)">问题组</div>
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
+    <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
   </div>
   <div class="t-right">
@@ -277,6 +278,7 @@ tr:hover td{background:rgba(109,92,247,.02)}
   <div class="s-nav on" onclick="navTo('groups',this)"><i class="ti ti-folder"></i>问题组管理</div>
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
+  <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
   <div class="s-sec">配置</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
@@ -343,14 +345,14 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div id="dailyAiPlatformCompare"><div class="empty"><i class="ti ti-layout-grid"></i><p>加载中...</p></div></div>
     </div>
     <div class="card">
-      <div class="card-hd"><span class="card-title">竞品/门店提及</span><span style="font-size:11px;color:var(--text3)">AI识别的品牌/竞品实体</span></div>
+      <div class="card-hd"><span class="card-title">竞品/门店提及</span><span style="font-size:11px;color:var(--text3)" id="dailyEntityStatus">实体识别状态待加载</span></div>
       <div id="dailyEntityMentions"><div style="color:var(--text3);font-size:12px">暂无数据</div></div>
     </div>
   </div>
 
   <!-- 高频引用文章 -->
   <div class="card">
-    <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
+    <div class="card-hd"><span class="card-title">高频引用文章（按 AI 平台 Top12）</span></div>
     <div id="dailyTopArticles"><div class="empty"><i class="ti ti-file-text"></i><p>加载中...</p></div></div>
   </div>
 
@@ -428,11 +430,18 @@ tr:hover td{background:rgba(109,92,247,.02)}
         <div class="card-sub" id="groupDetailDesc"></div>
       </div>
       <div class="acts">
-        <button class="btn btn-p btn-sm" onclick="addManualQuestion()">+ 手动添加</button>
+        <button class="btn btn-p btn-sm" onclick="addManualQuestion()">+ 批量添加</button>
         <button class="btn btn-p btn-sm" onclick="saveGroupQuestions()">保存</button>
       </div>
     </div>
     <div id="groupQuestionList"><div class="empty"><i class="ti ti-list"></i><p>暂无问题</p></div></div>
+    <div id="groupBatchQuestionBox" style="display:none;margin-top:10px;padding:10px;background:rgba(109,92,247,.05);border:1.5px solid var(--border2);border-radius:var(--r-sm)">
+      <textarea id="groupBatchQuestionInput" placeholder="每行一个问题，支持 1.xxx、2.xxx 这样的编号格式"></textarea>
+      <div class="acts" style="margin-top:8px">
+        <button class="btn btn-p btn-sm" onclick="addBatchQuestions()">添加到问题组</button>
+        <button class="btn btn-o btn-sm" onclick="document.getElementById('groupBatchQuestionBox').style.display='none'">取消</button>
+      </div>
+    </div>
     <div style="margin-top:12px;padding:10px 0;border-top:1.5px solid var(--border2)">
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
         <span style="font-size:11px;color:var(--text3);font-weight:600">平台登录：</span>
@@ -445,14 +454,15 @@ tr:hover td{background:rgba(109,92,247,.02)}
       <div id="platformLoginStatus" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"></div>
     </div>
     <div style="margin-top:14px;padding-top:14px;border-top:1.5px solid var(--border2);display:flex;gap:10px;align-items:center">
-      <button class="btn btn-p" id="btnCrawlGroup" onclick="crawlByGroup()">
+      <button class="btn btn-p" id="btnCrawlGroup" onclick="enqueueGroupCrawlJobs()">
         <span class="spin" id="spCrawlGroup" style="display:none"></span>
-        🚀 按此问题组一键爬取
+        🚀 一键创建爬取任务
       </button>
       <div>
         <span style="font-size:11px;color:var(--text2);font-weight:700">每题爬取次数：</span>
         <select id="grpRepeat" style="width:70px;font-size:11px;padding:4px 6px">
           <option value="1">1次</option>
+          <option value="2">2次</option>
           <option value="3">3次</option>
           <option value="5">5次</option>
           <option value="10">10次</option>
@@ -561,6 +571,43 @@ tr:hover td{background:rgba(109,92,247,.02)}
   </div>
 </div>
 
+<!-- ═══ 引用情报分析 ═══ -->
+<div class="page" id="page-reference">
+  <div class="pg-hd">
+    <div>
+      <div class="pg-title">✦ <em>引用情报分析</em></div>
+      <div class="pg-sub">从高频引用文章提炼可复用的写作插件，按对比型/介绍型挂到内容生产子类型下</div>
+    </div>
+    <div class="acts">
+      <input type="date" id="referenceDate" onchange="loadReferenceIntelligence()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
+      <button class="btn btn-o btn-sm" onclick="loadReferenceIntelligence()">刷新</button>
+      <button class="btn btn-p btn-sm" id="btnReferenceAnalyze" onclick="analyzeReferenceIntelligence()">
+        <span class="spin" id="spReferenceAnalyze" style="display:none"></span>
+        生成引用情报
+      </button>
+    </div>
+  </div>
+  <div id="referenceAnalyzeProgress" style="display:none;background:rgba(109,92,247,.06);border:1.5px solid rgba(109,92,247,.15);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px">
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
+      <span id="referenceAnalyzeProgressText" style="font-size:12px;font-weight:800;color:var(--pri)">生成中...</span>
+      <button type="button" class="btn btn-danger btn-sm" id="btnReferenceCancel" onclick="cancelReferenceAnalysis()">终止生成</button>
+    </div>
+    <div style="height:9px;background:rgba(109,92,247,.1);border-radius:20px;overflow:hidden">
+      <div id="referenceAnalyzeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--pri),var(--pri-l));border-radius:20px;transition:width .25s linear"></div>
+    </div>
+  </div>
+  <div class="info-banner">
+    当前保存和展示 `parent_type`、`subtype_name`、`prompt_text`、`few_shot`。内容生产会按父类型展示已生成插件，供运营选择。
+  </div>
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">引用情报插件</span>
+      <span style="font-size:11px;color:var(--text3)" id="referencePluginMeta"></span>
+    </div>
+    <div id="referencePluginList"><div class="empty"><i class="ti ti-bulb"></i><p>请选择客户后查看引用情报</p></div></div>
+  </div>
+</div>
+
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
@@ -608,9 +655,14 @@ tr:hover td{background:rgba(109,92,247,.02)}
           <button type="button" class="btn btn-o btn-sm" id="contentArticleTypeIntro" onclick="selectContentArticleType('介绍型')">介绍型</button>
         </div>
       </div>
+      <div class="fld" id="contentArticleSubtypeWrap">
+        <label>文章子类型</label>
+        <div id="contentArticleSubtypes" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+        <div id="contentArticleSubtypeMeta" style="font-size:10px;color:var(--text3);margin-top:5px">对比型默认使用攻略对比型；引用情报插件会按父类型显示在这里</div>
+      </div>
       <div class="fld" style="max-width:180px">
         <label>历史日期</label>
-        <input type="date" id="contentHistoryDate" onchange="loadContentGenerations()">
+        <input type="date" id="contentHistoryDate" onchange="loadContentGenerations();loadContentSubtypePlugins()">
       </div>
     </div>
     <div class="form-row">
@@ -700,6 +752,7 @@ function navTo(page, el) {
   // page-specific load
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
+  if (page === 'reference') loadReferenceIntelligence();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
@@ -713,8 +766,9 @@ let currentPlatform = 'all';  // 数据页固定汇总全部平台
 let currentClientPlatforms = [];
 let groupPlatformMode = 'contract';
 const loginPollTimers = {};
-const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
-const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'doubao'];
+const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
+const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];
+const CRAWL_PLATFORM_CONCURRENCY = 2;
 
 function sortCrawlPlatforms(platforms) {
   const rank = new Map(CRAWL_PLATFORM_ORDER.map((id, index) => [id, index]));
@@ -930,6 +984,9 @@ function onClientChange() {
   if (document.getElementById('page-content')?.classList.contains('on')) {
     loadContent();
   }
+  if (document.getElementById('page-reference')?.classList.contains('on')) {
+    loadReferenceIntelligence();
+  }
   // 全局刷新模板提示条（当日整理顶部）和内容生产模板列表
   loadTemplates();
   loadTemplatesForContent();
@@ -993,7 +1050,7 @@ async function delClient(id) {
 
 // ── 平台登录状态 ──────────────────────────────────────
 async function platformLogin(platform) {
-  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
+  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
   const pName = platform.charAt(0).toUpperCase() + platform.slice(1);
   const btnId = `btnLogin${pName}`;
   const btn = document.getElementById(btnId);
@@ -1001,38 +1058,16 @@ async function platformLogin(platform) {
     clearInterval(loginPollTimers[platform]);
     delete loginPollTimers[platform];
   }
-  if (btn) { btn.disabled = true; btn.textContent = '打开中…'; }
+  if (btn) { btn.disabled = true; btn.textContent = '通知中…'; }
   try {
-    const r = await api('/api/platform/login', 'POST', { platform });
-    toast(`${names[platform]} 浏览器已打开，请在窗口中完成登录`);
+    await api('/api/crawl_jobs/login', 'POST', { platform });
+    toast(`${names[platform]} 补登录任务已创建，请保持本地 worker 运行`);
     if (btn) {
       btn.disabled = false;
-      btn.textContent = `等待${names[platform]}验证`;
+      btn.textContent = `已通知${names[platform]}`;
     }
-
-    let tries = 0;
-    loginPollTimers[platform] = setInterval(async () => {
-      tries++;
-      const s = await api(`/api/platform/check_login?platform=${platform}`);
-      if (s.logged_in) {
-        clearInterval(loginPollTimers[platform]);
-        delete loginPollTimers[platform];
-        toast(`${names[platform]} 登录成功 ✦`);
-        checkAllLoginStatus();
-        if (btn) { btn.disabled = false; btn.textContent = `✅ ${names[platform]}`; }
-      } else if (tries >= 5 && btn) {
-        btn.disabled = false;
-        btn.textContent = `重新登录${names[platform]}`;
-      }
-      if (tries > 100) {
-        clearInterval(loginPollTimers[platform]);
-        delete loginPollTimers[platform];
-        if (btn) { btn.disabled = false; btn.textContent = names[platform]; }
-        checkAllLoginStatus();
-      }
-    }, 3000);
   } catch(e) {
-    toast('登录失败：' + e.message, 'err');
+    toast('创建补登录任务失败：' + e.message, 'err');
     if (btn) { btn.disabled = false; btn.textContent = names[platform]; }
   }
 }
@@ -1040,7 +1075,7 @@ function doubaoLogin() { platformLogin('doubao'); }
 
 async function checkAllLoginStatus() {
   const platforms = CRAWL_PLATFORM_ORDER;
-  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问'};
+  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
   const statusDiv = document.getElementById('platformLoginStatus');
   const legacyEl = document.getElementById('loginStatus');
   let html = '';
@@ -1068,11 +1103,15 @@ function checkLoginStatus() { checkAllLoginStatus(); }
 
 // ── Content ───────────────────────────────────────────
 let contentTop20Articles = [];
+let contentReferencePlugins = [];
+let selectedContentArticleSubtype = '攻略对比型';
+let selectedContentReferencePluginIndex = -1;
 
 async function loadContent() {
   ensureContentHistoryDate();
   loadMaterials();
   loadContentTop20Samples();
+  loadContentSubtypePlugins();
   loadContentGenerations();
 }
 
@@ -1146,11 +1185,95 @@ async function loadContentTop20Samples() {
 let selectedContentArticleType = '对比型';
 function selectContentArticleType(type) {
   selectedContentArticleType = type === '介绍型' ? '介绍型' : '对比型';
+  if (selectedContentArticleType === '对比型' && !selectedContentArticleSubtype) {
+    selectedContentArticleSubtype = '攻略对比型';
+    selectedContentReferencePluginIndex = -1;
+  }
   const compareBtn = document.getElementById('contentArticleTypeCompare');
   const introBtn = document.getElementById('contentArticleTypeIntro');
-  if (!compareBtn || !introBtn) return;
-  compareBtn.className = selectedContentArticleType === '对比型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
-  introBtn.className = selectedContentArticleType === '介绍型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+  if (compareBtn && introBtn) {
+    compareBtn.className = selectedContentArticleType === '对比型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+    introBtn.className = selectedContentArticleType === '介绍型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
+  }
+  renderContentArticleSubtypes();
+}
+
+function selectContentArticleSubtype(name, pluginIndex = -1) {
+  selectedContentArticleSubtype = name || '攻略对比型';
+  selectedContentReferencePluginIndex = pluginIndex;
+  renderContentArticleSubtypes();
+}
+
+function selectContentArticleSubtypeByIndex(pluginIndex) {
+  if (pluginIndex < 0) {
+    selectContentArticleSubtype('攻略对比型', -1);
+    return;
+  }
+  const plugin = contentReferencePlugins[pluginIndex] || {};
+  selectContentArticleSubtype(plugin.subtype_name || `引用情报子类型 ${pluginIndex + 1}`, pluginIndex);
+}
+
+function renderContentArticleSubtypes() {
+  const wrap = document.getElementById('contentArticleSubtypeWrap');
+  const list = document.getElementById('contentArticleSubtypes');
+  const meta = document.getElementById('contentArticleSubtypeMeta');
+  if (!wrap || !list) return;
+  wrap.style.display = '';
+  if (!selectedContentArticleSubtype) {
+    selectedContentArticleSubtype = selectedContentArticleType === '对比型' ? '攻略对比型' : '';
+    selectedContentReferencePluginIndex = -1;
+  }
+  const currentPlugins = contentReferencePlugins.filter(p => (p.parent_type || '对比型') === selectedContentArticleType);
+  const buttons = [
+    ...(selectedContentArticleType === '对比型' ? [{name: '攻略对比型', pluginIndex: -1}] : []),
+    ...currentPlugins.map((p) => {
+      const i = contentReferencePlugins.indexOf(p);
+      return {name: p.subtype_name || `引用情报子类型 ${i + 1}`, pluginIndex: i};
+    })
+  ];
+  if (!buttons.some(b => b.name === selectedContentArticleSubtype && b.pluginIndex === selectedContentReferencePluginIndex)) {
+    selectedContentArticleSubtype = buttons[0]?.name || '';
+    selectedContentReferencePluginIndex = -1;
+  }
+  if (!buttons.length) {
+    list.innerHTML = `<span style="font-size:11px;color:var(--text3)">暂无${escHtml(selectedContentArticleType)}引用情报子类型</span>`;
+    if (meta) meta.textContent = '可先到引用情报分析生成插件';
+    return;
+  }
+  list.innerHTML = buttons.map(b => {
+    const active = b.name === selectedContentArticleSubtype && b.pluginIndex === selectedContentReferencePluginIndex;
+    return `<button type="button" class="${active ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm'}" onclick="selectContentArticleSubtypeByIndex(${b.pluginIndex})">${escHtml(b.name)}</button>`;
+  }).join('');
+  if (meta) meta.textContent = currentPlugins.length
+    ? `已加载 ${currentPlugins.length} 个${selectedContentArticleType}引用情报子类型`
+    : '对比型默认使用攻略对比型；引用情报插件会按父类型显示在这里';
+}
+
+async function loadContentSubtypePlugins() {
+  contentReferencePlugins = [];
+  if (!currentClientId) {
+    renderContentArticleSubtypes();
+    return;
+  }
+  try {
+    const data = await api(`/api/reference_intelligence/plugins?client_id=${currentClientId}&date=${getContentHistoryDate()}`);
+    contentReferencePlugins = (data.plugins || []).filter(p => (p.subtype_name || p.prompt_text || p.few_shot));
+  } catch(e) {
+    contentReferencePlugins = [];
+  }
+  renderContentArticleSubtypes();
+}
+
+function getSelectedContentSubtypePlugin() {
+  if (selectedContentReferencePluginIndex < 0) return null;
+  const p = contentReferencePlugins[selectedContentReferencePluginIndex];
+  if (!p) return null;
+  return {
+    parent_type: p.parent_type || '对比型',
+    subtype_name: p.subtype_name || '',
+    prompt_text: p.prompt_text || '',
+    few_shot: p.few_shot || ''
+  };
 }
 
 async function generateContentArticle() {
@@ -1168,6 +1291,8 @@ async function generateContentArticle() {
       opinion,
       history_date: getContentHistoryDate(),
       article_type: selectedContentArticleType,
+      article_subtype: selectedContentArticleSubtype,
+      article_subtype_plugin: getSelectedContentSubtypePlugin(),
       sample_links: getContentSampleLinks(),
       selected_articles: getSelectedContentTopArticles()
     });
@@ -1191,6 +1316,9 @@ async function loadContentGenerations() {
   if (r.error) { toast(r.error, 'err'); return; }
   renderContentGenerations(r.articles || []);
 }
+function contentGenerationSubtypeLabel(a) {
+  return String(a?.article_subtype || '').trim();
+}
 function renderContentGenerations(articles) {
   const countEl = document.getElementById('content-article-count');
   if (countEl) countEl.textContent = articles.length + ' 篇';
@@ -1201,12 +1329,15 @@ function renderContentGenerations(articles) {
     return;
   }
   window._contentGenerationCache = articles;
-  el.innerHTML = articles.map(a => `
+  el.innerHTML = articles.map(a => {
+    const subtypeLabel = contentGenerationSubtypeLabel(a);
+    return `
     <div class="article-card">
       <div class="article-title">${a.title || '未命名文章'}</div>
       <div class="article-meta">
         <span class="badge badge-p">调用模型：${a.model || '未知模型'}</span>
         <span class="badge badge-g">${a.article_type || '未标记类型'}</span>
+        ${subtypeLabel ? `<span class="badge badge-a">子类型：${escHtml(subtypeLabel)}</span>` : ''}
         <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
         <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
         <span style="font-size:10px;color:var(--text3)">${a.created_at || ''}</span>
@@ -1217,13 +1348,16 @@ function renderContentGenerations(articles) {
         <button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button>
         <button class="btn btn-danger btn-sm" onclick="deleteContentGeneration('${a.id}')">删除</button>
       </div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
 }
 function viewContentGeneration(id) {
   const a = (window._contentGenerationCache || []).find(x => x.id === id);
   if (!a) return;
+  const subtypeLabel = contentGenerationSubtypeLabel(a);
+  const subtypeHtml = subtypeLabel ? `<div class="content-generation-subtype">文章子类型：${escHtml(subtypeLabel)}</div>` : '';
   const win = window.open('','_blank','width=760,height=680');
-  win.document.write(`<html><head><title>${a.title || '生成文章'}</title><style>body{font-family:sans-serif;padding:30px;line-height:1.8;max-width:760px;margin:auto}h1{font-size:20px;margin-bottom:12px}pre{white-space:pre-wrap;font-family:inherit}</style></head><body><h1>${a.title || '生成文章'}</h1><pre>${a.content || ''}</pre></body></html>`);
+  win.document.write(`<html><head><title>${a.title || '生成文章'}</title><style>body{font-family:sans-serif;padding:30px;line-height:1.8;max-width:760px;margin:auto;color:#1e1b4b}h1{font-size:20px;margin-bottom:12px}.content-generation-subtype{display:inline-block;margin-bottom:10px;padding:4px 10px;border-radius:8px;background:#fff7ed;color:#92400e;font-size:12px;font-weight:700}pre{white-space:pre-wrap;font-family:inherit}</style></head><body>${subtypeHtml}<h1>${a.title || '生成文章'}</h1><pre>${a.content || ''}</pre></body></html>`);
 }
 function copyContentGeneration(id) {
   const a = (window._contentGenerationCache || []).find(x => x.id === id);
@@ -1478,7 +1612,7 @@ function renderGroupQuestions() {
   el.innerHTML = currentGroupQuestions.map((q,i) => `
     <div class="question-item">
       <span class="question-num">${String(i+1).padStart(2,'0')}</span>
-      <span class="question-text">${q}</span>
+      <span class="question-text">${escHtml(q)}</span>
       <button class="question-del" onclick="delGroupQ(${i})">×</button>
     </div>`).join('');
 }
@@ -1505,13 +1639,38 @@ async function delGroupQ(i) {
 }
 
 async function addManualQuestion() {
-  const q = prompt('请输入问题：');
-  if (q?.trim()) {
-    currentGroupQuestions.push(q.trim());
-    renderGroupQuestions();
-    await persistGroupQuestions(true);
-    toast('问题已添加并保存 ✦');
+  const box = document.getElementById('groupBatchQuestionBox');
+  const input = document.getElementById('groupBatchQuestionInput');
+  box.style.display = box.style.display === 'none' ? 'block' : 'none';
+  if (box.style.display !== 'none') input.focus();
+}
+
+function parseBatchQuestions(raw) {
+  return String(raw || '')
+    .split(/\r?\n/)
+    .map(line => line.replace(/^\s*(?:[-*•]\s*|[（(]?\d+[）)]?[.、)]?\s*)/, '').trim())
+    .filter(Boolean);
+}
+
+async function addBatchQuestions() {
+  const input = document.getElementById('groupBatchQuestionInput');
+  const parsed = parseBatchQuestions(input.value);
+  const seen = new Set(currentGroupQuestions);
+  const additions = parsed.filter(q => {
+    if (seen.has(q)) return false;
+    seen.add(q);
+    return true;
+  });
+  if (!additions.length) {
+    toast('没有可添加的新问题', 'err');
+    return;
   }
+  currentGroupQuestions.push(...additions);
+  input.value = '';
+  document.getElementById('groupBatchQuestionBox').style.display = 'none';
+  renderGroupQuestions();
+  await persistGroupQuestions(true);
+  toast(`已添加 ${additions.length} 个问题并保存 ✦`);
 }
 
 async function saveGroupQuestions() {
@@ -1611,6 +1770,96 @@ async function runGroupCrawlForPlatform(platform, repeat) {
   }
 }
 
+function getGroupCrawlPlatformChoicesForJobs() {
+  return sortCrawlPlatforms(getSelectedGroupCrawlPlatformIds().map(id => ({
+    id,
+    name: CRAWL_PLATFORM_NAMES[id] || id
+  })));
+}
+
+async function enqueueGroupCrawlJobs() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  if (!currentGroupId) { toast('请先打开问题组','err'); return; }
+  if (!currentGroupQuestions.length) { toast('该组暂无问题','err'); return; }
+  const repeat = parseInt(document.getElementById('grpRepeat').value) || 1;
+  const platforms = getGroupCrawlPlatformChoicesForJobs();
+  if (!platforms.length) {
+    toast('请先选择至少一个爬取平台', 'err');
+    return;
+  }
+  const total = currentGroupQuestions.length * repeat * platforms.length;
+  if (!confirm(`将创建 ${platforms.length} 个本地 worker 任务\n${currentGroupQuestions.length} 题 × ${repeat} 次 × ${platforms.length} 平台 = ${total} 个样本，确认？`)) return;
+
+  const btn = document.getElementById('btnCrawlGroup');
+  btn.disabled = true;
+  document.getElementById('grpCrawlStatus').textContent = '正在创建本地 worker 任务...';
+  document.getElementById('grpCrawlResult').style.display = 'block';
+
+  try {
+    const jobs = [];
+    const errors = [];
+    for (const platform of platforms) {
+      const resp = await fetch('/api/crawl_jobs', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          client_id: currentClientId,
+          brand: currentBrand,
+          group_id: currentGroupId,
+          platform: platform.id,
+          repeat_count: repeat
+        })
+      });
+      const data = await resp.json();
+      if (data.error) errors.push(`${platform.name}：${data.message || data.error}`);
+      else jobs.push({platform, job: data.job});
+    }
+
+    document.getElementById('grpCrawlStatus').textContent =
+      `已创建 ${jobs.length} 个本地 worker 任务${errors.length ? `，失败 ${errors.length} 个` : ''}`;
+    document.getElementById('grpCrawlResult').innerHTML = `
+      <div style="padding:10px;background:var(--bg);border:1px solid var(--border2);border-radius:var(--r-sm);font-size:12px;line-height:1.7">
+        <div style="font-weight:900;color:var(--text);margin-bottom:6px">本地 worker 任务已创建</div>
+        ${jobs.map(({platform, job}) => `
+          <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--border2);padding:6px 0">
+            <span>${escHtml(platform.name)} · ${escHtml(job.id)}</span>
+            <button class="btn btn-danger btn-sm" onclick="cancelCrawlJob('${escHtml(job.id)}')">取消</button>
+          </div>`).join('')}
+        ${errors.length ? `<div style="color:var(--red);margin-top:8px">${errors.map(escHtml).join('<br>')}</div>` : ''}
+      </div>`;
+    if (jobs.length) toast('本地 worker 任务已创建');
+  } catch(e) {
+    toast('创建任务失败：' + e.message, 'err');
+    document.getElementById('grpCrawlStatus').textContent = '创建任务失败';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function cancelCrawlJob(jobId) {
+  if (!jobId) return;
+  try {
+    const resp = await fetch(`/api/crawl_jobs/${encodeURIComponent(jobId)}/cancel`, {method: 'POST'});
+    const data = await resp.json();
+    if (data.error) throw new Error(data.message || data.error);
+    toast('任务已取消');
+  } catch(e) {
+    toast('取消失败：' + e.message, 'err');
+  }
+}
+
+async function runCrawlPlatformPool(platforms, worker, concurrency=CRAWL_PLATFORM_CONCURRENCY) {
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), platforms.length);
+  const runners = Array.from({length: workerCount}, async () => {
+    while (nextIndex < platforms.length) {
+      const index = nextIndex++;
+      await worker(platforms[index], index);
+    }
+  });
+  await Promise.all(runners);
+}
+
 function renderGroupCrawlPlatformResult(platform, r) {
   const taskInfoHtml = buildGroupCrawlTaskInfoHtml(r);
   const failureItems = r.error_details || r.details || [];
@@ -1687,15 +1936,16 @@ async function crawlByGroup() {
   document.getElementById('grpCrawlResult').style.display = 'none';
 
   try {
-    const resultBlocks = [];
+    const resultBlocks = new Array(targetPlatforms.length);
     let totalAnalyzed = 0;
     let totalErrors = 0;
     let failedPlatforms = 0;
     let hasLoginError = false;
+    let finishedPlatforms = 0;
 
     document.getElementById('grpCrawlResult').style.display = 'block';
 
-    for (const [idx, platform] of targetPlatforms.entries()) {
+    await runCrawlPlatformPool(targetPlatforms, async (platform, idx) => {
       document.getElementById('grpCrawlStatus').textContent =
         `正在爬取 ${platform.name}（${idx + 1}/${targetPlatforms.length}），预计样本 ${currentGroupQuestions.length * repeat} 条...`;
       const r = await runGroupCrawlForPlatform(platform, repeat);
@@ -1708,9 +1958,12 @@ async function crawlByGroup() {
         totalErrors += Number(r.errors || 0);
       }
 
-      resultBlocks.push(renderGroupCrawlPlatformResult(platform, r));
-      document.getElementById('grpCrawlResult').innerHTML = resultBlocks.join('');
-    }
+      finishedPlatforms += 1;
+      resultBlocks[idx] = renderGroupCrawlPlatformResult(platform, r);
+      document.getElementById('grpCrawlResult').innerHTML = resultBlocks.filter(Boolean).join('');
+      document.getElementById('grpCrawlStatus').textContent =
+        `鐖彇涓細宸插畬鎴?${finishedPlatforms}/${targetPlatforms.length} 涓钩鍙帮紝鎴愬姛鍒嗘瀽 ${totalAnalyzed} 棰?`;
+    });
 
     document.getElementById('grpCrawlStatus').textContent =
       `✦ 完成！${targetPlatforms.length} 个平台，成功分析 ${totalAnalyzed} 题，失败样本 ${totalErrors} 条${failedPlatforms ? `，异常平台 ${failedPlatforms} 个` : ''}`;
@@ -2281,6 +2534,189 @@ async function deleteTemplate(filename) {
 }
 
 // ══════════════════════════════════════════════════════
+// 引用情报分析模块
+// ══════════════════════════════════════════════════════
+function getReferenceDate() {
+  const el = document.getElementById('referenceDate');
+  if (el && !el.value) el.value = new Date().toISOString().slice(0,10);
+  return el?.value || new Date().toISOString().slice(0,10);
+}
+
+let referenceAnalyzeJobId = '';
+let referenceAnalyzePollTimer = null;
+let referenceAnalyzeSmoothTimer = null;
+let referenceBackendProgress = 0;
+let referenceDisplayProgress = 0;
+
+function setReferenceProgressVisible(visible) {
+  const wrap = document.getElementById('referenceAnalyzeProgress');
+  if (wrap) wrap.style.display = visible ? '' : 'none';
+}
+
+function renderReferenceProgress(text) {
+  const bar = document.getElementById('referenceAnalyzeProgressBar');
+  const label = document.getElementById('referenceAnalyzeProgressText');
+  if (bar) bar.style.width = `${Math.max(0, Math.min(100, referenceDisplayProgress))}%`;
+  if (label && text) label.textContent = text;
+}
+
+function stopReferenceAnalyzeTimers() {
+  if (referenceAnalyzePollTimer) clearInterval(referenceAnalyzePollTimer);
+  if (referenceAnalyzeSmoothTimer) clearInterval(referenceAnalyzeSmoothTimer);
+  referenceAnalyzePollTimer = null;
+  referenceAnalyzeSmoothTimer = null;
+}
+
+function startReferenceSmoothProgress() {
+  if (referenceAnalyzeSmoothTimer) clearInterval(referenceAnalyzeSmoothTimer);
+  referenceAnalyzeSmoothTimer = setInterval(() => {
+    const cap = Math.min(99, referenceBackendProgress + 4);
+    if (referenceDisplayProgress < cap) {
+      referenceDisplayProgress += Math.min(0.8, cap - referenceDisplayProgress);
+      renderReferenceProgress('生成中...');
+    }
+  }, 200);
+}
+
+function renderReferencePlugins(data) {
+  const list = document.getElementById('referencePluginList');
+  const meta = document.getElementById('referencePluginMeta');
+  if (!list) return;
+  const plugins = data?.plugins || [];
+  if (meta) meta.textContent = plugins.length ? `${plugins.length} 个插件 · ${data.updated_at || ''}` : '';
+  if (!plugins.length) {
+    list.innerHTML = '<div class="empty"><i class="ti ti-bulb"></i><p>暂无引用情报插件，可先点击“生成引用情报”</p></div>';
+    return;
+  }
+  list.innerHTML = plugins.map((p, i) => `
+    <div style="padding:12px 0;border-bottom:1px solid var(--border2)">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+        <span style="width:24px;height:24px;border-radius:8px;background:var(--pri-ll);color:var(--pri);font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center">${i+1}</span>
+        <span style="font-size:13px;font-weight:900;color:#312e81">${escHtml(p.subtype_name || '未命名插件')}</span>
+        <span class="badge badge-g">${escHtml(p.parent_type || '对比型')}</span>
+      </div>
+      <div style="font-size:11px;font-weight:900;color:var(--text3);margin:8px 0 4px">prompt_text</div>
+      <div style="font-size:12px;line-height:1.7;color:var(--text2);white-space:pre-wrap;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px">${escHtml(p.prompt_text || '')}</div>
+      <div style="font-size:11px;font-weight:900;color:var(--text3);margin:10px 0 4px">few_shot</div>
+      <div style="font-size:12px;line-height:1.7;color:var(--text2);white-space:pre-wrap;background:rgba(52,211,153,.05);border:1px solid rgba(52,211,153,.14);border-radius:var(--r-sm);padding:10px">${escHtml(p.few_shot || '')}</div>
+      ${(p.source_articles || []).length ? `
+        <div style="font-size:11px;font-weight:900;color:var(--text3);margin:10px 0 4px">基于 ${(p.source_articles || []).length} 篇文章合并</div>
+        <div style="display:flex;flex-direction:column;gap:4px">
+          ${(p.source_articles || []).map((a, j) => `
+            <div style="font-size:11px;line-height:1.5;color:var(--text2);overflow-wrap:anywhere">
+              <span style="font-weight:800;color:#312e81">${j + 1}. ${escHtml(a.title || a.url || '未命名文章')}</span>
+              ${a.url ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--pri);margin-left:6px">${escHtml(a.url)}</a>` : ''}
+            </div>
+          `).join('')}
+        </div>
+      ` : ''}
+    </div>`).join('');
+}
+
+async function loadReferenceIntelligence() {
+  getReferenceDate();
+  if (!currentClientId) {
+    renderReferencePlugins({plugins: []});
+    return;
+  }
+  const date = getReferenceDate();
+  try {
+    const data = await api(`/api/reference_intelligence/plugins?client_id=${currentClientId}&date=${date}`);
+    renderReferencePlugins(data);
+  } catch(e) {
+    document.getElementById('referencePluginList').innerHTML = `<div style="color:var(--red);font-size:12px">加载失败：${escHtml(e.message)}</div>`;
+  }
+}
+
+async function analyzeReferenceIntelligence() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const date = getReferenceDate();
+  stopReferenceAnalyzeTimers();
+  referenceAnalyzeJobId = '';
+  referenceBackendProgress = 3;
+  referenceDisplayProgress = 0;
+  setReferenceProgressVisible(true);
+  renderReferenceProgress('生成中...');
+  startReferenceSmoothProgress();
+  spin('spReferenceAnalyze', true);
+  disableBtn('btnReferenceAnalyze', true);
+  try {
+    const data = await api('/api/reference_intelligence/analyze', 'POST', {
+      client_id: currentClientId,
+      date
+    });
+    if (data.error) {
+      toast(data.message || data.error, 'err');
+      stopReferenceAnalyzeTimers();
+      setReferenceProgressVisible(false);
+      spin('spReferenceAnalyze', false);
+      disableBtn('btnReferenceAnalyze', false);
+      return;
+    }
+    referenceAnalyzeJobId = data.job_id || '';
+    referenceBackendProgress = Number(data.progress || 3);
+    pollReferenceAnalysisStatus();
+    referenceAnalyzePollTimer = setInterval(pollReferenceAnalysisStatus, 1500);
+  } catch(e) {
+    toast('生成失败：' + e.message, 'err');
+    stopReferenceAnalyzeTimers();
+    setReferenceProgressVisible(false);
+    spin('spReferenceAnalyze', false);
+    disableBtn('btnReferenceAnalyze', false);
+  }
+}
+
+async function pollReferenceAnalysisStatus() {
+  if (!referenceAnalyzeJobId) return;
+  try {
+    const data = await api(`/api/reference_intelligence/analyze_status?job_id=${referenceAnalyzeJobId}`);
+    referenceBackendProgress = Number(data.progress || referenceBackendProgress || 0);
+    if (data.status === 'completed') {
+      referenceBackendProgress = 100;
+      referenceDisplayProgress = 100;
+      renderReferenceProgress('已完成');
+      stopReferenceAnalyzeTimers();
+      spin('spReferenceAnalyze', false);
+      disableBtn('btnReferenceAnalyze', false);
+      await loadReferenceIntelligence();
+      toast('引用情报已生成');
+      setTimeout(() => setReferenceProgressVisible(false), 800);
+    } else if (data.status === 'failed') {
+      stopReferenceAnalyzeTimers();
+      renderReferenceProgress('生成失败');
+      spin('spReferenceAnalyze', false);
+      disableBtn('btnReferenceAnalyze', false);
+      toast(data.error || '生成失败，请稍后重试或联系技术排查', 'err');
+    } else if (data.status === 'canceled') {
+      stopReferenceAnalyzeTimers();
+      renderReferenceProgress('已终止');
+      spin('spReferenceAnalyze', false);
+      disableBtn('btnReferenceAnalyze', false);
+      toast('已终止生成');
+    }
+  } catch(e) {
+    stopReferenceAnalyzeTimers();
+    renderReferenceProgress('生成失败');
+    spin('spReferenceAnalyze', false);
+    disableBtn('btnReferenceAnalyze', false);
+    toast('生成失败：' + e.message, 'err');
+  }
+}
+
+async function cancelReferenceAnalysis() {
+  if (!referenceAnalyzeJobId) return;
+  try {
+    const data = await api('/api/reference_intelligence/analyze_cancel', 'POST', {
+      job_id: referenceAnalyzeJobId
+    });
+    referenceBackendProgress = Number(data.progress || referenceBackendProgress || 0);
+    renderReferenceProgress('已终止');
+  } catch(e) {
+    toast('终止失败：' + e.message, 'err');
+  }
+}
+
+// ══════════════════════════════════════════════════════
 // 当日数据整理模块
 // ══════════════════════════════════════════════════════
 let dailySelectedIds = new Set();
@@ -2402,6 +2838,7 @@ async function loadDailyData() {
     window._dailyPage = 0;
     document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
+    renderDailyEntityStatus({status:'not_found'});
     return;
   }
   // 分页懒加载：只渲染前20条，滚动到底自动加载
@@ -2420,6 +2857,7 @@ async function loadDailyData() {
   // 加载高频引用文章（来源平台分布已合并到 AI 平台分类）
   loadDailyTopArticles(date, groupId, taskId);
   loadDailyInsights(date, groupId, taskId);
+  loadDailyEntityStatus(date, taskId);
 }
 
 async function loadDailyInsights(date, groupId, taskId='') {
@@ -2430,6 +2868,33 @@ async function loadDailyInsights(date, groupId, taskId='') {
     renderDailyInsights(r.insights || {});
   } catch(e) {
     renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
+  }
+}
+
+function renderDailyEntityStatus(status) {
+  const el = document.getElementById('dailyEntityStatus');
+  if (!el) return;
+  const map = {
+    queued: ['实体识别排队中', 'var(--amber)'],
+    running: ['实体识别处理中', 'var(--pri)'],
+    completed: [`实体识别已完成${status?.changed !== undefined ? ` · 更新 ${status.changed} 条` : ''}`, 'var(--teal)'],
+    failed: [`实体识别失败${status?.error ? `：${status.error}` : ''}`, 'var(--red)'],
+    skipped: ['实体识别已跳过', 'var(--text3)'],
+    not_found: ['暂无实体识别任务', 'var(--text3)'],
+    unknown: ['实体识别状态未知', 'var(--text3)']
+  };
+  const [label, color] = map[status?.status || 'unknown'] || map.unknown;
+  el.textContent = label;
+  el.style.color = color;
+}
+
+async function loadDailyEntityStatus(date, taskId='') {
+  try {
+    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
+    const status = await api(`/api/daily/entity_status?client_id=${currentClientId}&date=${date}${taskParam}`);
+    renderDailyEntityStatus(status);
+  } catch(e) {
+    renderDailyEntityStatus({status:'unknown', error:e.message});
   }
 }
 
@@ -2510,31 +2975,21 @@ function renderDailyInsights(insights) {
   }
 }
 
-async function loadDailyTopArticles(date, groupId, taskId='') {
-  try {
-    const gParam = groupId ? `&group_id=${groupId}` : '';
-    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
-    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
-    const totalRecords = stats.total_records || 0;
-
-    // 高频文章（含提及率）
-    const ta = document.getElementById('dailyTopArticles');
-    if (stats.top_articles?.length) {
-      ta.innerHTML = stats.top_articles.slice(0,20).map((a,i) => {
-        const mentionRate = totalRecords > 0 ? Math.round(a.count / totalRecords * 100) : 0;
-        const aiLabels = (a.ai_platforms || []).map(pid => CRAWL_PLATFORM_NAMES[pid] || pid).join(' / ');
-        const compStatus = a.competitor_match_status || '';
-        const compEntities = (a.competitor_matched_entities || []).join('、');
-        const compLabel = a.competitor_match_label || (
-          compStatus === 'matched' ? '提到目标竞品' :
-          compStatus === 'not_matched' ? '未提到目标竞品' :
-          compStatus === 'unconfirmed' ? '正文未确认' : ''
-        );
-        const compBadgeClass = compStatus === 'matched' ? 'badge-g' : compStatus === 'not_matched' ? 'badge-r' : 'badge-a';
-        const compBadge = compLabel ? `<span class="badge ${compBadgeClass}" style="font-size:9px">${escHtml(compLabel)}${compEntities ? `：${escHtml(compEntities)}` : ''}</span>` : '';
-        // 提及率颜色：≥50% 绿，≥25% 琥珀，其余灰
-        const rateColor = mentionRate >= 50 ? 'var(--teal)' : mentionRate >= 25 ? 'var(--amber)' : 'var(--text3)';
-        return `
+function renderDailyTopArticleRows(articles, totalRecords) {
+  return (articles || []).map((a,i) => {
+    const mentionRate = totalRecords > 0 ? Math.round(a.count / totalRecords * 100) : 0;
+    const aiLabels = (a.ai_platforms || []).map(pid => CRAWL_PLATFORM_NAMES[pid] || pid).join(' / ');
+    const compStatus = a.competitor_match_status || '';
+    const compEntities = (a.competitor_matched_entities || []).join('、');
+    const compLabel = a.competitor_match_label || (
+      compStatus === 'matched' ? '提到目标竞品' :
+      compStatus === 'not_matched' ? '未提到目标竞品' :
+      compStatus === 'unconfirmed' ? '正文未确认' : ''
+    );
+    const compBadgeClass = compStatus === 'matched' ? 'badge-g' : compStatus === 'not_matched' ? 'badge-r' : 'badge-a';
+    const compBadge = compLabel ? `<span class="badge ${compBadgeClass}" style="font-size:9px">${escHtml(compLabel)}${compEntities ? `：${escHtml(compEntities)}` : ''}</span>` : '';
+    const rateColor = mentionRate >= 50 ? 'var(--teal)' : mentionRate >= 25 ? 'var(--amber)' : 'var(--text3)';
+    return `
       <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2)">
         <span style="width:20px;height:20px;border-radius:6px;background:var(--pri-ll);color:var(--pri);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
         <div style="flex:1;min-width:0">
@@ -2549,7 +3004,36 @@ async function loadDailyTopArticles(date, groupId, taskId='') {
           <span style="font-size:10px;font-weight:700;color:${rateColor};min-width:34px;text-align:right">${mentionRate}%</span>
           <span style="font-size:11px;font-weight:800;color:var(--pri)">×${a.count}</span>
         </div>
-      </div>`; }).join('');
+      </div>`;
+  }).join('');
+}
+
+async function loadDailyTopArticles(date, groupId, taskId='') {
+  try {
+    const gParam = groupId ? `&group_id=${groupId}` : '';
+    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
+    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
+    const totalRecords = stats.total_records || 0;
+
+    // 高频文章（含提及率）
+    const ta = document.getElementById('dailyTopArticles');
+    if (stats.top_articles_by_ai?.length) {
+      const groupsHtml = stats.top_articles_by_ai.map(group => {
+        const articles = (group.top_articles || []).slice(0, 12);
+        if (!articles.length) return '';
+        const groupTotal = group.total_records || totalRecords;
+        return `
+          <div style="padding:8px 0 12px;border-bottom:1.5px solid var(--border2);margin-bottom:8px">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <span style="font-size:12px;font-weight:900;color:#312e81">${escHtml(group.platform_name || group.source_platform)} 高频引用文章 Top12</span>
+              <span style="font-size:10px;color:var(--text3);font-weight:800">记录 ${escHtml(groupTotal)}</span>
+            </div>
+            ${renderDailyTopArticleRows(articles, groupTotal)}
+          </div>`;
+      }).join('');
+      ta.innerHTML = groupsHtml || '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
+    } else if (stats.top_articles?.length) {
+      ta.innerHTML = renderDailyTopArticleRows(stats.top_articles.slice(0,20), totalRecords);
     } else {
       ta.innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
     }
@@ -3583,7 +4067,8 @@ async function runSingleTask(task) {
     agentState.taskProgress[key].total = task.question_count * platforms.length;
     agentState.taskProgress[key].done = 0;
 
-    for (const [idx, platform] of platforms.entries()) {
+    const platformDone = {};
+    await runCrawlPlatformPool(platforms, async (platform) => {
       const resp = await fetch('/api/platform/crawl', {
         method: 'POST',
         headers: {'Content-Type':'application/json'},
@@ -3600,11 +4085,16 @@ async function runSingleTask(task) {
       if (d.error) throw new Error(d.message || d.error);
 
       if (d.session_id) {
-        await listenCrawlProgress(d.session_id, key, task.question_count, idx * task.question_count);
+        await listenCrawlProgress(d.session_id, key, task.question_count, 0, (current) => {
+          platformDone[platform.id] = Math.min(current, task.question_count);
+          agentState.taskProgress[key].done = Object.values(platformDone).reduce((sum, n) => sum + n, 0);
+          renderProgress();
+        });
       } else {
-        agentState.taskProgress[key].done += task.question_count;
+        platformDone[platform.id] = task.question_count;
+        agentState.taskProgress[key].done = Object.values(platformDone).reduce((sum, n) => sum + n, 0);
       }
-    }
+    });
 
     agentState.taskProgress[key].status = 'done';
     agentState.taskProgress[key].done = agentState.taskProgress[key].total;
@@ -3615,16 +4105,20 @@ async function runSingleTask(task) {
   renderProgress();
 }
 
-function listenCrawlProgress(sessionId, key, totalQ, offset=0) {
+function listenCrawlProgress(sessionId, key, totalQ, offset=0, onProgress=null) {
   return new Promise((resolve) => {
     const es = new EventSource(`/api/crawl/progress/${sessionId}`);
     es.onmessage = (e) => {
       try {
         const data = JSON.parse(e.data);
         if (data.current !== undefined) {
-          agentState.taskProgress[key].done = offset + data.current;
-          agentState.taskProgress[key].total = Math.max(agentState.taskProgress[key].total || 0, offset + (data.total || totalQ));
-          renderProgress();
+          if (onProgress) {
+            onProgress(data.current, data.total || totalQ);
+          } else {
+            agentState.taskProgress[key].done = offset + data.current;
+            agentState.taskProgress[key].total = Math.max(agentState.taskProgress[key].total || 0, offset + (data.total || totalQ));
+            renderProgress();
+          }
         }
         if (data.done || data.current >= (data.total || totalQ)) {
           es.close();

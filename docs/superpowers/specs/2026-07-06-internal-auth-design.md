@@ -87,7 +87,7 @@ Existing listing order and article-type history isolation remain unchanged.
 
 ## Non-Goals
 
-- No public registration.
+- Public registration creates non-admin operator accounts only.
 - No per-feature permission matrix.
 - No department or tenant hierarchy.
 - No customer transfer UI in the first version.

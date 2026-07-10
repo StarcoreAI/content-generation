@@ -47,7 +47,22 @@ class DeployConfigTests(unittest.TestCase):
         self.assertIn("data/", readme)
         self.assertIn("pdf/", readme)
         self.assertIn("logs/", readme)
+        self.assertIn("deploy_cloud_package.sh", readme)
         self.assertIn("一个 worker", readme)
+
+
+    def test_cloud_package_deploy_script_wraps_manual_sync_steps(self):
+        script = read_text(os.path.join("scripts", "deploy_cloud_package.sh"))
+
+        self.assertIn("APP=${APP:-/srv/geo-content-v2}", script)
+        self.assertIn("geo-content-v2-before-sync-", script)
+        self.assertIn("python -m zipfile -e", script)
+        self.assertIn("cp -a", script)
+        self.assertIn("chown -R geosystem:geosystem", script)
+        self.assertIn("systemctl restart geo-content-v2.service", script)
+        self.assertIn("/api/health", script)
+        self.assertIn("grep -n \"btnCrawlGroup\"", script)
+        self.assertIn("Usage:", script)
 
 
 if __name__ == "__main__":

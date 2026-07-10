@@ -1,7 +1,6 @@
-import json
 import os
 
-from .storage import load_json, save_json
+from .storage import load_json, save_json, update_json
 
 
 def get_raw_data_dir(settings_path, default_data_dir):
@@ -21,13 +20,8 @@ def save_daily_raw(settings_path, default_data_dir, client_id, brand, question, 
     client_dir = os.path.join(raw_dir, client_id)
     os.makedirs(client_dir, exist_ok=True)
     day_file = os.path.join(client_dir, f"{today}.json")
-    if os.path.exists(day_file):
-        with open(day_file, "r", encoding="utf-8") as f:
-            day_data = json.load(f)
-    else:
-        day_data = {"date": today, "client_id": client_id, "brand": brand, "records": []}
 
-    day_data["records"].append({
+    daily_record = {
         "id": uid_fn(),
         "time": now_fn(),
         "question": question,
@@ -41,9 +35,22 @@ def save_daily_raw(settings_path, default_data_dir, client_id, brand, question, 
         ),
         "geo_score": analysis.get("geo_score", 0),
         "main_platform": analysis.get("main_ref", {}).get("platform", ""),
-    })
-    with open(day_file, "w", encoding="utf-8") as f:
-        json.dump(day_data, f, ensure_ascii=False, indent=2)
+    }
+
+    def append_daily(day_data):
+        if not isinstance(day_data, dict):
+            day_data = {}
+        day_data.setdefault("date", today)
+        day_data.setdefault("client_id", client_id)
+        day_data.setdefault("brand", brand)
+        records = day_data.get("records")
+        if not isinstance(records, list):
+            records = []
+        records.append(daily_record)
+        day_data["records"] = records
+        return day_data, None
+
+    update_json(day_file, {"date": today, "client_id": client_id, "brand": brand, "records": []}, append_daily)
     return day_file
 
 
@@ -72,7 +79,6 @@ def save_raw_record(raw_records_path, settings_path, default_data_dir, client_id
                     brand, question, round_num, answer, search_keywords, refs, analysis,
                     uid_fn, today_fn, now_fn, source_platform="doubao",
                     task_id="", run_id="", task_report="", crawler_engine=""):
-    records = load_json(raw_records_path, [])
     record_id = uid_fn()
     brand_mentioned = bool(analysis.get("brand_mentioned"))
     record = {
@@ -110,9 +116,14 @@ def save_raw_record(raw_records_path, settings_path, default_data_dir, client_id
         record["task_report"] = task_report
     if crawler_engine:
         record["crawler_engine"] = crawler_engine
-    records.append(record)
-    if save_json(raw_records_path, records) is False:
-        raise RuntimeError(f"failed to save raw record store: {raw_records_path}")
+
+    def append_record(records):
+        if not isinstance(records, list):
+            records = []
+        records.append(record)
+        return records, record_id
+
+    update_json(raw_records_path, [], append_record)
     save_daily_raw(
         settings_path,
         default_data_dir,

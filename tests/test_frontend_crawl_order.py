@@ -48,9 +48,10 @@ class FrontendCrawlOrderTests(unittest.TestCase):
             html = f.read()
 
         self.assertIn(
-            "const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'doubao'];",
+            "const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];",
             html,
         )
+        self.assertIn("kimi:'Kimi'", html)
         self.assertIn("function sortCrawlPlatforms(platforms)", html)
 
         logged_in_body = re.search(
@@ -68,6 +69,46 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         )
         self.assertIsNotNone(target_body)
         self.assertIn("getSelectedGroupCrawlPlatformIds()", target_body.group("body"))
+
+    def test_group_crawl_repeat_selector_includes_two_rounds(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn('id="grpRepeat"', html)
+        self.assertIn('<option value="2">2次</option>', html)
+
+    def test_platform_crawl_uses_limited_parallel_pool(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn("const CRAWL_PLATFORM_CONCURRENCY = 2;", html)
+        self.assertIn("async function runCrawlPlatformPool(", html)
+        self.assertIn("await Promise.all(runners);", html)
+        self.assertIn("await runCrawlPlatformPool(targetPlatforms", html)
+        self.assertIn("await runCrawlPlatformPool(platforms", html)
+
+    def test_group_crawl_can_enqueue_local_worker_jobs(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertNotIn('id="btnQueueLocalCrawl"', html)
+        self.assertIn('id="btnCrawlGroup" onclick="enqueueGroupCrawlJobs()"', html)
+        self.assertIn("async function enqueueGroupCrawlJobs()", html)
+        self.assertIn("fetch('/api/crawl_jobs'", html)
+        self.assertIn("group_id: currentGroupId", html)
+        self.assertIn("platform: platform.id", html)
+        self.assertIn("repeat_count: repeat", html)
+
+    def test_group_questions_use_batch_add_textarea(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn('id="groupBatchQuestionInput"', html)
+        self.assertIn("function parseBatchQuestions", html)
+        self.assertIn("async function addBatchQuestions()", html)
+        self.assertIn("currentGroupQuestions.push(...additions)", html)
+        self.assertIn("new Set(currentGroupQuestions)", html)
+        self.assertNotIn("prompt(", html)
 
     def test_global_platform_selector_is_removed_for_contract_platform_flow(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
@@ -124,12 +165,53 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("renderDailyEntityDeleteButton(e.name)", html)
         self.assertIn("deleteDailyEntity(decodeURIComponent", html)
 
+    def test_daily_entity_status_is_shown_near_mentions(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn('id="dailyEntityStatus"', html)
+        self.assertIn("async function loadDailyEntityStatus(", html)
+        self.assertIn("function renderDailyEntityStatus(", html)
+        self.assertIn("/api/daily/entity_status", html)
+        self.assertIn("实体识别", html)
+
+    def test_reference_intelligence_page_is_wired(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn("引用情报分析", html)
+        self.assertIn("navTo('reference'", html)
+        self.assertIn('id="page-reference"', html)
+        self.assertIn('id="referencePluginList"', html)
+        self.assertIn("async function loadReferenceIntelligence(", html)
+        self.assertIn("async function analyzeReferenceIntelligence(", html)
+        self.assertIn("/api/reference_intelligence/plugins", html)
+        self.assertIn("/api/reference_intelligence/analyze", html)
+        self.assertIn("/api/reference_intelligence/analyze_status", html)
+        self.assertIn("/api/reference_intelligence/analyze_cancel", html)
+        self.assertIn("subtype_name", html)
+        self.assertIn("prompt_text", html)
+        self.assertIn("few_shot", html)
+        self.assertIn("source_articles", html)
+        self.assertIn("基于", html)
+        self.assertIn("篇文章合并", html)
+        self.assertIn('id="referenceAnalyzeProgress"', html)
+        self.assertIn("cancelReferenceAnalysis", html)
+
     def test_daily_top_articles_show_ai_platform_coverage(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
             html = f.read()
 
         self.assertIn("a.ai_platforms", html)
         self.assertIn("CRAWL_PLATFORM_NAMES[pid]", html)
+
+    def test_daily_top_articles_are_grouped_inside_top_articles_section(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        self.assertIn("stats.top_articles_by_ai", html)
+        self.assertIn("renderDailyTopArticleRows", html)
+        self.assertIn("Top12", html)
 
     def test_daily_top_articles_show_competitor_match_status(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
@@ -183,18 +265,33 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="contentTop20Samples"', html)
         self.assertIn('id="contentArticleTypeCompare"', html)
         self.assertIn('id="contentArticleTypeIntro"', html)
+        self.assertIn('id="contentArticleSubtypeWrap"', html)
+        self.assertIn('id="contentArticleSubtypes"', html)
+        self.assertIn("文章子类型", html)
+        self.assertIn("parent_type", html)
+        self.assertIn("filter(p => (p.parent_type || '对比型') === selectedContentArticleType)", html)
+        self.assertIn("攻略对比型", html)
         self.assertIn('id="contentHistoryDate"', html)
         self.assertIn("selectContentArticleType('对比型')", html)
         self.assertIn("selectContentArticleType('介绍型')", html)
+        self.assertIn("loadContentSubtypePlugins()", html)
+        self.assertIn("/api/reference_intelligence/plugins", html)
         self.assertIn("getContentHistoryDate()", html)
         self.assertIn("history_date: getContentHistoryDate()", html)
         self.assertIn("article_type: selectedContentArticleType", html)
+        self.assertIn("article_subtype: selectedContentArticleSubtype", html)
+        self.assertIn("article_subtype_plugin: getSelectedContentSubtypePlugin()", html)
+        self.assertNotIn("selectedContentArticleType !== '对比型'", html)
+        self.assertNotIn("<label>对比型子类型</label>", html)
         self.assertIn("loadContentTop20Samples()", html)
         self.assertIn("getSelectedContentTopArticles()", html)
         self.assertIn("generateContentArticle()", html)
         self.assertIn('id="contentArticleList"', html)
         self.assertIn("调用模型：${a.model || '未知模型'}", html)
         self.assertIn("${a.article_type || '未标记类型'}", html)
+        self.assertIn("function contentGenerationSubtypeLabel(a)", html)
+        self.assertIn("子类型：${escHtml(subtypeLabel)}", html)
+        self.assertIn("文章子类型：${escHtml(subtypeLabel)}", html)
         self.assertIn("deleteContentGeneration('${a.id}')", html)
         self.assertIn("async function deleteContentGeneration(id)", html)
         self.assertIn("'/api/content/generations/' + encodeURIComponent(id)", html)

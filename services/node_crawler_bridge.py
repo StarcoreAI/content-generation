@@ -3,6 +3,7 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 from base_crawler import extract_platform
@@ -189,6 +190,154 @@ def parse_node_markdown(markdown_text, platform="", citations_limit=10):
     }
 
 
+def _read_log_tail(path, max_chars=1000):
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            f.seek(max(0, size - max_chars * 4))
+            text = f.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+    return text[-max_chars:]
+
+
+def _latest_markdown_file(output_path, platform):
+    md_files = sorted(output_path.glob(f"{platform}-*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return md_files[0] if md_files else None
+
+
+def _node_output_is_final(stdout_path, output_path, platform):
+    return bool(_latest_markdown_file(output_path, platform)) and "Crawl done:" in _read_log_tail(stdout_path, 2000)
+
+
+def _packaged_browser_root(crawler_root):
+    browser_root = Path(crawler_root) / "ms-playwright"
+    if not browser_root.exists():
+        return None
+    for chromium_dir in browser_root.glob("chromium-*"):
+        if (chromium_dir / "chrome-win64" / "chrome.exe").exists():
+            return browser_root
+        if (chromium_dir / "chrome-win" / "chrome.exe").exists():
+            return browser_root
+    return None
+
+
+def _set_packaged_browser_path(env, crawler_root):
+    packaged_root = _packaged_browser_root(crawler_root)
+    if packaged_root:
+        env["PLAYWRIGHT_BROWSERS_PATH"] = str(packaged_root)
+    else:
+        env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
+    return env
+
+
+def run_node_auth_preflight(
+    platforms,
+    crawler_root=None,
+    storage_state_path=None,
+    timeout_s=1800,
+    mode="strict",
+    runner=subprocess.run,
+):
+    platforms = [str(item).strip() for item in (platforms or []) if str(item).strip()]
+    unsupported = [platform for platform in platforms if platform not in SUPPORTED_NODE_PLATFORMS]
+    if unsupported:
+        return {"ok": False, "status": "unsupported", "message": f"Unsupported platform(s): {', '.join(unsupported)}"}
+    if not platforms:
+        return {"ok": False, "status": "missing_platforms", "message": "No platforms provided"}
+    mode = str(mode or "strict").strip().lower()
+    if mode not in {"strict", "soft", "manual"}:
+        mode = "strict"
+
+    root = Path(crawler_root or os.environ.get("GEO_NODE_CRAWLER_ROOT") or default_node_crawler_root())
+    adapter_entry = root / "src" / "adapters" / "index.js"
+    if not adapter_entry.exists():
+        return {"ok": False, "status": "missing_crawler", "message": f"Node crawler adapters not found: {adapter_entry}"}
+
+    storage_value = storage_state_path or os.environ.get("STORAGE_STATE_PATH")
+    if not storage_value:
+        return {"ok": False, "status": "missing_state", "message": "STORAGE_STATE_PATH is not set"}
+    storage_state = Path(storage_value)
+    storage_state.parent.mkdir(parents=True, exist_ok=True)
+
+    script_path = _project_root() / "scripts" / "node_auth_preflight.mjs"
+    if not script_path.exists():
+        return {"ok": False, "status": "missing_probe", "message": f"Auth preflight not found: {script_path}"}
+
+    cmd = [
+        "node",
+        str(script_path),
+        "--platforms",
+        ",".join(platforms),
+        "--crawler-root",
+        str(root),
+        "--storage-state",
+        str(storage_state),
+        "--timeout-ms",
+        str(max(1, int(timeout_s)) * 1000),
+        "--mode",
+        mode,
+    ]
+    env = os.environ.copy()
+    env["GEO_NODE_BRIDGE"] = "1"
+    _set_packaged_browser_path(env, root)
+    try:
+        completed = runner(
+            cmd,
+            cwd=str(root),
+            env=env,
+            timeout=timeout_s + 30,
+        )
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "status": "timeout", "message": f"auth preflight timed out after {timeout_s}s"}
+    except OSError as exc:
+        return {"ok": False, "status": "start_failed", "message": str(exc)}
+    return {
+        "ok": completed.returncode == 0,
+        "status": "ready" if completed.returncode == 0 else "failed",
+        "message": "ready" if completed.returncode == 0 else "auth preflight failed",
+    }
+
+
+def _stop_process(process):
+    if process.poll() is not None:
+        return
+    try:
+        process.terminate()
+        process.wait(timeout=5)
+    except Exception:
+        try:
+            process.kill()
+            process.wait(timeout=5)
+        except Exception:
+            pass
+
+
+def _run_node_process(cmd, *, cwd, env, stdout_path, stderr_path, timeout_s, output_path, platform):
+    start = time.monotonic()
+    with open(stdout_path, "w", encoding="utf-8", errors="replace") as stdout_log, \
+            open(stderr_path, "w", encoding="utf-8", errors="replace") as stderr_log:
+        process = subprocess.Popen(
+            cmd,
+            cwd=cwd,
+            env=env,
+            stdout=stdout_log,
+            stderr=stderr_log,
+        )
+        while True:
+            returncode = process.poll()
+            if returncode is not None:
+                return subprocess.CompletedProcess(cmd, returncode)
+            if _node_output_is_final(stdout_path, output_path, platform):
+                _stop_process(process)
+                return subprocess.CompletedProcess(cmd, 0)
+            if time.monotonic() - start > timeout_s:
+                _stop_process(process)
+                raise subprocess.TimeoutExpired(cmd, timeout_s)
+            time.sleep(0.5)
+
+
 def run_node_crawler(
     platform,
     questions,
@@ -216,7 +365,7 @@ def run_node_crawler(
     with tempfile.TemporaryDirectory(prefix="geo-node-crawler-") as tmp:
         tmp_path = Path(tmp)
         query_file = tmp_path / "queries.txt"
-        output_path = Path(output_dir) if output_dir else tmp_path / "output"
+        output_path = Path(output_dir).resolve() if output_dir else tmp_path / "output"
         output_path.mkdir(parents=True, exist_ok=True)
         query_file.write_text("\n".join(questions) + "\n", encoding="utf-8")
 
@@ -230,6 +379,7 @@ def run_node_crawler(
         storage_state_path = prepare_storage_state_for_node(platform, tmp_path)
         if storage_state_path and not env.get("STORAGE_STATE_PATH"):
             env["STORAGE_STATE_PATH"] = storage_state_path
+        _set_packaged_browser_path(env, root)
         cmd = [
             "node",
             str(index_js),
@@ -240,16 +390,18 @@ def run_node_crawler(
             "--citations-limit",
             str(citations_limit),
         ]
+        stdout_path = output_path / "node-stdout.log"
+        stderr_path = output_path / "node-stderr.log"
         try:
-            completed = subprocess.run(
+            completed = _run_node_process(
                 cmd,
                 cwd=str(root),
                 env=env,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=timeout_s,
+                stdout_path=stdout_path,
+                stderr_path=stderr_path,
+                timeout_s=timeout_s,
+                output_path=output_path,
+                platform=platform,
             )
         except subprocess.TimeoutExpired as exc:
             raise NodeCrawlerBridgeError(
@@ -258,19 +410,17 @@ def run_node_crawler(
         except OSError as exc:
             raise NodeCrawlerBridgeError(f"Failed to start Node crawler: {exc}") from exc
 
-        (output_path / "node-stdout.log").write_text(completed.stdout or "", encoding="utf-8")
-        (output_path / "node-stderr.log").write_text(completed.stderr or "", encoding="utf-8")
-
         if completed.returncode != 0:
+            error_log = (_read_log_tail(stderr_path) or _read_log_tail(stdout_path)).strip()
             raise NodeCrawlerBridgeError(
                 f"Node crawler failed with exit code {completed.returncode}: "
-                f"{(completed.stderr or completed.stdout or '').strip()[:1000]}"
+                f"{error_log[:1000]}"
             )
 
-        md_files = sorted(output_path.glob(f"{platform}-*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not md_files:
+        md_file = _latest_markdown_file(output_path, platform)
+        if not md_file:
             raise NodeCrawlerBridgeError("Node crawler completed but no Markdown output was found")
-        return parse_node_markdown(md_files[0].read_text(encoding="utf-8"), platform, citations_limit)
+        return parse_node_markdown(md_file.read_text(encoding="utf-8"), platform, citations_limit)
 
 
 def load_node_json_result(json_path, platform="", citations_limit=10):

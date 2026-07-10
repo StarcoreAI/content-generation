@@ -20,6 +20,7 @@ def isolated_auth_app():
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "F_USERS": getattr(geo_app, "F_USERS", None),
+        "F_USER_SETTINGS": getattr(geo_app, "F_USER_SETTINGS", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
         "SECRET_KEY": geo_app.app.config.get("SECRET_KEY"),
     }
@@ -34,6 +35,7 @@ def isolated_auth_app():
         if hasattr(geo_app, "MATERIAL_CACHE_FOLDER"):
             geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
         geo_app.F_USERS = os.path.join(tmp, "users.json")
+        geo_app.F_USER_SETTINGS = os.path.join(tmp, "user_settings")
         geo_app.app.config["AUTH_DISABLED"] = False
         geo_app.app.config["SECRET_KEY"] = "test-secret"
         try:
@@ -54,6 +56,10 @@ def isolated_auth_app():
                 delattr(geo_app, "F_USERS")
             else:
                 geo_app.F_USERS = original["F_USERS"]
+            if original["F_USER_SETTINGS"] is None and hasattr(geo_app, "F_USER_SETTINGS"):
+                delattr(geo_app, "F_USER_SETTINGS")
+            else:
+                geo_app.F_USER_SETTINGS = original["F_USER_SETTINGS"]
             if original["AUTH_DISABLED"] is None:
                 geo_app.app.config.pop("AUTH_DISABLED", None)
             else:
@@ -112,6 +118,38 @@ class AuthRouteTests(unittest.TestCase):
             logout = client.post("/api/auth/logout")
             self.assertEqual(logout.status_code, 200)
             self.assertIsNone(client.get("/api/auth/me").get_json()["user"])
+
+    def test_register_creates_operator_and_logs_in(self):
+        with isolated_auth_app():
+            client = geo_app.app.test_client()
+
+            response = client.post(
+                "/api/auth/register",
+                json={"username": "new-operator", "password": "secret-pass"},
+            )
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertEqual(payload["user"]["username"], "new-operator")
+            self.assertEqual(payload["user"]["role"], "operator")
+            self.assertNotIn("password_hash", payload["user"])
+            self.assertEqual(client.get("/api/auth/me").get_json()["user"]["username"], "new-operator")
+            self.assertIsNotNone(authenticate_user(geo_app.F_USERS, "new-operator", "secret-pass"))
+
+    def test_register_rejects_duplicate_username(self):
+        with isolated_auth_app():
+            create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+            client = geo_app.app.test_client()
+
+            response = client.post(
+                "/api/auth/register",
+                json={"username": "alice", "password": "new-pass"},
+            )
+
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.get_json()["error"], "user_exists")
+            self.assertIsNone(authenticate_user(geo_app.F_USERS, "alice", "new-pass"))
+            self.assertIsNotNone(authenticate_user(geo_app.F_USERS, "alice", "secret-pass"))
 
 
 def login_as(client, username, password="secret-pass"):
@@ -194,6 +232,65 @@ class ContentOwnershipTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["article"]["created_by"], "alice")
+
+
+class UserSettingsTests(unittest.TestCase):
+    def test_user_settings_override_global_without_affecting_other_users(self):
+        with isolated_auth_app():
+            geo_app.save(geo_app.F_SETTINGS, {
+                "api_key": "global-key",
+                "base_url": "https://global.example.com",
+                "model": "global-model",
+                "preset": "global",
+            })
+            create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+            create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+
+            alice = geo_app.app.test_client()
+            login_as(alice, "alice")
+            saved = alice.post("/api/settings", json={
+                "api_key": "alice-key",
+                "base_url": "https://alice.example.com",
+                "model": "alice-model",
+                "preset": "alice",
+            })
+            self.assertEqual(saved.status_code, 200)
+
+            bob = geo_app.app.test_client()
+            login_as(bob, "bob")
+            bob_settings = bob.get("/api/settings").get_json()
+            self.assertEqual(bob_settings["base_url"], "https://global.example.com")
+            self.assertEqual(bob_settings["model"], "global-model")
+            self.assertTrue(bob_settings["has_key"])
+
+            bob.post("/api/settings", json={
+                "api_key": "bob-key",
+                "base_url": "https://bob.example.com",
+                "model": "bob-model",
+            })
+
+            self.assertEqual(alice.get("/api/settings").get_json()["model"], "alice-model")
+            self.assertEqual(bob.get("/api/settings").get_json()["model"], "bob-model")
+            self.assertEqual(geo_app.get_settings("alice")["api_key"], "alice-key")
+            self.assertEqual(geo_app.get_settings("bob")["api_key"], "bob-key")
+            self.assertEqual(geo_app.get_settings()["api_key"], "global-key")
+
+    def test_new_user_settings_inherit_global_defaults(self):
+        with isolated_auth_app():
+            geo_app.save(geo_app.F_SETTINGS, {
+                "api_key": "global-key",
+                "base_url": "https://global.example.com",
+                "model": "global-model",
+            })
+            create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+            client = geo_app.app.test_client()
+            login_as(client, "alice")
+
+            payload = client.get("/api/settings").get_json()
+
+            self.assertEqual(payload["base_url"], "https://global.example.com")
+            self.assertEqual(payload["model"], "global-model")
+            self.assertTrue(payload["has_key"])
 
 
 class BootstrapUserTests(unittest.TestCase):

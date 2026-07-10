@@ -22,9 +22,60 @@ Current state after the latest agent window:
 - Startup scripts are simplified: use `run_dev.bat` for local development and `启动局域网.bat` only for LAN demos.
 - Latest full local verification: `.\run_tests.bat -> 133 tests OK`.
 
-Next agent should continue with Tasks 2, 4, 7, and 8 below. Task 3 is partly reduced by SQLite content-history storage and shared JSON-storage locking tests, but the production constraint remains: run one worker until all mutable app data is moved to a real database or protected by a cross-process lock.
+## 2026-07-08 Status Update
+
+Current state after the July 8 local work:
+
+- Account login and operator self-registration are implemented. Registered users are operators, not admins.
+- User model/API settings are isolated per login account under `data/user_settings/<username>.json`. Global `data/settings.json` remains a fallback/default, not the shared write target for logged-in operators.
+- The group crawler repeat selector now includes `2次`.
+- Entity normalization for competitor/store mentions is queued after raw crawl data is saved. It no longer blocks the crawler response or the next platform.
+- Entity writeback merges by `record_id` against the latest `raw_records.json`, so it should not overwrite records added by a parallel platform crawl.
+- Platform crawling now uses per-platform locks instead of one global lock. Different AI platforms can run in parallel; the same platform remains serialized and returns `crawl_busy` if duplicated.
+- The frontend group crawl flow and Agent task flow use a limited platform pool with `CRAWL_PLATFORM_CONCURRENCY = 2`.
+- JSON append paths touched by crawler output now use locked read-modify-write helpers for same-process safety: `records.json`, `raw_records.json`, and daily raw files.
+- Reference intelligence has a local three-stage flow: high-frequency article statistics, second-stage structure clustering (`clusters` only), then third-stage plugin rewriting (`subtype_name`, `prompt_text`, `few_shot`). As of 2026-07-09, those plugins are available as content-generation subtypes, and `攻略对比型` is the default comparison subtype.
+- Local-operations-machine crawling now has a first end-to-end task-center path: `POST /api/crawl_jobs`, `GET /api/crawl_jobs/next`, `POST /api/crawl_jobs/<job_id>/result`, and `POST /api/crawl_jobs/<job_id>/cancel` store and update jobs under `data/crawl_jobs.json`. Returned worker payloads are sanitized to avoid storing cookies, storage state, passwords, tokens, or session secrets. Successful worker results are persisted into `raw_records.json` and daily raw files, with duplicate result submissions ignored by `task_id`. Canceled jobs are not claimed, and late results for canceled jobs are not ingested.
+- `scripts/local_crawl_worker.py` and `start_local_crawl_worker.bat` provide the local worker shell and reuse the existing external Node crawler through `services.node_crawler_bridge.run_node_crawler`. Long-running worker mode starts one worker loop per platform so different platforms can run in parallel while each platform remains serialized. As of 2026-07-09, the question-group `一键创建爬取任务` action enqueues local-worker jobs by default; the separate "交给本地 worker" action was removed.
+- Kimi is now included in the app-level platform list, customer contract-platform choices, question-group custom platform choices, local worker defaults, and crawler smoke ordering. A real temporary Kimi task-center smoke completed: create crawl job -> local worker claim -> Node Kimi crawl -> result submit -> `raw_records.json` ingestion.
+- The local worker now checks cancellation again before result submission. If a running job was canceled, the worker skips submit; if that status check fails, it still submits and relies on the server-side canceled-job ingestion guard instead of dropping the result.
+- Windows operator packaging now includes setup, start, stop, operator logging, and diagnostic export entries. Not implemented yet: true cloud-initiated termination of the local browser/Node subprocess, worker heartbeat, and stale-running cleanup.
+- Latest full local verification: `.\run_tests.bat -> 189 tests OK`.
+
+Remaining constraints:
+
+- Keep the cloud trial on one Gunicorn worker. The new locks are process-local and do not make JSON storage safe across multiple workers.
+- Cloud crawling is still not the first trial promise. The crawler can be tested, but the primary cloud acceptance path remains content generation plus login. The crawler direction is a cloud task center plus local operations-machine worker, not server-side browser crawling.
+
+Next agent should deploy using `scripts/deploy_cloud_package.sh` instead of pasting long SSH command blocks, then lightly verify login, content generation, reference-intelligence subtypes, Kimi platform selection, and local-worker job creation/result ingestion. If cloud daily data is missing local crawler records, use `scripts/import_missing_raw_records.py` to append only missing raw records; do not overwrite cloud `data/raw_records.json`. Task 3 is partly reduced by SQLite content-history storage, shared JSON-storage locking tests, and the July 8 same-process append protections, but the production constraint remains: run one worker until all mutable app data is moved to a real database or protected by a cross-process lock.
 
 Do not use this plan to justify large cleanup. The current goal is cloud-readiness for a small internal operations team, not a rewrite.
+
+## 2026-07-09 Morning Real Cloud Worker Test Finding (Historical)
+
+This section records the morning failure analysis. Evening fixes and packaging
+work supersede the operational recommendations here; use the latest section 0
+in `接手文档.md` for the current handoff state.
+
+The latest code was deployed to `/srv/geo-content-v2`; health returned `ok=true`, and `/api/health` included `kimi`. The cloud code was verified to contain `--check`, `STORAGE_STATE_PATH`, and `189 tests` handoff text.
+
+One real Windows local-worker test was run against the cloud task center. The selected question group unexpectedly contained three questions: `你好`, `Hello`, and `星核引力是什么公司`, so the test was not a clean 1-question validation.
+
+Observed cloud job state:
+
+- `deepseek`: local Markdown/logs show 3 questions completed, but cloud job still has `result_summary=None` and `persisted_records=0`.
+- `yuanbao`: `result_summary={'total': 3, 'success': 3}`, `persisted_records=3`.
+- `qwen`: `result_summary={'total': 3, 'success': 1}`, `persisted_records=1`; the two greeting questions became `empty_result`, while the real company question succeeded.
+- `kimi`: local Markdown/logs show 3 questions completed, but cloud job still has `result_summary=None` and `persisted_records=0`.
+- `doubao`: failed with `need_login`; saved state is invalid or missing.
+
+Morning implications at the time:
+
+- At the time, do not hand the worker to operations yet.
+- DeepSeek/Kimi likely failed during local worker submit or the platform thread exited before submit; add explicit submit-start/submit-success/submit-failure logging in `scripts/local_crawl_worker.py`.
+- Before the next validation, create a clean one-question group containing only `星核引力是什么公司？`.
+- Test `yuanbao,qwen,kimi,deepseek` first; run Doubao separately after refreshing login state.
+- Update the cloud job creation UI/log output to show question count and a preview of selected questions, so operators can see when they accidentally selected a multi-question group.
 
 ## Global Constraints
 
@@ -54,7 +105,7 @@ Do not use this plan to justify large cleanup. The current goal is cloud-readine
 - Target OS: preferably Ubuntu 22.04 or 24.04 LTS.
 - Access policy: internal/VPN only or public domain. If public, provide domain, DNS control, security group control, and SSL certificate path.
 - Model settings: API key, `base_url`, model name, quota owner, and billing owner.
-- Initial users: names, usernames, role as `admin` or `operator`, and whether all operators may see all customers.
+- Initial users: names, usernames, role as `admin` or `operator`, and whether all operators may see all customers. Operators can also use the registration form to create non-admin accounts.
 - Data policy: whether customer PDF files and generated content may be stored on ECS local disk, and required backup destination/frequency.
 - Crawler data source decision: this app's crawler, a colleague's crawler, or a designated local machine; expected output fields and update frequency.
 
@@ -136,10 +187,16 @@ Expected: auth tests and existing core tests pass.
 - Deployment constraint: use one worker until storage is moved to SQLite/Postgres.
 
 - [ ] Identify every direct JSON write path still used by Wednesday features: clients, materials, content generations, settings, raw records.
-- [ ] Add a process-local file write lock around JSON save operations.
-- [ ] Keep atomic temp-file replace behavior.
-- [ ] Avoid broad storage refactors before Wednesday.
-- [ ] Document one-worker production constraint in deployment docs.
+- [x] Add a process-local file write lock around JSON save operations.
+- [x] Keep atomic temp-file replace behavior.
+- [x] Avoid broad storage refactors before Wednesday.
+- [x] Document one-worker production constraint in deployment docs.
+
+2026-07-08 status note:
+
+- Same-process JSON writes now go through `services/storage.py` locking for the shared storage helper.
+- Crawler append paths for `records.json`, `raw_records.json`, and daily raw files use locked read-modify-write updates.
+- This is not a cross-process lock. Keep Gunicorn at one worker for the trial.
 
 Verification:
 
@@ -262,24 +319,32 @@ Expected after future import work: high-frequency reference articles remain avai
 - Consumes: ECS credentials, API settings, access policy, and initial user list.
 - Produces: internal URL for operations to test content generation.
 
-- [ ] Confirm ECS OS and resources.
-- [ ] Install Docker and compose plugin, or install Python runtime if not using Docker.
-- [ ] Create deploy directory.
-- [ ] Copy or pull repository.
-- [ ] Create server-only `.env`.
-- [ ] Create persistent directories: `data/`, `pdf/`, `logs/`.
-- [ ] Start the service with one worker.
-- [ ] Configure Nginx and SSL if public access is required.
+- [x] Confirm ECS OS and resources.
+- [x] Install Python runtime if not using Docker: conda env `geo-content-v2`, Python `3.12.13`.
+- [x] Create deploy directory: `/srv/geo-content-v2`.
+- [x] Copy uploaded deployment package and unzip it.
+- [x] Create server-only `.env`.
+- [x] Create persistent directories: `data/`, `pdf/`, `logs/`.
+- [ ] Start the service with one worker through systemd.
+- [ ] Do not configure Nginx/SSL for the first trial; use port `18080` directly.
 - [ ] Lock down security groups to the required ports and source ranges.
-- [ ] Create initial users.
+- [ ] Create the first admin user.
+- [ ] Allow operators to self-register non-admin accounts if needed.
 - [ ] Run acceptance tests manually from a non-developer machine.
 
-Status note: blocked until Aliyun ECS account details are provided by the user/company.
+Status note: Aliyun ECS access is available. Use `ssh geo-content-v2` from the
+Windows laptop. If SakuraCat/VPN blocks new SSH connections, connect with VPN
+off first. Continue with `deploy/README.md` Current Non-Docker Runbook.
+
+2026-07-08 status note: the server directory was prepared earlier, but the
+latest local code changes from July 8 have not been synced to
+`/srv/geo-content-v2` yet. Before starting systemd, upload or pull the latest
+code, then re-run the server-side health check.
 
 Verification:
 
 ```bash
-curl http://127.0.0.1:5000/api/health
+curl http://127.0.0.1:18080/api/health
 ```
 
 Expected: health endpoint returns success locally on the server; browser access requires login.

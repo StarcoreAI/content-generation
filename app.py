@@ -2,24 +2,42 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import json, os, re, asyncio, threading
+import json, os, re, asyncio, threading, glob
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, redirect, session, url_for
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for, has_request_context
 from openai import OpenAI
 from services import crawl_tasks as crawl_task_store
+from services import crawl_jobs as crawl_job_store
 from services import records as record_store
-from services.auth import authenticate_user, find_user
+from services.auth import authenticate_user, create_user, find_user
+from services.article_structure import analyze_article_structure
+from services.article_fetcher import fetch_article_text
 from services.content_generations import ContentGenerationStore
 from services.materials import MaterialService
-from services.storage import load_json, save_json
+from services.reference_stage1 import analyze_stage1_article
+from services.reference_stage2 import analyze_stage2_clusters
+from services.reference_stage3 import analyze_stage3_plugins
+from services.storage import load_json, save_json, update_json
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("GEO_SECRET_KEY", "dev-secret-key-change-before-deploy")
 APP_VERSION = "2.3"
-NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen"}
-CLIENT_CONTRACT_PLATFORM_ORDER = ["doubao", "deepseek", "yuanbao", "qwen"]
-crawl_run_lock = threading.Lock()
+NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen", "kimi"}
+CLIENT_CONTRACT_PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
+crawl_platform_locks_guard = threading.Lock()
+crawl_platform_locks = {}
+reference_analysis_jobs_guard = threading.RLock()
+reference_analysis_jobs = {}
+
+
+def get_crawl_platform_lock(platform):
+    platform = (platform or "default").strip() or "default"
+    with crawl_platform_locks_guard:
+        if platform not in crawl_platform_locks:
+            crawl_platform_locks[platform] = threading.Lock()
+        return crawl_platform_locks[platform]
 
 # ── 数据文件路径 ────────────────────────────────────────
 D = "data"
@@ -34,11 +52,15 @@ F_RAW_RECORDS = f"{D}/raw_records.json"  # 细化版爬取记录
 F_COMPETITOR_ARTICLE_BODY_HITS = f"{D}/competitor_article_body_hits.json"
 F_CONTENT_GENERATIONS = f"{D}/content_generations.json"
 F_USERS = f"{D}/users.json"
+F_USER_SETTINGS = f"{D}/user_settings"
+F_REFERENCE_INTELLIGENCE = f"{D}/reference_intelligence"
+F_CRAWL_JOBS = f"{D}/crawl_jobs.json"
 
 ANONYMOUS_ENDPOINTS = {
     "static",
     "login_page",
     "auth_login",
+    "auth_register",
     "auth_logout",
     "auth_me",
     "health_check",
@@ -283,7 +305,21 @@ def load_client_records(client_id, date=None, group_id=None, platform=None, task
 
 def today_str(): return date.today().isoformat()
 def now_str(): return datetime.now().strftime("%Y-%m-%d %H:%M")
-def uid(): return datetime.now().strftime("%Y%m%d%H%M%S%f")
+_uid_lock = threading.Lock()
+_uid_last = ""
+_uid_counter = 0
+
+
+def uid():
+    global _uid_last, _uid_counter
+    stamp = datetime.now().strftime("%Y%m%d%H%M%S%f")
+    with _uid_lock:
+        if stamp == _uid_last:
+            _uid_counter += 1
+        else:
+            _uid_last = stamp
+            _uid_counter = 0
+        return stamp if _uid_counter == 0 else f"{stamp}{_uid_counter:03d}"
 
 def get_crawl_task_dir():
     return crawl_task_store.get_crawl_task_dir(D)
@@ -383,14 +419,55 @@ def calibrate_analysis_brand_mention(brand, question, answer, refs, analysis):
 
 
 # ── AI 调用 ─────────────────────────────────────────────
-def get_settings():
-    return load(F_SETTINGS, {
+DEFAULT_SETTINGS = {
         "api_key": "", "base_url": "https://api.deepseek.com",
         "model": "deepseek-chat", "preset": "deepseek"
-    })
+    }
+
+
+def get_global_settings():
+    return load(F_SETTINGS, DEFAULT_SETTINGS.copy())
+
+
+def user_settings_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
+    return os.path.join(F_USER_SETTINGS, f"{safe or 'user'}.json")
+
+
+def settings_username():
+    if has_request_context() and not auth_disabled():
+        user = current_user()
+        if user:
+            return user.get("username", "")
+    return ""
+
+
+def get_settings(username=None):
+    settings = get_global_settings()
+    username = username if username is not None else settings_username()
+    if username:
+        settings.update(load(user_settings_path(username), {}))
+    return settings
+
+
+def save_current_settings(data):
+    username = settings_username()
+    path = user_settings_path(username) if username else F_SETTINGS
+    settings = load(path, {}) if username else get_global_settings()
+    if data.get("api_key") and data["api_key"] not in ("***", ""):
+        settings["api_key"] = data["api_key"]
+    for key in ["base_url", "model", "preset"]:
+        if key in data:
+            settings[key] = data[key]
+    save(path, settings)
 
 def ai(prompt, max_tokens=2000):
     s = get_settings()
+    return ai_with_settings(prompt, max_tokens, s)
+
+
+def ai_with_settings(prompt, max_tokens=2000, settings=None):
+    s = settings or get_settings()
     if not s.get("api_key"):
         raise Exception("请先在系统设置中配置 API Key")
     client = OpenAI(api_key=s["api_key"], base_url=s["base_url"].rstrip("/"))
@@ -412,6 +489,15 @@ def ai_deepseek_pro(messages, max_tokens=6000):
 
 def ai_json(prompt, max_tokens=1500):
     raw = ai(prompt, max_tokens)
+    return parse_ai_json(raw)
+
+
+def ai_json_with_settings(prompt, max_tokens=1500, settings=None):
+    raw = ai_with_settings(prompt, max_tokens, settings)
+    return parse_ai_json(raw)
+
+
+def parse_ai_json(raw):
     raw = re.sub(r"^```json\s*|^```\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
     # 若 JSON 被截断（max_tokens不够），尝试补全后再解析
     try:
@@ -442,6 +528,13 @@ def login_page():
     <input name="password" type="password" placeholder="密码" autocomplete="current-password">
     <button type="submit">登录</button>
   </form>
+  <hr>
+  <h2>新同事注册</h2>
+  <form id="registerForm">
+    <input name="username" placeholder="用户名" autocomplete="username">
+    <input name="password" type="password" placeholder="密码" autocomplete="new-password">
+    <button type="submit">注册并进入</button>
+  </form>
   <script>
     document.getElementById('loginForm').addEventListener('submit', async (event) => {
       event.preventDefault();
@@ -456,6 +549,23 @@ def login_page():
       });
       if (response.ok) location.href = '/';
       else alert('用户名或密码错误');
+    });
+    document.getElementById('registerForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const response = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: form.get('username'),
+          password: form.get('password')
+        })
+      });
+      if (response.ok) location.href = '/';
+      else {
+        const payload = await response.json().catch(() => ({}));
+        alert(payload.message || '注册失败');
+      }
     });
   </script>
 </body>
@@ -475,6 +585,25 @@ def auth_login():
     return jsonify({"ok": True, "user": public_user(user)})
 
 
+@app.route("/api/auth/register", methods=["POST"])
+def auth_register():
+    data = request.json or {}
+    username = str(data.get("username") or "").strip()
+    password = str(data.get("password") or "")
+    if not username:
+        return jsonify({"error": "username_required", "message": "请输入用户名"}), 400
+    if not password:
+        return jsonify({"error": "password_required", "message": "请输入密码"}), 400
+    try:
+        user = create_user(F_USERS, username, password, role="operator")
+    except ValueError as exc:
+        if "already exists" in str(exc):
+            return jsonify({"error": "user_exists", "message": "用户名已存在"}), 409
+        return jsonify({"error": "invalid_registration", "message": str(exc)}), 400
+    session["username"] = user["username"]
+    return jsonify({"ok": True, "user": public_user(user)})
+
+
 @app.route("/api/auth/logout", methods=["POST"])
 def auth_logout():
     session.pop("username", None)
@@ -489,7 +618,7 @@ def auth_me():
 @app.route("/api/health", methods=["GET"])
 def health_check():
     """Lightweight environment check that does not require an API key."""
-    settings = get_settings()
+    settings = get_global_settings()
     data_dir_ok = True
     try:
         os.makedirs(D, exist_ok=True)
@@ -697,9 +826,9 @@ def save_raw_record(client_id, group_id, brand, question, round_num,
     )
 
 
-def auto_normalize_task_entities(client_id, date_str, task_id):
+def auto_normalize_task_entities(client_id, date_str, task_id, username=None):
     """Incrementally extract competitor entities for records created by one crawl task."""
-    settings = load(F_SETTINGS, {})
+    settings = get_settings(username)
     if not settings.get("api_key"):
         return {"ok": True, "skipped": True, "reason": "missing_api_key", "changed": 0}
     if not client_id or not date_str or not task_id:
@@ -753,6 +882,29 @@ def auto_normalize_task_entities(client_id, date_str, task_id):
         "selected_records": report_body.get("selected_records", 0),
         "final_entities": len(report_body.get("final_competitor_summary") or []),
     }
+
+
+def run_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None):
+    try:
+        result = auto_normalize_task_entities(client_id, date_str, task_id, username=username)
+    except Exception as exc:
+        result = {"ok": False, "status": "failed", "error": str(exc), "changed": 0}
+    report = load(task_report_path, {})
+    report["entity_normalize"] = result
+    report["entity_normalize_finished_at"] = now_str()
+    save(task_report_path, report)
+    return result
+
+
+def queue_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None):
+    status = {"ok": True, "status": "queued", "queued": True}
+    thread = threading.Thread(
+        target=run_entity_normalize_task,
+        args=(client_id, date_str, task_id, task_report_path, username),
+        daemon=True,
+    )
+    thread.start()
+    return status
 
 @app.route("/api/raw_records", methods=["GET"])
 def get_raw_records():
@@ -1308,36 +1460,9 @@ DEFAULT_GEO_CONTENT_RULES = """【默认 GEO 内容生成规则】
 4. 禁止绝对化排名、效果承诺、低价诱导、制造焦虑和小红书式情绪化表达。
 """
 
-def build_content_article_type_prompt(article_type, brand):
-    if article_type == "介绍型":
-        brand_line = f"标题必须包含品牌名：{brand}。" if brand else "标题必须包含客户品牌名。"
-        return f"""【文章类型：介绍型】
-- {brand_line}
-- 正文采用“少量攻略型开头 + 大量品牌结构化介绍 + 少量选择建议/注意事项”。
-- 开头必须先写目标用户在该业务场景里的真实痛点和决策难点，例如成本、风险、时间、效果判断、信息不透明、后续维护等；不要一上来写品牌履历。
-- 介绍型也不是广告软文；目标是解释品牌适合哪些用户、能解决哪些选择顾虑，不要默认用户已经决定选择该品牌。
-- 品牌介绍部分按“用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑”来组织；先回答用户为什么会在意，再写品牌对应能力。
-- 品牌结构化介绍必须是主体，占全文多数；重点写品牌定位、核心服务、适合人群、资质/团队/流程/设备/区域/售后等可由资料支撑的信息。
-- 资历、资质、团队、流程、设备、服务记录等只能作为证据，不能堆成履历清单；每个证据都要对应一个用户关心的问题。
-- 不能写成硬广；避免营销口号、夸张背书、反复夸品牌强，所有介绍都要落到用户关心的选择依据和可核验事实。
-- 可以用少量用户选择攻略引入问题，但不要写成医院榜单、第三方排名或多机构对比。
-- 客户资料没有明确写到的信息，只能用“建议面诊确认、以实际院区信息为准”等稳妥表达。"""
-    return """【文章类型：对比型】
-- 标题必须严格模仿高引用文章标题，优先使用“城市/区域 + 项目/机构 + 全攻略/推荐/怎么选 + 年份/最新”这类结构。
-- 当前运营意见和文章类型要求优先于历史文章；历史文章只用于理解上一版，不要沿用其中被当前要求删除的结构。
-- 正文采用“少量攻略型开头 + 大量分类对比/排名/适合人群/优缺点 + 少量总结建议”。
-- 主体分类对比必须充分展开，占全文多数；优先按机构类型、用户需求、预算、复杂程度、服务便利性等维度组织；最权威、最有公信力的类别或对象要放在最开头。
-- 对比型不能只有一个对比对象；每个被对比的主要类别或对象都要独立成小标题或独立段落展开。
-- 样例文章不能覆盖这里的对比型展开结构；样例只参考标题角度、信息密度和表达方式，不要照搬样例的栏目结构。
-- 如果一个类别下出现多个代表对象，必须拆成A1/A2/A3这样的独立小段分别展开，不能合并写在一行“代表机构”里。
-- 每个主要类别下至少展开2个代表对象或细分方向；如果资料和运营意见允许，优先展开3个。
-- A1/B1/C1只是示例标签，正文里不要输出A1、A2、B1、C1这类标签；真实正文请改成自然小标题，例如“代表选择：某类机构/某个机构名”。
-- 客户品牌只需要在合适类别中客观出现；不能为了推荐而拔高分类或改变真实市场定位，只要用户理解客户品牌适合哪些需求，就算完成品牌露出。
-- 最权威类别只放真实属于该层级的对象；客户品牌如果更适合民营专科连锁、正规私立连锁、服务便利型机构等类别，就放在对应类别中自然介绍。
-- 客户品牌事实必须严格以客户资料为准，尤其是客户的资质、地址、价格、医生、设备、案例、承诺等不能编造。
-- 非客户机构类型和行业对比，可以参考高质量引用文章和通用行业认知展开；如果写具体机构名称、价格、医生、排名或绝对评价，要使用谨慎表达，不要写成确定事实。
+DEFAULT_COMPARISON_SUBTYPE = "攻略对比型"
 
-【对比型展开 few-shot 示例】
+COMPARISON_FEW_SHOT_EXAMPLE = """【攻略对比型展开 few-shot 示例】
 参考这种展开方式：
 “一、A类：权威背书强，适合复杂需求
 A类本身要先展开。A类通常是本地用户最先考虑的权威选择，优势不只是‘名气大’，而是专业分工、流程规范、复杂问题处理能力更强。它适合需求复杂、风险敏感、预算相对充足、希望先获得稳妥判断的用户。局限也要写清楚：预约门槛、沟通效率、服务灵活度或时间成本可能不如市场化机构，所以简单需求不一定非要优先选A类。
@@ -1356,7 +1481,69 @@ C类同样独立展开，重点写它和A类、B类的不同选择价值。说�
 
 写真实文章时，把A类/B类/C类和A1/A2/A3替换成当前行业里的真实机构类型、代表对象或细分方向；客户品牌如适合，只在对应类别中自然出现。"""
 
-def build_content_generation_messages(client, material_bundle, history, opinion, sample_links=None, selected_articles=None, article_type="对比型"):
+
+def build_reference_stage3_example_plugin():
+    return f"""【示例插件：攻略对比型】
+说明：下面是当前内容生产里默认使用的完整插件，仅作为示例，帮助第三阶段学习插件的字段形态、详细度和展开颗粒度；不要把示例插件作为输出结果，不要照抄示例里的 A/B/C 或 A1/A2/A3 标签。
+
+parent_type: 对比型
+subtype_name: 攻略对比型
+prompt_text:
+- 正文采用“少量攻略型开头 + 大量分类对比/排名/适合人群/优缺点 + 少量总结建议”。
+- 样例文章不能覆盖这里的攻略对比型展开结构；样例只参考标题角度、信息密度和表达方式，不要照搬样例的栏目结构。
+- 如果一个类别下出现多个代表对象，必须拆成A1/A2/A3这样的独立小段分别展开，不能合并写在一行“代表机构”里。
+- A1/B1/C1只是示例标签，正文里不要输出A1、A2、B1、C1这类标签；真实正文请改成自然小标题，例如“代表选择：某类机构/某个机构名”。
+
+few_shot:
+{COMPARISON_FEW_SHOT_EXAMPLE}"""
+
+
+def build_content_article_type_prompt(article_type, brand):
+    if article_type == "介绍型":
+        brand_line = f"标题必须包含品牌名：{brand}。" if brand else "标题必须包含客户品牌名。"
+        return f"""【文章类型：介绍型】
+- {brand_line}
+- 正文采用“少量攻略型开头 + 大量品牌结构化介绍 + 少量选择建议/注意事项”。
+- 开头必须先写目标用户在该业务场景里的真实痛点和决策难点，例如成本、风险、时间、效果判断、信息不透明、后续维护等；不要一上来写品牌履历。
+- 介绍型也不是广告软文；目标是解释品牌适合哪些用户、能解决哪些选择顾虑，不要默认用户已经决定选择该品牌。
+- 品牌介绍部分按“用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑”来组织；先回答用户为什么会在意，再写品牌对应能力。
+- 品牌结构化介绍必须是主体，占全文多数；重点写品牌定位、核心服务、适合人群、资质/团队/流程/设备/区域/售后等可由资料支撑的信息。
+- 资历、资质、团队、流程、设备、服务记录等只能作为证据，不能堆成履历清单；每个证据都要对应一个用户关心的问题。
+- 不能写成硬广；避免营销口号、夸张背书、反复夸品牌强，所有介绍都要落到用户关心的选择依据和可核验事实。
+- 可以用少量用户选择攻略引入问题，但不要写成医院榜单、第三方排名或多机构对比。
+- 客户资料没有明确写到的信息，只能用“建议面诊确认、以实际院区信息为准”等稳妥表达。"""
+    return f"""【文章类型：对比型】
+- 标题必须严格模仿高引用文章标题，优先使用“城市/区域 + 项目/机构 + 全攻略/推荐/怎么选 + 年份/最新”这类结构。
+- 当前运营意见和文章类型要求优先于历史文章；历史文章只用于理解上一版，不要沿用其中被当前要求删除的结构。
+- 主体分类对比必须充分展开，占全文多数；优先按机构类型、用户需求、预算、复杂程度、服务便利性等维度组织；最权威、最有公信力的类别或对象要放在最开头。
+- 对比型不能只有一个对比对象；每个被对比的主要类别或对象都要独立成小标题或独立段落展开。
+- 每个主要类别下至少展开2个代表对象或细分方向；如果资料和运营意见允许，优先展开3个。
+- 客户品牌只需要在合适类别中客观出现；不能为了推荐而拔高分类或改变真实市场定位，只要用户理解客户品牌适合哪些需求，就算完成品牌露出。
+- 最权威类别只放真实属于该层级的对象；客户品牌如果更适合民营专科连锁、正规私立连锁、服务便利型机构等类别，就放在对应类别中自然介绍。
+- 客户品牌事实必须严格以客户资料为准，尤其是客户的资质、地址、价格、医生、设备、案例、承诺等不能编造。
+- 非客户机构类型和行业对比，可以参考高质量引用文章和通用行业认知展开；如果写具体机构名称、价格、医生、排名或绝对评价，要使用谨慎表达，不要写成确定事实。"""
+
+def build_content_article_subtype_prompt(article_type, article_subtype="", article_subtype_plugin=None):
+    plugin = normalize_reference_plugins([article_subtype_plugin])[0] if article_subtype_plugin else None
+    if plugin and plugin["parent_type"] == article_type:
+        subtype_name = plugin["subtype_name"] or article_subtype or "引用情报子类型"
+        body = "\n".join(part for part in [plugin["prompt_text"], plugin["few_shot"]] if part)
+        return f"""【文章子类型：{subtype_name}】
+{body}"""
+    if article_type != "对比型":
+        return ""
+    subtype_name = article_subtype or DEFAULT_COMPARISON_SUBTYPE
+    if subtype_name != DEFAULT_COMPARISON_SUBTYPE:
+        return f"""【文章子类型：{subtype_name}】"""
+    return f"""【文章子类型：攻略对比型】
+- 正文采用“少量攻略型开头 + 大量分类对比/排名/适合人群/优缺点 + 少量总结建议”。
+- 样例文章不能覆盖这里的攻略对比型展开结构；样例只参考标题角度、信息密度和表达方式，不要照搬样例的栏目结构。
+- 如果一个类别下出现多个代表对象，必须拆成A1/A2/A3这样的独立小段分别展开，不能合并写在一行“代表机构”里。
+- A1/B1/C1只是示例标签，正文里不要输出A1、A2、B1、C1这类标签；真实正文请改成自然小标题，例如“代表选择：某类机构/某个机构名”。
+
+{COMPARISON_FEW_SHOT_EXAMPLE}"""
+
+def build_content_generation_messages(client, material_bundle, history, opinion, sample_links=None, selected_articles=None, article_type="对比型", article_subtype="", article_subtype_plugin=None):
     brand = client.get("brand") or client.get("name") or ""
     material_text = material_bundle.get("text") or "暂无上传资料。"
     material_count = len(material_bundle.get("files") or [])
@@ -1365,6 +1552,7 @@ def build_content_generation_messages(client, material_bundle, history, opinion,
     sample_context = format_sample_article_context(sample_links, selected_articles)
     article_type = article_type if article_type in {"对比型", "介绍型"} else "对比型"
     article_type_prompt = build_content_article_type_prompt(article_type, brand)
+    article_subtype_prompt = build_content_article_subtype_prompt(article_type, article_subtype, article_subtype_plugin)
     system_prompt = f"""{DEFAULT_GEO_CONTENT_RULES}
 
 你是资深行业内容策划和长文撰稿人。请基于客户资料、运营意见和上下文历史生成可直接交给运营修改的中文文章。"""
@@ -1393,6 +1581,8 @@ def build_content_generation_messages(client, material_bundle, history, opinion,
 
 【文章类型要求】
 {article_type_prompt}
+
+{f"【文章子类型要求】{chr(10)}{article_subtype_prompt}" if article_subtype_prompt else ""}
 
 【输出要求】
 - 直接输出文章正文，不要输出解释过程。
@@ -1436,6 +1626,726 @@ def delete_content_generation_route(article_id):
     )
     return jsonify({"ok": True, "articles": articles})
 
+
+def reference_intelligence_path(client_id, date_str, task_id=""):
+    safe_client = re.sub(r"[^0-9A-Za-z_.-]", "_", client_id or "unknown")
+    safe_date = re.sub(r"[^0-9A-Za-z_.-]", "_", date_str or today_str())
+    safe_task = re.sub(r"[^0-9A-Za-z_.-]", "_", task_id or "all")
+    return os.path.join(F_REFERENCE_INTELLIGENCE, safe_client, f"{safe_date}_{safe_task}.json")
+
+
+def normalize_reference_plugins(plugins):
+    normalized = []
+    for item in plugins or []:
+        if not isinstance(item, dict):
+            continue
+        parent_type = str(item.get("parent_type") or "").strip()
+        if parent_type not in {"对比型", "介绍型"}:
+            parent_type = "对比型"
+        plugin = {
+            "parent_type": parent_type,
+            "subtype_name": str(item.get("subtype_name") or "").strip(),
+            "prompt_text": str(item.get("prompt_text") or "").strip(),
+            "few_shot": str(item.get("few_shot") or "").strip(),
+        }
+        source_articles = []
+        for source in item.get("source_articles") or []:
+            if not isinstance(source, dict):
+                continue
+            title = str(source.get("title") or "").strip()
+            url = str(source.get("url") or "").strip()
+            if title or url:
+                source_articles.append({"title": title, "url": url})
+        if source_articles:
+            plugin["source_articles"] = source_articles
+        if plugin["subtype_name"] or plugin["prompt_text"] or plugin["few_shot"]:
+            normalized.append(plugin)
+    return normalized
+
+
+def normalize_reference_clusters(clusters):
+    normalized = []
+    for item in clusters or []:
+        if not isinstance(item, dict):
+            continue
+        cluster = {
+            "cluster_name": str(item.get("cluster_name") or "").strip(),
+            "article_pattern": str(item.get("article_pattern") or "").strip(),
+            "structure_actions": [
+                str(value).strip() for value in item.get("structure_actions") or [] if str(value).strip()
+            ],
+            "abstract_rules": [
+                str(value).strip() for value in item.get("abstract_rules") or [] if str(value).strip()
+            ],
+            "source_article_titles": [
+                str(value).strip() for value in item.get("source_article_titles") or [] if str(value).strip()
+            ],
+        }
+        if cluster["cluster_name"] or cluster["article_pattern"] or cluster["structure_actions"]:
+            normalized.append(cluster)
+    return normalized
+
+
+def load_reference_intelligence(client_id, date_str, task_id=""):
+    return load(reference_intelligence_path(client_id, date_str, task_id), {
+        "client_id": client_id,
+        "date": date_str,
+        "task_id": task_id,
+        "clusters": [],
+        "plugins": [],
+    })
+
+
+def save_reference_intelligence(payload):
+    client_id = (payload.get("client_id") or "").strip()
+    if not client_id:
+        raise ValueError("client_id required")
+    date_str = (payload.get("date") or today_str()).strip()
+    task_id = (payload.get("task_id") or "").strip()
+    body = {
+        "ok": True,
+        "client_id": client_id,
+        "date": date_str,
+        "task_id": task_id,
+        "updated_at": now_str(),
+        "clusters": normalize_reference_clusters(payload.get("clusters")),
+        "plugins": normalize_reference_plugins(payload.get("plugins")),
+        "source_articles": payload.get("source_articles") or [],
+    }
+    save(reference_intelligence_path(client_id, date_str, task_id), body)
+    return body
+
+
+def reference_stage_dir(client_id, date_str):
+    safe_client = re.sub(r"[^0-9A-Za-z_.-]", "_", client_id or "unknown")
+    safe_date = re.sub(r"[^0-9A-Za-z_.-]", "_", date_str or today_str())
+    return os.path.join(F_REFERENCE_INTELLIGENCE, safe_client, safe_date)
+
+
+def collect_reference_articles(records, limit=20):
+    by_url = {}
+    order = []
+    for record in records or []:
+        question = str(record.get("question") or "")
+        for ref in record.get("refs") or []:
+            url = str(ref.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                continue
+            if url not in by_url:
+                by_url[url] = {
+                    "url": url,
+                    "source_title": str(ref.get("title") or ""),
+                    "platform": str(ref.get("platform") or ""),
+                    "first_question": question,
+                    "citation_count": 0,
+                    "_index": len(order),
+                }
+                order.append(url)
+            by_url[url]["citation_count"] += 1
+    articles = [by_url[url] for url in order]
+    articles.sort(key=lambda item: (-item["citation_count"], item["_index"]))
+    for article in articles:
+        article.pop("_index", None)
+    return articles[:limit] if limit else articles
+
+
+def create_reference_analysis_job(client_id, date_str, task_id="", username=""):
+    job_id = uid()
+    created_at = now_str()
+    job = {
+        "ok": True,
+        "job_id": job_id,
+        "client_id": client_id,
+        "date": date_str,
+        "task_id": task_id,
+        "username": username,
+        "status": "queued",
+        "progress": 3,
+        "error": "",
+        "created_at": created_at,
+        "updated_at": created_at,
+        "timings": {},
+    }
+    with reference_analysis_jobs_guard:
+        reference_analysis_jobs[job_id] = job
+    return job_id
+
+
+def create_or_reuse_reference_analysis_job(client_id, date_str, task_id="", username=""):
+    with reference_analysis_jobs_guard:
+        for job in reference_analysis_jobs.values():
+            if (
+                job.get("client_id") == client_id
+                and job.get("date") == date_str
+                and (job.get("task_id") or "") == (task_id or "")
+                and job.get("status") in {"queued", "running"}
+            ):
+                return dict(job), False
+        job_id = uid()
+        created_at = now_str()
+        job = {
+            "ok": True,
+            "job_id": job_id,
+            "client_id": client_id,
+            "date": date_str,
+            "task_id": task_id,
+            "username": username,
+            "status": "queued",
+            "progress": 3,
+            "error": "",
+            "created_at": created_at,
+            "updated_at": created_at,
+            "timings": {},
+        }
+        reference_analysis_jobs[job_id] = job
+        return dict(job), True
+
+
+def get_reference_analysis_job(job_id):
+    with reference_analysis_jobs_guard:
+        job = dict(reference_analysis_jobs.get(job_id) or {})
+    return job
+
+
+def update_reference_analysis_job(job_id, **fields):
+    with reference_analysis_jobs_guard:
+        job = reference_analysis_jobs.get(job_id)
+        if not job:
+            return {}
+        job.update(fields)
+        job["updated_at"] = now_str()
+        return dict(job)
+
+
+def reference_analysis_cancel_requested(job_id):
+    return bool(get_reference_analysis_job(job_id).get("cancel_requested"))
+
+
+def cancel_reference_analysis_job(job_id):
+    with reference_analysis_jobs_guard:
+        job = reference_analysis_jobs.get(job_id)
+        if not job:
+            return {}
+        if job.get("status") in {"completed", "failed", "canceled"}:
+            return dict(job)
+        job["cancel_requested"] = True
+        job["status"] = "canceled"
+        job["updated_at"] = now_str()
+        return dict(job)
+
+
+def _raise_if_reference_canceled(job_id):
+    if reference_analysis_cancel_requested(job_id):
+        raise RuntimeError("reference_analysis_canceled")
+
+
+def _job_ai_json(username):
+    settings = get_settings(username)
+    return lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, settings)
+
+
+def _display_article_title(article):
+    title = str(article.get("title") or "").strip()
+    if title.lower() in {"403 forbidden", "404 not found", "just a moment..."}:
+        title = ""
+    return title or str(article.get("source_title") or "").strip()
+
+
+def _sources_from_stage1_analyses(analyses):
+    sources = {}
+    for index, article in enumerate(analyses or [], 1):
+        title = _display_article_title(article)
+        url = str(article.get("url") or "").strip()
+        if title or url:
+            sources[index] = {"title": title, "url": url}
+    return sources
+
+
+def _attach_source_articles_to_plugins(plugins, source_by_stage1_index):
+    enriched = []
+    for plugin in plugins or []:
+        item = dict(plugin)
+        item["source_articles"] = [
+            source_by_stage1_index[index]
+            for index in item.get("source_article_indexes") or []
+            if index in source_by_stage1_index
+        ]
+        enriched.append(item)
+    return enriched
+
+
+def load_reference_fetch_cache(stage_dir):
+    cached = {}
+    body = load(os.path.join(stage_dir, "fetched_articles.json"), {})
+    for article in body.get("articles") or []:
+        if not isinstance(article, dict):
+            continue
+        url = str(article.get("url") or "").strip()
+        content = str(article.get("content") or "")
+        if url and article.get("ok") and len(content) >= 200:
+            cached[url] = article
+    return cached
+
+
+def merge_reference_fetch_result(ref, fetched, fetch_method=None):
+    content = fetched.get("content") or ""
+    return {
+        **ref,
+        "ok": bool(fetched.get("ok")),
+        "title": fetched.get("title") or "",
+        "description": fetched.get("description") or "",
+        "content_len": len(content),
+        "content": content,
+        "fetch_method": fetch_method or fetched.get("fetch_method") or "",
+        "error": fetched.get("error") or "",
+        "static_error": fetched.get("static_error") or "",
+    }
+
+
+def _timed(job_id, name, fn):
+    started = datetime.now()
+    result = fn()
+    elapsed = round((datetime.now() - started).total_seconds(), 2)
+    job = get_reference_analysis_job(job_id)
+    timings = dict(job.get("timings") or {})
+    timings[name] = elapsed
+    update_reference_analysis_job(job_id, timings=timings)
+    return result
+
+
+def run_reference_analysis_job(
+    job_id,
+    client_id,
+    date_str,
+    task_id="",
+    username="",
+    fetch_fn=fetch_article_text,
+    ai_json_fn=None,
+    limit=20,
+    candidate_limit=None,
+    fetch_workers=3,
+):
+    ai_json_fn = ai_json_fn or _job_ai_json(username)
+    stage_dir = reference_stage_dir(client_id, date_str)
+    try:
+        update_reference_analysis_job(job_id, status="running", progress=3, error="")
+        _raise_if_reference_canceled(job_id)
+
+        records = load_client_records(client_id, date=date_str, task_id=task_id if task_id else None)
+        target_usable = max(1, int(limit or 20))
+        candidate_limit = max(target_usable, int(candidate_limit or max(target_usable, 35)))
+        fetch_workers = max(1, int(fetch_workers or 1))
+        refs = collect_reference_articles(records, limit=candidate_limit)
+        if not refs:
+            raise ValueError("当前范围暂无引用文章")
+        update_reference_analysis_job(job_id, progress=5)
+
+        def fetch_step():
+            articles = []
+            cache = load_reference_fetch_cache(stage_dir)
+            usable_count = 0
+            processed_count = 0
+            total = len(refs)
+
+            def fetch_one(ref):
+                if ref["url"] in cache:
+                    return merge_reference_fetch_result(ref, cache[ref["url"]], fetch_method="cache")
+                try:
+                    fetched = fetch_fn(ref["url"], timeout=25, max_chars=12000, browser_fallback=True)
+                    return merge_reference_fetch_result(ref, fetched)
+                except Exception as exc:
+                    return merge_reference_fetch_result(ref, {
+                        "ok": False,
+                        "title": "",
+                        "description": "",
+                        "content": "",
+                        "error": str(exc),
+                        "fetch_method": "browser",
+                    })
+
+            def append_article(article):
+                nonlocal usable_count, processed_count
+                articles.append(article)
+                if article.get("ok") and len(str(article.get("content") or "")) >= 200:
+                    usable_count += 1
+                processed_count += 1
+                update_reference_analysis_job(job_id, progress=round(5 + (processed_count / total) * 25, 1))
+
+            index = 0
+            with ThreadPoolExecutor(max_workers=fetch_workers) as pool:
+                while index < total and usable_count < target_usable:
+                    _raise_if_reference_canceled(job_id)
+                    batch = []
+                    batch_size = min(fetch_workers, max(1, target_usable - usable_count))
+                    while index < total and len(batch) < batch_size and usable_count < target_usable:
+                        ref = refs[index]
+                        index += 1
+                        if ref["url"] in cache:
+                            append_article(merge_reference_fetch_result(ref, cache[ref["url"]], fetch_method="cache"))
+                        else:
+                            batch.append(ref)
+                    if not batch:
+                        continue
+                    futures = [pool.submit(fetch_one, ref) for ref in batch]
+                    for future in futures:
+                        _raise_if_reference_canceled(job_id)
+                        append_article(future.result())
+            output = {
+                "client_id": client_id,
+                "date": date_str,
+                "candidate_total": len(refs),
+                "target_usable": target_usable,
+                "total": len(articles),
+                "fetched_ok": sum(1 for item in articles if item["ok"]),
+                "fetched_failed": sum(1 for item in articles if not item["ok"]),
+                "articles": articles,
+            }
+            save(os.path.join(stage_dir, "fetched_articles.json"), output)
+            update_reference_analysis_job(job_id, progress=30)
+            return articles
+
+        articles = _timed(job_id, "fetch", fetch_step)
+        usable = [item for item in articles if item.get("ok") and len(str(item.get("content") or "")) >= 200]
+        if not usable:
+            raise ValueError("引用文章正文抓取失败")
+
+        def stage1_step():
+            analyses = []
+            errors = []
+            total = len(usable)
+            for index, article in enumerate(usable, 1):
+                _raise_if_reference_canceled(job_id)
+                try:
+                    result = analyze_stage1_article(article, ai_json_fn)
+                    analyses.append({
+                        "url": article.get("url") or "",
+                        "source_title": article.get("source_title") or "",
+                        "title": article.get("title") or article.get("source_title") or "",
+                        "citation_count": int(article.get("citation_count") or 0),
+                        "parent_type": result["parent_type"],
+                        "opening": result["opening"],
+                        "body": result["body"],
+                        "ending": result["ending"],
+                    })
+                except Exception as exc:
+                    errors.append({"url": article.get("url") or "", "error": str(exc)})
+                update_reference_analysis_job(job_id, progress=round(30 + (index / total) * 50, 1))
+            output = {
+                "client_id": client_id,
+                "date": date_str,
+                "total_input": len(articles),
+                "total_analyzed": len(analyses),
+                "total_skipped": len(articles) - len(usable),
+                "total_errors": len(errors),
+                "analyses": analyses,
+                "errors": errors,
+            }
+            save(os.path.join(stage_dir, "stage1_article_structures.json"), output)
+            return analyses
+
+        analyses = _timed(job_id, "stage1", stage1_step)
+        if not analyses:
+            raise ValueError("阶段一没有成功分析的文章")
+
+        def stage2_step():
+            _raise_if_reference_canceled(job_id)
+            update_reference_analysis_job(job_id, progress=80)
+            result = analyze_stage2_clusters(analyses, ai_json_fn)
+            output = {
+                "client_id": client_id,
+                "date": date_str,
+                "total_input": len(analyses),
+                "total_clusters": len(result["clusters"]),
+                "clusters": result["clusters"],
+            }
+            save(os.path.join(stage_dir, "stage2_structure_clusters.json"), output)
+            update_reference_analysis_job(job_id, progress=88)
+            return result["clusters"]
+
+        clusters = _timed(job_id, "stage2", stage2_step)
+        if not clusters:
+            raise ValueError("阶段二没有生成结构簇")
+
+        def stage3_step():
+            _raise_if_reference_canceled(job_id)
+            update_reference_analysis_job(job_id, progress=88)
+            result = analyze_stage3_plugins(clusters, ai_json_fn)
+            plugins = _attach_source_articles_to_plugins(result["plugins"], _sources_from_stage1_analyses(analyses))
+            output = {
+                "client_id": client_id,
+                "date": date_str,
+                "total_clusters": len(clusters),
+                "total_plugins": len(plugins),
+                "plugins": plugins,
+            }
+            save(os.path.join(stage_dir, "stage3_prompt_plugins.json"), output)
+            update_reference_analysis_job(job_id, progress=99)
+            return plugins
+
+        plugins = _timed(job_id, "stage3", stage3_step)
+        _raise_if_reference_canceled(job_id)
+        body = save_reference_intelligence({
+            "client_id": client_id,
+            "date": date_str,
+            "task_id": task_id,
+            "clusters": [],
+            "plugins": plugins,
+            "source_articles": [],
+        })
+        update_reference_analysis_job(job_id, status="completed", progress=100, result=body)
+        return body
+    except RuntimeError as exc:
+        if str(exc) == "reference_analysis_canceled":
+            update_reference_analysis_job(job_id, status="canceled")
+            return {}
+        update_reference_analysis_job(job_id, status="failed", error=str(exc))
+        return {}
+    except Exception as exc:
+        update_reference_analysis_job(job_id, status="failed", error=str(exc))
+        return {}
+
+
+def queue_reference_analysis_job(client_id, date_str, task_id="", username=""):
+    job, should_start = create_or_reuse_reference_analysis_job(client_id, date_str, task_id, username=username)
+    if not should_start:
+        return job
+    job_id = job["job_id"]
+    thread = threading.Thread(
+        target=run_reference_analysis_job,
+        kwargs={
+            "job_id": job_id,
+            "client_id": client_id,
+            "date_str": date_str,
+            "task_id": task_id,
+            "username": username,
+        },
+        daemon=True,
+    )
+    thread.start()
+    return get_reference_analysis_job(job_id)
+
+
+def build_reference_cluster_prompt(articles):
+    article_lines = []
+    for i, article in enumerate((articles or [])[:20], 1):
+        article_lines.append(
+            f"{i}. 标题：{article.get('title') or ''}\n"
+            f"   平台：{article.get('platform') or ''}；出现次数：{article.get('count') or 0}；链接：{article.get('url') or ''}"
+        )
+    return f"""你是 GEO 引用情报分析师。现在执行第二阶段：高频引用文章结构归并。
+
+第二阶段只负责归并文章结构类型，不要生成 prompt_text 或 few_shot，不要改写成最终插件。
+
+高频引用文章：
+{chr(10).join(article_lines) or "暂无"}
+
+归并要求：
+1. 从文章标题、平台和出现次数中判断反复出现的内容结构，不要评估具体机构好坏。
+2. 优先输出 3-5 个结构类；如果来源文章高度单一，也至少输出 2 个结构类。
+3. 每个结构类说明它适合什么内容、常见结构动作、三阶段需要抽象掉哪些具体信息。
+4. `abstract_rules` 必须提醒三阶段把具体机构名、具体客户品牌、具体文章名、具体平台名、具体年份、具体数据和 URL 抽象成可复用占位。
+
+只返回 JSON，不要解释。格式必须是：
+{{
+  "clusters": [
+    {{
+      "cluster_name": "结构类名称，例如本地机构筛选标准型",
+      "article_pattern": "这类引用文章通常怎么组织内容",
+      "structure_actions": ["先写用户选择困难", "再按机构类型或需求分层", "最后给避坑建议"],
+      "abstract_rules": ["具体机构名改写成本地老牌机构/连锁标准化机构等类型", "具体年份和数据改写成以实际资料为准"],
+      "source_article_titles": ["支撑这个结构类的文章标题，可少量列出"]
+    }}
+  ]
+}}
+"""
+
+
+def build_reference_plugin_prompt(clusters):
+    cluster_text = json.dumps(normalize_reference_clusters(clusters), ensure_ascii=False, indent=2)
+    return f"""你是 GEO 内容插件改写师。现在执行第三阶段：把第二阶段结构类改写成可复用内容生产插件。
+
+第二阶段结构类：
+{cluster_text or "[]"}
+
+下面是当前内容生成里默认使用的完整攻略对比型插件。它仅作为示例，第三阶段输出 `prompt_text` 和 `few_shot` 时要参考对比型展开 few-shot 示例的详细程度、展开颗粒度和“类别 -> 代表对象 -> 适合人群/限制/证据”的写法；不要把示例插件作为输出结果，不要照抄 A/B/C、A1/A2/A3 标签，也不要编造真实客户事实。
+
+{build_reference_stage3_example_plugin()}
+
+输出要求：
+1. 默认输出 3-5 个插件；如果第二阶段结构类少于 3 个，也至少输出 2 个插件，不要把所有结构合并成一个。
+2. `parent_type` 必须二选一：`对比型` 或 `介绍型`。如果插件适合多对象、多类别、多维度比较，选 `对比型`；如果插件适合品牌/机构/服务介绍，选 `介绍型`。
+3. 只要结构里是多个服务方、产品或方案逐一点评、横向拆解、排名、清单、梯队、优劣势分解，即使写法像“逐一介绍”，也必须归为“对比型”；只有单一品牌或单一服务方深度介绍才归为“介绍型”。
+4. `subtype_name` 由你根据结构类自由命名，作为对应父类型下的子类型名称。
+5. `prompt_text` 写成短规则，说明这种插件要求内容生产怎么组织文章，不要重复通用合规规则。
+6. `few_shot` 必须参考对比型展开 few-shot 示例的详细程度，不能只写一句方法说明。
+7. `few_shot` 要写 500-900字，像一个可直接模仿的内容片段，而不是摘要、提纲或注意事项。
+8. `few_shot` 必须抽象成行业通用模板，禁止出现具体机构名、具体客户品牌、具体文章名、具体平台名、具体年份、具体数据、URL、备案号、真实老师或真实案例。
+9. `few_shot` 需要使用抽象占位和类型词，例如“本地老牌机构”“连锁标准化机构”“专项补强型机构”“志愿规划强项机构”“某类服务商”“某品牌”“以实际资料为准”。
+10. `few_shot` 必须包含：
+   - 一个明确的用户问题场景，例如“西安牙齿矫正怎么选？”。
+   - 一段可直接模仿的正文片段，展示开头如何提出选择困难，正文如何分类、对比、举证、避坑和给选择建议。
+   - 至少 2-3 个结构动作，例如“先按需求分层”“每层写适合人群和限制”“用资料证据支撑”“最后给谨慎建议”。
+11. 如果插件适合对比型文章，few_shot 要像当前对比型展开示例一样，把主要类别和代表对象如何展开写清楚；如果适合介绍型文章，也要写成完整的“痛点 -> 品牌回应 -> 证据支撑”片段。
+12. few_shot 不要使用 A1/B1/C1 作为最终正文标签，可以用自然小标题或“代表选择：...”这类真实文章写法。
+13. 不要编造具体客户事实、价格、医生、案例、资质或排名；需要示例时使用“某类机构、某品牌、需以实际资料为准”等占位和谨慎表达。
+
+只返回 JSON，不要解释。格式必须是：
+{{
+  "plugins": [
+    {{
+      "parent_type": "对比型或介绍型",
+      "subtype_name": "插件类型名",
+      "prompt_text": "可直接给内容生产使用的写作要求，不要重复通用合规规则",
+      "few_shot": "500-900字的详细示例，包含用户问题场景和可直接模仿的正文片段，不能只写一句方法说明"
+    }}
+  ]
+}}
+"""
+
+
+def build_reference_intelligence_prompt(articles):
+    return build_reference_cluster_prompt(articles)
+
+
+def latest_entity_report_status(client_id, date_str, task_id=""):
+    pattern = os.path.join(get_crawl_task_dir(), f"{date_str}_*.json")
+    reports = []
+    for path in glob.glob(pattern):
+        report = load(path, {})
+        if report.get("client_id") != client_id:
+            continue
+        if task_id and report.get("task_id") != task_id:
+            continue
+        reports.append((report.get("created_at") or report.get("finished_at") or "", path, report))
+    if not reports:
+        return {"ok": True, "status": "not_found", "message": "暂无实体识别任务"}
+    reports.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    _, path, report = reports[0]
+    entity = report.get("entity_normalize") or {}
+    if report.get("entity_normalize_finished_at"):
+        status = "completed" if entity.get("ok", True) else "failed"
+    else:
+        status = entity.get("status") or ("queued" if entity.get("queued") else "unknown")
+    return {
+        "ok": True,
+        "status": status,
+        "task_id": report.get("task_id") or "",
+        "task_report": path,
+        "finished_at": report.get("entity_normalize_finished_at") or "",
+        "changed": entity.get("changed", 0),
+        "selected_records": entity.get("selected_records", 0),
+        "error": entity.get("error", ""),
+        "message": entity.get("reason", ""),
+    }
+
+
+@app.route("/api/reference_intelligence/plugins", methods=["GET"])
+def get_reference_intelligence_plugins():
+    client_id = request.args.get("client_id", "").strip()
+    if not client_id:
+        return jsonify({"error": "client_id required"}), 400
+    date_str = request.args.get("date", today_str()).strip()
+    task_id = request.args.get("task_id", "").strip()
+    body = load_reference_intelligence(client_id, date_str, task_id)
+    return jsonify({"ok": True, **body})
+
+
+@app.route("/api/reference_intelligence/plugins", methods=["POST"])
+def save_reference_intelligence_plugins():
+    try:
+        body = save_reference_intelligence(request.json or {})
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify(body)
+
+
+@app.route("/api/reference_intelligence/analyze", methods=["POST"])
+def analyze_reference_intelligence():
+    payload = request.json or {}
+    client_id = (payload.get("client_id") or "").strip()
+    if not client_id:
+        return jsonify({"error": "client_id required"}), 400
+    date_str = (payload.get("date") or today_str()).strip()
+    task_id = (payload.get("task_id") or "").strip()
+    body = queue_reference_analysis_job(
+        client_id=client_id,
+        date_str=date_str,
+        task_id=task_id,
+        username=settings_username(),
+    )
+    return jsonify(body)
+
+
+@app.route("/api/reference_intelligence/analyze_status", methods=["GET"])
+def reference_intelligence_analyze_status():
+    job_id = request.args.get("job_id", "").strip()
+    job = get_reference_analysis_job(job_id)
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/reference_intelligence/analyze_cancel", methods=["POST"])
+def reference_intelligence_analyze_cancel():
+    job_id = str((request.json or {}).get("job_id") or "").strip()
+    job = cancel_reference_analysis_job(job_id)
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    return jsonify(job)
+
+
+@app.route("/api/daily/entity_status", methods=["GET"])
+def daily_entity_status():
+    client_id = request.args.get("client_id", "").strip()
+    if not client_id:
+        return jsonify({"error": "client_id required"}), 400
+    date_str = request.args.get("date", today_str()).strip()
+    task_id = request.args.get("task_id", "").strip()
+    return jsonify(latest_entity_report_status(client_id, date_str, task_id))
+
+
+@app.route("/api/article_structure/extract", methods=["POST"])
+def extract_article_structure():
+    payload = request.json or {}
+    fetched_article = None
+    article_payload = payload.get("article") if isinstance(payload.get("article"), dict) else payload
+    if isinstance(article_payload, dict) and not (
+        article_payload.get("content") or article_payload.get("body") or article_payload.get("summary")
+    ) and article_payload.get("url"):
+        fetched_article = fetch_article_text(article_payload.get("url"))
+        if fetched_article.get("content"):
+            article_payload = {
+                **article_payload,
+                "title": article_payload.get("title") or fetched_article.get("title"),
+                "content": fetched_article.get("content"),
+            }
+            payload = {**payload, "article": article_payload} if isinstance(payload.get("article"), dict) else article_payload
+    try:
+        analysis = analyze_article_structure(payload, ai_json)
+    except ValueError as exc:
+        if str(exc) == "article_required":
+            return jsonify({"error": "article_required", "message": "请提供文章标题或正文"}), 400
+        return jsonify({"error": "invalid_article", "message": str(exc)}), 400
+    except Exception as exc:
+        print(f"[article_structure_extract 错误] {exc}")
+        return jsonify({"error": "extract_failed", "message": str(exc)}), 500
+    response = {"ok": True, "analysis": analysis}
+    if fetched_article is not None:
+        response["fetched_article"] = fetched_article
+    return jsonify(response)
+
+
+@app.route("/api/article_structure/fetch", methods=["POST"])
+def fetch_article_structure_source():
+    payload = request.json or {}
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "url_required", "message": "请提供文章 URL"}), 400
+    article = fetch_article_text(url)
+    status = 200 if article.get("ok") else 502
+    return jsonify({"ok": bool(article.get("ok")), "article": article}), status
+
+
 @app.route("/api/content/generate", methods=["POST"])
 def generate_content_article():
     d = request.json or {}
@@ -1453,6 +2363,8 @@ def generate_content_article():
     sample_links = normalize_sample_links(d.get("sample_links", []))
     selected_articles = normalize_selected_sample_articles(d.get("selected_articles", []))
     article_type = d.get("article_type") if d.get("article_type") in {"对比型", "介绍型"} else "对比型"
+    article_subtype = (d.get("article_subtype") or "").strip()
+    article_subtype_plugin = d.get("article_subtype_plugin") if isinstance(d.get("article_subtype_plugin"), dict) else None
     history_date = normalize_content_history_date(d.get("history_date") or d.get("date")) or today_str()
     history = load_content_messages(cid, article_type, history_date=history_date)
     messages = build_content_generation_messages(
@@ -1463,6 +2375,8 @@ def generate_content_article():
         sample_links=sample_links,
         selected_articles=selected_articles,
         article_type=article_type,
+        article_subtype=article_subtype,
+        article_subtype_plugin=article_subtype_plugin,
     )
     generation_model = get_settings().get("model", "deepseek-chat")
     try:
@@ -1484,6 +2398,7 @@ def generate_content_article():
         "sample_links": sample_links,
         "selected_articles": selected_articles,
         "article_type": article_type,
+        "article_subtype": article_subtype,
         "created_at": created_at,
         "created_by": (current_user() or {}).get("username", ""),
     }
@@ -1592,10 +2507,14 @@ def daily_ref_stats():
         platform_cnt = defaultdict(int)
         article_cnt = defaultdict(int)
         article_info = {}
+        ai_record_cnt = defaultdict(int)
+        ai_article_cnt = defaultdict(lambda: defaultdict(int))
+        ai_article_info = defaultdict(dict)
         total_refs = 0
 
         for rec in records:
             ai_platform = rec.get("source_platform", "doubao") or "doubao"
+            ai_record_cnt[ai_platform] += 1
             for ref in rec.get("refs", []):
                 url = ref.get("url", "")
                 p = normalize_ref_platform(ref.get("platform", "未知"), url)
@@ -1616,6 +2535,15 @@ def daily_ref_stats():
                         }
                     article_info[key]["positions"].append(pos)
                     article_info[key]["ai_platforms"].add(ai_platform)
+                    ai_article_cnt[ai_platform][key] += 1
+                    if key not in ai_article_info[ai_platform]:
+                        ai_article_info[ai_platform][key] = {
+                            "title": title,
+                            "url": url,
+                            "platform": p,
+                            "positions": [],
+                        }
+                    ai_article_info[ai_platform][key]["positions"].append(pos)
 
         total_records = len(records)
         platform_weights = sorted([
@@ -1635,6 +2563,31 @@ def daily_ref_stats():
             }
             for k, v in article_info.items()
         ], key=lambda x: x["count"], reverse=True)[:20]
+
+        top_articles_by_ai = []
+        for ai_platform, counts in ai_article_cnt.items():
+            articles = sorted([
+                {
+                    "title": v["title"],
+                    "url": v["url"],
+                    "platform": v["platform"],
+                    "count": counts[k],
+                    "avg_position": round(sum(v["positions"]) / len(v["positions"]), 1) if v["positions"] else 0,
+                    "ai_platforms": [ai_platform],
+                }
+                for k, v in ai_article_info[ai_platform].items()
+            ], key=lambda x: x["count"], reverse=True)[:12]
+            top_articles_by_ai.append({
+                "source_platform": ai_platform,
+                "platform_name": CRAWL_PLATFORMS.get(ai_platform, {}).get("name", ai_platform),
+                "total_records": ai_record_cnt[ai_platform],
+                "top_articles": articles,
+            })
+        top_articles_by_ai.sort(
+            key=lambda x: CLIENT_CONTRACT_PLATFORM_ORDER.index(x["source_platform"])
+            if x["source_platform"] in CLIENT_CONTRACT_PLATFORM_ORDER
+            else len(CLIENT_CONTRACT_PLATFORM_ORDER)
+        )
         body_hit_report = load_competitor_article_body_hit_report(
             client_id,
             date,
@@ -1647,17 +2600,30 @@ def daily_ref_stats():
             records,
             body_hit_report=body_hit_report,
         )
+        for group in top_articles_by_ai:
+            group["top_articles"] = annotate_top_articles_with_competitor_matches(
+                group["top_articles"],
+                records,
+                body_hit_report=body_hit_report,
+            )
 
         return jsonify({
             "total_records": total_records,
             "total_refs": total_refs,
             "date": date,
             "platform_weights": platform_weights,
-            "top_articles": top_articles
+            "top_articles": top_articles,
+            "top_articles_by_ai": top_articles_by_ai,
         })
     except Exception as e:
         print(f"[daily_ref_stats 错误] {e}")
-        return jsonify({"total_records": 0, "date": date, "platform_weights": [], "top_articles": []})
+        return jsonify({
+            "total_records": 0,
+            "date": date,
+            "platform_weights": [],
+            "top_articles": [],
+            "top_articles_by_ai": [],
+        })
 
 @app.route("/api/daily/insights", methods=["GET"])
 def daily_insights():
@@ -2094,13 +3060,8 @@ def api_get_settings():
 
 @app.route("/api/settings", methods=["POST"])
 def api_save_settings():
-    d = request.json
-    s = get_settings()
-    if d.get("api_key") and d["api_key"] not in ("***",""):
-        s["api_key"] = d["api_key"]
-    for k in ["base_url","model","preset"]:
-        if k in d: s[k] = d[k]
-    save(F_SETTINGS, s)
+    d = request.json or {}
+    save_current_settings(d)
     return jsonify({"ok": True})
 
 @app.route("/api/settings/test", methods=["POST"])
@@ -2124,6 +3085,7 @@ CRAWL_PLATFORMS = {
     "deepseek": {"name": "DeepSeek", "module": "deepseek_crawler", "url": "https://chat.deepseek.com/"},
     "yuanbao":  {"name": "元宝",     "module": "yuanbao_crawler",  "url": "https://yuanbao.tencent.com/chat"},
     "qwen":     {"name": "千问",     "module": "qwen_crawler",     "url": "https://tongyi.aliyun.com/qianwen"},
+    "kimi":     {"name": "Kimi",     "module": "kimi_crawler",     "url": "https://kimi.moonshot.cn"},
 }
 
 def get_crawler_module(platform: str):
@@ -2265,17 +3227,228 @@ def analyze_brand_intel_with_retry(brand, question, answer, refs, settings, max_
         "fallback": "basic_brand_analysis",
     }
 
+
+def persist_local_crawl_job_results(job):
+    if not job or job.get("status") != "completed":
+        return {"ok": True, "skipped": True, "reason": "job_not_completed", "saved": 0}
+    if job.get("job_type", "crawl") != "crawl":
+        return {"ok": True, "skipped": True, "reason": "login_job", "saved": 0, "errors": 0}
+
+    job_id = job.get("id", "")
+    existing = load(F_RAW_RECORDS, [])
+    if any(item.get("task_id") == job_id for item in existing if isinstance(item, dict)):
+        return {"ok": True, "skipped": True, "reason": "already_persisted", "saved": 0}
+
+    payload = job.get("result_payload") or {}
+    results = payload.get("results") or []
+    if not results:
+        return {"ok": True, "skipped": True, "reason": "no_results", "saved": 0}
+
+    client_id = job.get("client_id", "")
+    group_id = job.get("group_id", "")
+    brand = job.get("brand", "")
+    platform = job.get("platform", "")
+    crawler_engine = payload.get("crawler_engine") or "local_worker_node"
+    task_report = {
+        "task_id": job_id,
+        "status": "completed",
+        "client_id": client_id,
+        "brand": brand,
+        "group_id": group_id,
+        "source_platform": platform,
+        "crawler_engine": crawler_engine,
+        "started_at": job.get("claimed_at") or job.get("created_at") or "",
+        "finished_at": job.get("finished_at") or now_str(),
+        "worker_id": job.get("assigned_to", ""),
+        "questions": job.get("questions") or [],
+        "repeat_count": job.get("repeat_count") or 1,
+        "analysis_mode": "basic_no_api_key",
+    }
+    task_report_path = save_crawl_task_report(task_report)
+    round_by_question = {}
+    saved = []
+    failures = []
+
+    for raw in results:
+        if not isinstance(raw, dict):
+            failures.append({"error": "invalid_result"})
+            continue
+        question = str(raw.get("question") or "").strip()
+        answer = str(raw.get("answer") or "")
+        refs = raw.get("refs") if isinstance(raw.get("refs"), list) else []
+        if raw.get("error") or raw.get("ok") is False or not question or not answer:
+            failures.append(compact_crawl_failure(raw, {"question": question}))
+            continue
+
+        round_by_question[question] = round_by_question.get(question, 0) + 1
+        analysis = basic_brand_analysis_without_api(
+            brand,
+            question,
+            answer,
+            refs,
+            analysis_status="local_worker_basic",
+            analysis_mode="local_worker_basic",
+            summary="本地 worker 已回传爬取结果，云端已保存原始回答和引用源，深度分析可后续异步补充。",
+            suggestion="优先检查品牌是否被提及、引用源是否有效；竞品实体可等待异步分析补全。",
+        )
+        analysis = calibrate_analysis_brand_mention(brand, question, answer, refs, analysis)
+        save_raw_record(
+            client_id=client_id,
+            group_id=group_id,
+            brand=brand,
+            question=question,
+            round_num=round_by_question[question],
+            answer=answer,
+            search_keywords=[],
+            refs=refs,
+            analysis=analysis,
+            source_platform=platform,
+            task_id=job_id,
+            run_id=job.get("assigned_to", ""),
+            task_report=task_report_path,
+            crawler_engine=crawler_engine,
+        )
+        saved.append({
+            "question": question,
+            "round": round_by_question[question],
+            "brand_mentioned": analysis.get("brand_mentioned"),
+            "geo_score": analysis.get("geo_score"),
+            "ref_count": len(refs),
+        })
+
+    task_report.update({
+        "saved": len(saved),
+        "errors": len(failures),
+        "success": saved,
+        "failures": failures,
+    })
+    save_crawl_task_report(task_report)
+    return {
+        "ok": True,
+        "skipped": False,
+        "saved": len(saved),
+        "errors": len(failures),
+        "task_report": task_report_path,
+    }
+
+
+@app.route("/api/crawl_jobs", methods=["GET"])
+def list_crawl_jobs_api():
+    client_id = request.args.get("client_id", "").strip()
+    jobs = crawl_job_store.load_jobs(F_CRAWL_JOBS)
+    if client_id:
+        jobs = [job for job in jobs if job.get("client_id") == client_id]
+    return jsonify({"ok": True, "jobs": jobs})
+
+
+@app.route("/api/crawl_jobs", methods=["POST"])
+def create_crawl_job_api():
+    payload = request.json or {}
+    client_id = (payload.get("client_id") or "").strip()
+    if not client_id:
+        return jsonify({"error": "client_id required"}), 400
+    client = require_client_access(client_id)
+    if not client:
+        return jsonify({"error": "client_not_found"}), 404
+    platform = (payload.get("platform") or "").strip()
+    if platform not in CRAWL_PLATFORMS:
+        return jsonify({"error": f"不支持的平台: {platform}"}), 400
+
+    group_id = (payload.get("group_id") or "").strip()
+    questions = [str(item).strip() for item in payload.get("questions") or [] if str(item).strip()]
+    if not questions and group_id:
+        groups = load(F_GROUPS, {})
+        target_group = next((g for g in groups.get(client_id, []) if g.get("id") == group_id), None)
+        if target_group:
+            questions = [str(item).strip() for item in target_group.get("questions") or [] if str(item).strip()]
+    if not questions:
+        return jsonify({"error": "questions required", "message": "该任务没有可爬取问题"}), 400
+
+    try:
+        repeat_count = max(1, min(int(payload.get("repeat_count") or 1), 10))
+    except (TypeError, ValueError):
+        repeat_count = 1
+    job = crawl_job_store.create_job(
+        F_CRAWL_JOBS,
+        {
+            "client_id": client_id,
+            "brand": (payload.get("brand") or client.get("brand") or client.get("name") or "").strip(),
+            "group_id": group_id,
+            "platform": platform,
+            "questions": questions,
+            "repeat_count": repeat_count,
+        },
+        uid,
+        now_str,
+        created_by=(current_user() or {}).get("username", ""),
+    )
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/api/crawl_jobs/login", methods=["POST"])
+def create_login_job_api():
+    payload = request.json or {}
+    platform = (payload.get("platform") or "").strip()
+    if platform not in CRAWL_PLATFORMS:
+        return jsonify({"error": f"涓嶆敮鎸佺殑骞冲彴: {platform}"}), 400
+    job = crawl_job_store.create_job(
+        F_CRAWL_JOBS,
+        {
+            "job_type": "login",
+            "platform": platform,
+            "questions": [],
+            "repeat_count": 1,
+        },
+        uid,
+        now_str,
+        created_by=(current_user() or {}).get("username", ""),
+    )
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/api/crawl_jobs/next", methods=["GET"])
+def claim_next_crawl_job_api():
+    worker_id = request.args.get("worker_id", "").strip()
+    platform = request.args.get("platform", "").strip()
+    if platform and platform not in CRAWL_PLATFORMS:
+        return jsonify({"error": f"不支持的平台: {platform}"}), 400
+    job = crawl_job_store.claim_next_job(F_CRAWL_JOBS, worker_id, platform, now_str)
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/api/crawl_jobs/<job_id>/cancel", methods=["POST"])
+def cancel_crawl_job_api(job_id):
+    job = crawl_job_store.cancel_job(F_CRAWL_JOBS, job_id, now_str)
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    return jsonify({"ok": True, "job": job})
+
+
+@app.route("/api/crawl_jobs/<job_id>/result", methods=["POST"])
+def finish_crawl_job_api(job_id):
+    job = crawl_job_store.finish_job(F_CRAWL_JOBS, job_id, request.json or {}, now_str)
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    persisted = persist_local_crawl_job_results(job)
+    job = crawl_job_store.record_persist_result(F_CRAWL_JOBS, job_id, persisted, now_str) or job
+    return jsonify({"ok": True, "job": job, "persisted": persisted})
+
+
 @app.route("/api/platform/crawl", methods=["POST"])
 def platform_crawl():
-    if not crawl_run_lock.acquire(blocking=False):
+    payload = request.get_json(silent=True) or {}
+    source_platform = (payload.get("platform") or "doubao").strip() or "doubao"
+    platform_lock = get_crawl_platform_lock(source_platform)
+    if not platform_lock.acquire(blocking=False):
         return jsonify({
             "error": "crawl_busy",
-            "message": "已有爬取任务进行中，请稍后再试。当前版本为了避免多人同时爬取导致平台登录态冲突和数据写入冲突，一次只允许一个爬取任务运行。",
+            "message": f"{source_platform} 平台已有爬取任务进行中，请稍后再试。同一平台不允许并行爬取。",
+            "platform": source_platform,
         }), 409
     try:
         return platform_crawl_impl()
     finally:
-        crawl_run_lock.release()
+        platform_lock.release()
 
 
 def platform_crawl_impl():
@@ -2623,9 +3796,11 @@ def platform_crawl_impl():
                 "source_platform": source_platform,
                 "crawler_engine": task_report["crawler_engine"],
             }
-            records = load(F_RECORDS, [])
-            records.append(record)
-            save(F_RECORDS, records)
+            update_json(
+                F_RECORDS,
+                [],
+                lambda records: ((records if isinstance(records, list) else []) + [record], None),
+            )
 
             # 写入细化记录（每轮单独存，每轮都用共享analysis保证数据完整）
             brand_short_key = brand[:2] if len(brand) >= 2 else brand
@@ -2707,10 +3882,7 @@ def platform_crawl_impl():
         except:
             pass
 
-    try:
-        entity_normalize = auto_normalize_task_entities(client_id, today_str(), task_id)
-    except Exception as e:
-        entity_normalize = {"ok": False, "error": str(e), "changed": 0}
+    entity_normalize = {"ok": True, "status": "queued", "queued": True}
 
     # 推送完成事件
     crawl_sessions[session_id]["events"].append({"status": "finished"})
@@ -2732,6 +3904,13 @@ def platform_crawl_impl():
         "entity_normalize": entity_normalize,
     })
     task_path = save_crawl_task_report(task_report)
+    entity_normalize = queue_entity_normalize_task(
+        client_id,
+        today_str(),
+        task_id,
+        task_path,
+        settings_username(),
+    )
 
     return jsonify({
         "ok": True,

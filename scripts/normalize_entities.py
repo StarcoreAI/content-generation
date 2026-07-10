@@ -12,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.extract_entities import get_openai_client, read_json, select_records, write_json
+from services.storage import update_json
 
 
 def _clean_name(value):
@@ -800,17 +801,21 @@ def apply_competitor_report_results(raw_records_path, records, report):
         for item in report.get("results") or []
         if item.get("record_id")
     }
-    changed = 0
-    for record in records:
-        record_id = str(record.get("id") or "")
-        if record_id in by_id:
-            record["mentioned_entities"] = by_id[record_id]
-            changed += 1
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     backup_path = f"{raw_records_path}.bak_entities_{timestamp}"
-    shutil.copy2(raw_records_path, backup_path)
-    write_json(raw_records_path, records)
-    return {"changed": changed, "backup_path": backup_path}
+
+    def apply_to_latest(latest_records):
+        changed = 0
+        for record in latest_records:
+            record_id = str(record.get("id") or "")
+            if record_id in by_id:
+                record["mentioned_entities"] = by_id[record_id]
+                changed += 1
+        if raw_records_path.exists():
+            shutil.copy2(raw_records_path, backup_path)
+        return latest_records, {"changed": changed, "backup_path": backup_path}
+
+    return update_json(raw_records_path, records, apply_to_latest)
 
 
 def write_report(report_dir, client_id, report):

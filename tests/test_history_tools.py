@@ -1089,6 +1089,39 @@ class EntityNormalizeScriptTests(unittest.TestCase):
             self.assertEqual([item["name"] for item in saved[1]["mentioned_entities"]], ["C"])
             self.assertEqual(saved[2]["mentioned_entities"], [{"name": "old"}])
 
+    def test_apply_competitor_report_results_preserves_records_added_after_selection(self):
+        from scripts.normalize_entities import apply_competitor_report_results
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            raw_records_path = Path(tmpdir) / "raw_records.json"
+            selected_snapshot = [
+                {"id": "r1", "mentioned_entities": []},
+            ]
+            raw_records_path.write_text(json.dumps([
+                {"id": "r1", "mentioned_entities": []},
+                {"id": "r2", "mentioned_entities": [{"name": "new-platform"}]},
+            ], ensure_ascii=False), encoding="utf-8")
+            report = {
+                "results": [
+                    {
+                        "record_id": "r1",
+                        "competitors": [
+                            {"name": "Entity", "type": "门店", "sentiment": "neutral", "evidence": "Entity"},
+                        ],
+                    }
+                ],
+                "competitor_report": {
+                    "canonical_entities": [{"canonical_name": "Entity", "aliases": ["Entity"]}],
+                },
+            }
+
+            apply_competitor_report_results(raw_records_path, selected_snapshot, report)
+
+            saved = json.loads(raw_records_path.read_text(encoding="utf-8"))
+            self.assertEqual([record["id"] for record in saved], ["r1", "r2"])
+            self.assertEqual(saved[0]["mentioned_entities"][0]["name"], "Entity")
+            self.assertEqual(saved[1]["mentioned_entities"], [{"name": "new-platform"}])
+
     def test_main_extract_missing_apply_writes_records_and_report(self):
         from scripts import normalize_entities
 

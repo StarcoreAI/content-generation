@@ -45,3 +45,14 @@ def save_json(path, data):
                 except Exception:
                     pass
             return False
+
+
+def update_json(path, default, update_fn):
+    path = os.fspath(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    with _json_write_lock:
+        current = load_json(path, default)
+        updated, result = update_fn(current)
+        if save_json(path, updated) is False:
+            raise RuntimeError(f"failed to save json store: {path}")
+        return result
