@@ -8,6 +8,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services.article_fetcher import fetch_article_text
+from services.reference_intelligence import collect_reference_articles, merge_reference_fetch_result
 from services.storage import load_json, save_json
 
 
@@ -17,33 +18,6 @@ def default_data_dir():
 
 def _today():
     return datetime.now().strftime("%Y-%m-%d")
-
-
-def collect_reference_articles(records):
-    by_url = {}
-    order = []
-    for record in records or []:
-        question = str(record.get("question") or "")
-        for ref in record.get("refs") or []:
-            url = str(ref.get("url") or "").strip()
-            if not url.startswith(("http://", "https://")):
-                continue
-            if url not in by_url:
-                by_url[url] = {
-                    "url": url,
-                    "source_title": str(ref.get("title") or ""),
-                    "platform": str(ref.get("platform") or ""),
-                    "first_question": question,
-                    "citation_count": 0,
-                    "_index": len(order),
-                }
-                order.append(url)
-            by_url[url]["citation_count"] += 1
-    items = [by_url[url] for url in order]
-    items.sort(key=lambda item: (-item["citation_count"], item["_index"]))
-    for item in items:
-        item.pop("_index", None)
-    return items
 
 
 def run_fetch_reference_articles(
@@ -59,9 +33,7 @@ def run_fetch_reference_articles(
     data_dir = Path(data_dir or default_data_dir())
     daily_path = data_dir / "raw" / client_id / f"{date}.json"
     daily = load_json(daily_path, {})
-    refs = collect_reference_articles(daily.get("records") or [])
-    if limit and limit > 0:
-        refs = refs[:limit]
+    refs = collect_reference_articles(daily.get("records") or [], limit=limit if limit and limit > 0 else 0)
 
     articles = []
     for ref in refs:
@@ -71,18 +43,7 @@ def run_fetch_reference_articles(
             max_chars=max_chars,
             browser_fallback=True,
         )
-        content = fetched.get("content") or ""
-        articles.append({
-            **ref,
-            "ok": bool(fetched.get("ok")),
-            "title": fetched.get("title") or "",
-            "description": fetched.get("description") or "",
-            "content_len": len(content),
-            "content": content,
-            "fetch_method": fetched.get("fetch_method") or "",
-            "error": fetched.get("error") or "",
-            "static_error": fetched.get("static_error") or "",
-        })
+        articles.append(merge_reference_fetch_result(ref, fetched))
 
     output = {
         "client_id": client_id,
