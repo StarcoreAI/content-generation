@@ -225,6 +225,74 @@ Known risks:
 - `/api/platform/crawl` direct crawling is a separate, larger path and was not
   touched.
 
+### Raw Records And Daily Analysis
+
+Files read:
+- `app.py`
+- `services/records.py`
+- `services/record_insights.py`
+- `templates/index.html`
+- `tests/test_app_core.py`
+- `tests/test_history_tools.py`
+
+Current understanding:
+- Raw-record storage already has a service boundary in `services/records.py`.
+  It owns `load_client_records`, `save_raw_record`, single/batch deletes,
+  entity mention deletes, and daily clear.
+- `app.py` still owns duplicated route-level filtering for
+  `/api/raw_records`, `/api/raw_records/platform_stats`,
+  `/api/raw_records/deep_analyze`, `/api/daily/records`,
+  `/api/daily/ref_stats`, `/api/daily/insights`, and
+  `/api/daily/deep_analyze`.
+- `/api/daily/insights` already delegates aggregation to
+  `services.record_insights.build_record_insights`.
+- `/api/daily/ref_stats` is a good candidate for the next small extraction:
+  it is read-only, computes a JSON response from records, and has route tests
+  covering task filtering, source counts, article merging, AI platform groups,
+  and competitor body-hit annotations.
+- Frontend code directly consumes the existing response keys from
+  `/api/daily/ref_stats`: `total_records`, `total_refs`,
+  `platform_weights`, `top_articles`, and `top_articles_by_ai`.
+
+Safety boundaries for this pass:
+- Do not change `data/raw_records.json`, `data/raw/<client>/<date>.json`, or
+  any stored record field names.
+- Do not change save/delete/clear behavior while cloud has historical data.
+- Do not touch local operator worker scripts unless a real worker bug appears.
+- Keep route URLs and response field names unchanged.
+
+Suggested next cut:
+- Extract only the pure `/api/daily/ref_stats` aggregation into a small service
+  function.
+- Keep Flask request parsing, record loading, body-hit report loading, and
+  competitor annotation in `app.py`.
+- Leave `/api/daily/deep_analyze` for later because it is prompt-heavy product
+  behavior and less safe to move casually.
+
+Implementation result:
+- Extended `services.records.load_client_records()` with optional `question`
+  and `mentioned_only` filters.
+- Replaced duplicated filtering in `/api/raw_records`,
+  `/api/raw_records/platform_stats`, and `/api/raw_records/deep_analyze` with
+  the shared record loader.
+- Added `services/daily_stats.py` for pure `/api/daily/ref_stats`
+  aggregation.
+- Kept body-hit report loading and competitor-match annotation in `app.py`.
+- Did not change raw-record writes, deletes, clear behavior, stored JSON field
+  names, route URLs, or frontend response keys.
+
+Verification:
+- `.\.venv\Scripts\python.exe -m py_compile app.py services\<new daily stats module>.py`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_app_core.FlaskApiTests`
+- `.\run_tests.bat`
+
+Verified after implementation:
+- `.\.venv\Scripts\python.exe -m unittest tests.test_history_tools.RecordStoreTests tests.test_history_tools.DailyStatsTests`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_app_core.FlaskApiTests`
+- `.\.venv\Scripts\python.exe -m py_compile app.py services\records.py services\daily_stats.py`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_history_tools.RecordStoreTests tests.test_history_tools.DailyStatsTests tests.test_app_core.FlaskApiTests`
+- `.\run_tests.bat` - 246 tests passed.
+
 ## Open Questions
 
 - Before implementing: should the first cut keep tests patching

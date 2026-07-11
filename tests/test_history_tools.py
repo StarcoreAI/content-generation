@@ -48,6 +48,92 @@ class RefArticleTests(unittest.TestCase):
         )
 
 
+class RecordStoreTests(unittest.TestCase):
+    def test_load_client_records_applies_optional_record_filters(self):
+        from services.records import load_client_records
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "raw_records.json"
+            path.write_text(
+                json.dumps(
+                    [
+                        {
+                            "id": "r1",
+                            "client_id": "client-1",
+                            "today": "2026-07-10",
+                            "question": "target question",
+                            "brand_mentioned": True,
+                        },
+                        {
+                            "id": "r2",
+                            "client_id": "client-1",
+                            "today": "2026-07-10",
+                            "question": "target question",
+                            "brand_mentioned": False,
+                        },
+                        {
+                            "id": "r3",
+                            "client_id": "client-1",
+                            "today": "2026-07-11",
+                            "question": "other question",
+                            "brand_mentioned": True,
+                        },
+                    ],
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            records = load_client_records(
+                path,
+                "client-1",
+                date="2026-07-10",
+                question="target",
+                mentioned_only="1",
+            )
+
+        self.assertEqual([r["id"] for r in records], ["r1"])
+
+
+class DailyStatsTests(unittest.TestCase):
+    def test_build_daily_ref_stats_groups_articles_by_ai_platform(self):
+        from services.daily_stats import build_daily_ref_stats
+
+        records = [
+            {
+                "source_platform": "qwen",
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 2},
+                ],
+            },
+            {
+                "source_platform": "deepseek",
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 1},
+                    {"title": "Article B", "url": "https://b.example", "platform": "Zhihu", "position": 3},
+                ],
+            },
+        ]
+
+        stats = build_daily_ref_stats(
+            records,
+            platform_names={"qwen": "Qwen", "deepseek": "DeepSeek"},
+            platform_order=["deepseek", "qwen"],
+        )
+
+        self.assertEqual(stats["total_records"], 2)
+        self.assertEqual(stats["total_refs"], 3)
+        self.assertEqual(stats["platform_weights"][0]["platform"], "Sohu")
+        self.assertEqual(stats["top_articles"][0]["title"], "Article A")
+        self.assertEqual(stats["top_articles"][0]["count"], 2)
+        self.assertEqual(stats["top_articles"][0]["avg_position"], 1.5)
+        self.assertEqual(stats["top_articles"][0]["ai_platforms"], ["deepseek", "qwen"])
+        self.assertEqual(
+            [group["source_platform"] for group in stats["top_articles_by_ai"]],
+            ["deepseek", "qwen"],
+        )
+
+
 class BackfillTaskIdTests(unittest.TestCase):
     def test_plan_backfill_updates_matches_records_to_task_window(self):
         from scripts.backfill_task_ids import plan_backfill_updates

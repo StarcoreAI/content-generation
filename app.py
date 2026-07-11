@@ -292,14 +292,22 @@ def annotate_top_articles_with_competitor_matches(top_articles, records, body_hi
     return top_articles
 
 
-def load_client_records(client_id, date=None, group_id=None, platform=None, task_id=None):
+def load_client_records(client_id, date=None, group_id=None, platform=None,
+                        task_id=None, question=None, mentioned_only=None):
     """
     严格按 client_id 过滤爬取记录的唯一入口。
     client_id 为空时强制返回空列表，绝不读取全量数据，防止跨客户串数据。
     platform: 可选，按来源平台过滤（doubao/deepseek/yuanbao/qwen），None=全部
     """
     return record_store.load_client_records(
-        F_RAW_RECORDS, client_id, date, group_id, normalize_platform_filter(platform), task_id
+        F_RAW_RECORDS,
+        client_id,
+        date=date,
+        group_id=group_id,
+        platform=normalize_platform_filter(platform),
+        task_id=task_id,
+        question=question,
+        mentioned_only=mentioned_only,
     )
 
 
@@ -916,15 +924,15 @@ def get_raw_records():
     mentioned_only = request.args.get("mentioned_only", "")
     platform = request.args.get("platform", "")  # 按爬取平台过滤
     task_id = request.args.get("task_id", "")
-    records = load_client_records(client_id, group_id=group_id,
-                                  platform=platform if platform else None,
-                                  task_id=task_id if task_id else None)
-    if date:
-        records = [r for r in records if r.get("today") == date]
-    if question:
-        records = [r for r in records if question in r.get("question", "")]
-    if mentioned_only == "1":
-        records = [r for r in records if r.get("brand_mentioned")]
+    records = load_client_records(
+        client_id,
+        date=date,
+        group_id=group_id,
+        platform=platform,
+        task_id=task_id,
+        question=question,
+        mentioned_only=mentioned_only,
+    )
     return jsonify(sorted(records, key=lambda x: x["crawl_time"], reverse=True))
 
 @app.route("/api/raw_records/platform_stats", methods=["GET"])
@@ -936,19 +944,18 @@ def platform_stats():
     mentioned_only = request.args.get("mentioned_only", "")
     source_platform = request.args.get("platform", "")  # 按爬取平台过滤
     task_id = request.args.get("task_id", "")
-    records = load_client_records(client_id, group_id=group_id,
-                                  platform=source_platform if source_platform else None,
-                                  task_id=task_id if task_id else None)
+    date = request.args.get("date", "")
+    records = load_client_records(
+        client_id,
+        date=None if date == "all" else date,
+        group_id=group_id,
+        platform=source_platform,
+        task_id=task_id,
+        question=question_filter,
+        mentioned_only=mentioned_only,
+    )
 
     from collections import defaultdict
-    date = request.args.get("date", "")  # 空或all表示全部
-    if date and date != "all":
-        records = [r for r in records if r.get("today") == date]
-    # 按具体问题过滤
-    if question_filter:
-        records = [r for r in records if question_filter in r.get("question", "")]
-    if mentioned_only == "1":
-        records = [r for r in records if r.get("brand_mentioned")]
 
     platform_cnt = defaultdict(int)
     platform_articles = defaultdict(list)
@@ -1016,15 +1023,15 @@ def deep_analyze():
     source_platform = d.get("platform", "")  # 按爬取平台过滤
     task_id = d.get("task_id", "")
 
-    records = load_client_records(client_id, group_id=group_id,
-                                  platform=source_platform if source_platform else None,
-                                  task_id=task_id if task_id else None)
-    if date:
-        records = [r for r in records if r.get("today") == date]
-    if question:
-        records = [r for r in records if question in r.get("question", "")]
-    if mentioned_only == "1":
-        records = [r for r in records if r.get("brand_mentioned")]
+    records = load_client_records(
+        client_id,
+        date=date,
+        group_id=group_id,
+        platform=source_platform,
+        task_id=task_id,
+        question=question,
+        mentioned_only=mentioned_only,
+    )
     if not records:
         return jsonify({"error": "无匹配记录"}), 400
 
@@ -2087,97 +2094,18 @@ def daily_ref_stats():
     group_id = request.args.get("group_id", "")
     task_id = request.args.get("task_id", "")
     try:
-        records = load_client_records(client_id, date=date,
-                                      platform=source_platform if source_platform else None,
-                                      group_id=group_id if group_id else None,
-                                      task_id=task_id if task_id else None)
-
-        from collections import defaultdict
-        from services.ref_articles import canonical_article_key
-        from services.ref_platforms import normalize_ref_platform
-        platform_cnt = defaultdict(int)
-        article_cnt = defaultdict(int)
-        article_info = {}
-        ai_record_cnt = defaultdict(int)
-        ai_article_cnt = defaultdict(lambda: defaultdict(int))
-        ai_article_info = defaultdict(dict)
-        total_refs = 0
-
-        for rec in records:
-            ai_platform = rec.get("source_platform", "doubao") or "doubao"
-            ai_record_cnt[ai_platform] += 1
-            for ref in rec.get("refs", []):
-                url = ref.get("url", "")
-                p = normalize_ref_platform(ref.get("platform", "未知"), url)
-                title = ref.get("title", "")
-                pos = ref.get("position", 0)
-                platform_cnt[p] += 1
-                total_refs += 1
-                key = canonical_article_key(title, url)
-                if key:
-                    article_cnt[key] += 1
-                    if key not in article_info:
-                        article_info[key] = {
-                            "title": title,
-                            "url": url,
-                            "platform": p,
-                            "positions": [],
-                            "ai_platforms": set(),
-                        }
-                    article_info[key]["positions"].append(pos)
-                    article_info[key]["ai_platforms"].add(ai_platform)
-                    ai_article_cnt[ai_platform][key] += 1
-                    if key not in ai_article_info[ai_platform]:
-                        ai_article_info[ai_platform][key] = {
-                            "title": title,
-                            "url": url,
-                            "platform": p,
-                            "positions": [],
-                        }
-                    ai_article_info[ai_platform][key]["positions"].append(pos)
-
-        total_records = len(records)
-        platform_weights = sorted([
-            {
-                "platform": p, "count": c,
-                "pct": round(c / total_refs * 100, 1) if total_refs else 0,
-            }
-            for p, c in platform_cnt.items()
-        ], key=lambda x: x["count"], reverse=True)
-
-        top_articles = sorted([
-            {
-                "title": v["title"], "url": v["url"], "platform": v["platform"],
-                "count": article_cnt[k],
-                "avg_position": round(sum(v["positions"]) / len(v["positions"]), 1) if v["positions"] else 0,
-                "ai_platforms": sorted(v["ai_platforms"]),
-            }
-            for k, v in article_info.items()
-        ], key=lambda x: x["count"], reverse=True)[:20]
-
-        top_articles_by_ai = []
-        for ai_platform, counts in ai_article_cnt.items():
-            articles = sorted([
-                {
-                    "title": v["title"],
-                    "url": v["url"],
-                    "platform": v["platform"],
-                    "count": counts[k],
-                    "avg_position": round(sum(v["positions"]) / len(v["positions"]), 1) if v["positions"] else 0,
-                    "ai_platforms": [ai_platform],
-                }
-                for k, v in ai_article_info[ai_platform].items()
-            ], key=lambda x: x["count"], reverse=True)[:12]
-            top_articles_by_ai.append({
-                "source_platform": ai_platform,
-                "platform_name": CRAWL_PLATFORMS.get(ai_platform, {}).get("name", ai_platform),
-                "total_records": ai_record_cnt[ai_platform],
-                "top_articles": articles,
-            })
-        top_articles_by_ai.sort(
-            key=lambda x: CLIENT_CONTRACT_PLATFORM_ORDER.index(x["source_platform"])
-            if x["source_platform"] in CLIENT_CONTRACT_PLATFORM_ORDER
-            else len(CLIENT_CONTRACT_PLATFORM_ORDER)
+        records = load_client_records(
+            client_id,
+            date=date,
+            platform=source_platform,
+            group_id=group_id,
+            task_id=task_id,
+        )
+        from services.daily_stats import build_daily_ref_stats
+        stats = build_daily_ref_stats(
+            records,
+            platform_names={key: cfg["name"] for key, cfg in CRAWL_PLATFORMS.items()},
+            platform_order=CLIENT_CONTRACT_PLATFORM_ORDER,
         )
         body_hit_report = load_competitor_article_body_hit_report(
             client_id,
@@ -2187,11 +2115,11 @@ def daily_ref_stats():
             platform=source_platform,
         )
         top_articles = annotate_top_articles_with_competitor_matches(
-            top_articles,
+            stats["top_articles"],
             records,
             body_hit_report=body_hit_report,
         )
-        for group in top_articles_by_ai:
+        for group in stats["top_articles_by_ai"]:
             group["top_articles"] = annotate_top_articles_with_competitor_matches(
                 group["top_articles"],
                 records,
@@ -2199,12 +2127,12 @@ def daily_ref_stats():
             )
 
         return jsonify({
-            "total_records": total_records,
-            "total_refs": total_refs,
+            "total_records": stats["total_records"],
+            "total_refs": stats["total_refs"],
             "date": date,
-            "platform_weights": platform_weights,
+            "platform_weights": stats["platform_weights"],
             "top_articles": top_articles,
-            "top_articles_by_ai": top_articles_by_ai,
+            "top_articles_by_ai": stats["top_articles_by_ai"],
         })
     except Exception as e:
         print(f"[daily_ref_stats 错误] {e}")
@@ -2890,7 +2818,7 @@ def create_login_job_api():
     payload = request.json or {}
     platform = (payload.get("platform") or "").strip()
     if platform not in CRAWL_PLATFORMS:
-        return jsonify({"error": f"涓嶆敮鎸佺殑骞冲彴: {platform}"}), 400
+        return jsonify({"error": f"不支持的平台: {platform}"}), 400
     job = crawl_job_store.create_job(
         F_CRAWL_JOBS,
         {

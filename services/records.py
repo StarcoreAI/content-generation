@@ -55,7 +55,8 @@ def save_daily_raw(settings_path, default_data_dir, client_id, brand, question, 
 
 
 def load_client_records(raw_records_path, client_id, date=None, group_id=None,
-                        platform=None, task_id=None):
+                        platform=None, task_id=None, question=None,
+                        mentioned_only=None):
     if platform == "all":
         platform = None
     if task_id == "all":
@@ -72,6 +73,10 @@ def load_client_records(raw_records_path, client_id, date=None, group_id=None,
         records = [r for r in records if r.get("source_platform", "doubao") == platform]
     if task_id:
         records = [r for r in records if r.get("task_id") == task_id]
+    if question:
+        records = [r for r in records if question in r.get("question", "")]
+    if mentioned_only == "1":
+        records = [r for r in records if r.get("brand_mentioned")]
     return records
 
 
