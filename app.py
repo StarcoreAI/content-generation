@@ -2820,107 +2820,16 @@ def analyze_brand_intel_with_retry(brand, question, answer, refs, settings, max_
 
 
 def persist_local_crawl_job_results(job):
-    if not job or job.get("status") != "completed":
-        return {"ok": True, "skipped": True, "reason": "job_not_completed", "saved": 0}
-    if job.get("job_type", "crawl") != "crawl":
-        return {"ok": True, "skipped": True, "reason": "login_job", "saved": 0, "errors": 0}
-
-    job_id = job.get("id", "")
-    existing = load(F_RAW_RECORDS, [])
-    if any(item.get("task_id") == job_id for item in existing if isinstance(item, dict)):
-        return {"ok": True, "skipped": True, "reason": "already_persisted", "saved": 0}
-
-    payload = job.get("result_payload") or {}
-    results = payload.get("results") or []
-    if not results:
-        return {"ok": True, "skipped": True, "reason": "no_results", "saved": 0}
-
-    client_id = job.get("client_id", "")
-    group_id = job.get("group_id", "")
-    brand = job.get("brand", "")
-    platform = job.get("platform", "")
-    crawler_engine = payload.get("crawler_engine") or "local_worker_node"
-    task_report = {
-        "task_id": job_id,
-        "status": "completed",
-        "client_id": client_id,
-        "brand": brand,
-        "group_id": group_id,
-        "source_platform": platform,
-        "crawler_engine": crawler_engine,
-        "started_at": job.get("claimed_at") or job.get("created_at") or "",
-        "finished_at": job.get("finished_at") or now_str(),
-        "worker_id": job.get("assigned_to", ""),
-        "questions": job.get("questions") or [],
-        "repeat_count": job.get("repeat_count") or 1,
-        "analysis_mode": "basic_no_api_key",
-    }
-    task_report_path = save_crawl_task_report(task_report)
-    round_by_question = {}
-    saved = []
-    failures = []
-
-    for raw in results:
-        if not isinstance(raw, dict):
-            failures.append({"error": "invalid_result"})
-            continue
-        question = str(raw.get("question") or "").strip()
-        answer = str(raw.get("answer") or "")
-        refs = raw.get("refs") if isinstance(raw.get("refs"), list) else []
-        if raw.get("error") or raw.get("ok") is False or not question or not answer:
-            failures.append(compact_crawl_failure(raw, {"question": question}))
-            continue
-
-        round_by_question[question] = round_by_question.get(question, 0) + 1
-        analysis = basic_brand_analysis_without_api(
-            brand,
-            question,
-            answer,
-            refs,
-            analysis_status="local_worker_basic",
-            analysis_mode="local_worker_basic",
-            summary="本地 worker 已回传爬取结果，云端已保存原始回答和引用源，深度分析可后续异步补充。",
-            suggestion="优先检查品牌是否被提及、引用源是否有效；竞品实体可等待异步分析补全。",
-        )
-        analysis = calibrate_analysis_brand_mention(brand, question, answer, refs, analysis)
-        save_raw_record(
-            client_id=client_id,
-            group_id=group_id,
-            brand=brand,
-            question=question,
-            round_num=round_by_question[question],
-            answer=answer,
-            search_keywords=[],
-            refs=refs,
-            analysis=analysis,
-            source_platform=platform,
-            task_id=job_id,
-            run_id=job.get("assigned_to", ""),
-            task_report=task_report_path,
-            crawler_engine=crawler_engine,
-        )
-        saved.append({
-            "question": question,
-            "round": round_by_question[question],
-            "brand_mentioned": analysis.get("brand_mentioned"),
-            "geo_score": analysis.get("geo_score"),
-            "ref_count": len(refs),
-        })
-
-    task_report.update({
-        "saved": len(saved),
-        "errors": len(failures),
-        "success": saved,
-        "failures": failures,
-    })
-    save_crawl_task_report(task_report)
-    return {
-        "ok": True,
-        "skipped": False,
-        "saved": len(saved),
-        "errors": len(failures),
-        "task_report": task_report_path,
-    }
+    return crawl_job_store.persist_local_crawl_job_results(
+        job,
+        load_records_fn=lambda: load(F_RAW_RECORDS, []),
+        save_crawl_task_report_fn=save_crawl_task_report,
+        compact_crawl_failure_fn=compact_crawl_failure,
+        basic_brand_analysis_fn=basic_brand_analysis_without_api,
+        calibrate_analysis_fn=calibrate_analysis_brand_mention,
+        save_raw_record_fn=save_raw_record,
+        now_fn=now_str,
+    )
 
 
 @app.route("/api/crawl_jobs", methods=["GET"])

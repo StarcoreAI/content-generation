@@ -181,6 +181,50 @@ Known risks:
   removing them would be a separate behavior-risk pass because tests and scripts
   currently import from `app.py`.
 
+### Cloud Crawl Jobs
+
+Files read:
+- `app.py`
+- `services/crawl_jobs.py`
+- `services/crawl_tasks.py`
+- `scripts/local_crawl_worker.py`
+- `tests/test_app_core.py` crawl job tests
+- `tests/test_local_crawl_worker.py`
+
+Current understanding:
+- Local worker contract is limited to:
+  `GET /api/crawl_jobs`,
+  `GET /api/crawl_jobs/next?worker_id=...&platform=...`, and
+  `POST /api/crawl_jobs/<job_id>/result`.
+- Worker consumes job fields such as `id`, `job_type`, `platform`,
+  `questions`, and `repeat_count`.
+- Worker returns `status`, `summary`, `results`, `logs`, `error`, and
+  `crawler_engine`.
+- `services/crawl_jobs.py` already owns JSON job state transitions.
+- `app.py` still owned `persist_local_crawl_job_results()`, which turns a
+  completed cloud job into raw records and a crawl task report.
+
+Implementation result:
+- Moved cloud job result persistence into
+  `services.crawl_jobs.persist_local_crawl_job_results()`.
+- Kept `app.persist_local_crawl_job_results()` as a wrapper that injects cloud
+  dependencies: raw-record loading, task-report saving, failure compaction,
+  basic analysis, brand mention calibration, raw-record saving, and current
+  time.
+- Did not change local worker scripts, worker package behavior, route URLs,
+  request fields, response fields, job statuses, or raw-record JSON shape.
+
+Verified after implementation:
+- `.\.venv\Scripts\python.exe -m py_compile app.py services\crawl_jobs.py`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_app_core.FlaskApiTests tests.test_local_crawl_worker`
+- `.\run_tests.bat` - 244 tests passed.
+
+Known risks:
+- The service function takes several injected dependencies. This is intentional
+  to avoid importing `app.py` from `services/crawl_jobs.py`.
+- `/api/platform/crawl` direct crawling is a separate, larger path and was not
+  touched.
+
 ## Open Questions
 
 - Before implementing: should the first cut keep tests patching
