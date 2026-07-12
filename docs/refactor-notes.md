@@ -293,6 +293,28 @@ Verified after implementation:
 - `.\.venv\Scripts\python.exe -m unittest tests.test_history_tools.RecordStoreTests tests.test_history_tools.DailyStatsTests tests.test_app_core.FlaskApiTests`
 - `.\run_tests.bat` - 246 tests passed.
 
+Follow-up implementation result:
+- Created `services/content_prompts.py` and moved content-generation prompt
+  helpers/constants out of `app.py`.
+- Created `services/deep_analysis.py` and moved raw/daily deep-analysis data
+  preparation plus content-instruction extraction out of route handlers.
+- Created `services/record_stats.py` for pure raw-record platform stats and
+  precise-optimization stats.
+- Replaced inline loops in `/api/raw_records/platform_stats`,
+  `/api/raw_records/deep_analyze`, `/api/daily/deep_analyze`,
+  `/api/precise/diagnosis`, and `/api/precise/question_refs` with service
+  calls.
+- Kept route URLs, request parameters, response keys, prompt text, AI calls,
+  record persistence, delete/clear behavior, and stored JSON shapes unchanged.
+- Did not touch local worker scripts, direct `/api/platform/crawl`, Node
+  crawler bridge, login state, startup scripts, or deploy scripts.
+
+Verification for follow-up:
+- `.\.venv\Scripts\python.exe -m py_compile app.py services\record_stats.py services\content_prompts.py services\deep_analysis.py`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_history_tools.RecordStatsTests tests.test_history_tools.ContentPromptTests tests.test_history_tools.DeepAnalysisTests`
+- `.\.venv\Scripts\python.exe -m unittest tests.test_app_core.FlaskApiTests`
+- `.\run_tests.bat` - 250 tests passed.
+
 ## Open Questions
 
 - Before implementing: should the first cut keep tests patching

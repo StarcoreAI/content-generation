@@ -134,6 +134,168 @@ class DailyStatsTests(unittest.TestCase):
         )
 
 
+class ContentPromptTests(unittest.TestCase):
+    def test_content_prompt_helpers_normalize_samples(self):
+        from services.content_prompts import (
+            normalize_sample_links,
+            normalize_selected_sample_articles,
+        )
+
+        self.assertEqual(
+            normalize_sample_links("https://a.example\nhttps://a.example, https://b.example"),
+            ["https://a.example", "https://b.example"],
+        )
+        self.assertEqual(
+            normalize_selected_sample_articles([
+                {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "count": 2},
+                {"title": "Article A duplicate", "url": "https://a.example", "platform": "Sohu", "count": 3},
+            ]),
+            [{"title": "Article A", "url": "https://a.example", "platform": "Sohu", "count": 2}],
+        )
+
+
+class DeepAnalysisTests(unittest.TestCase):
+    def test_build_raw_and_daily_deep_analysis_contexts(self):
+        from services.deep_analysis import (
+            build_daily_deep_analysis_context,
+            build_raw_deep_analysis_context,
+            extract_content_instruction,
+        )
+
+        records = [
+            {
+                "brand_mentioned": True,
+                "geo_score": 40,
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 1},
+                    {"title": "Article B", "url": "https://b.example", "platform": "Zhihu", "position": 2},
+                ],
+            },
+            {
+                "brand_mentioned": False,
+                "geo_score": 20,
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 3},
+                ],
+            },
+        ]
+
+        raw_context = build_raw_deep_analysis_context(records)
+        self.assertEqual(raw_context["platform_weights"][0], {"platform": "Sohu", "count": 2, "pct": 66.7})
+        self.assertEqual(len(raw_context["mentioned"]), 1)
+        self.assertEqual(raw_context["avg_score"], 30.0)
+        self.assertEqual(raw_context["sample_refs"][0], "【Sohu】Article A")
+
+        daily_context = build_daily_deep_analysis_context(records)
+        self.assertEqual(daily_context["total_refs"], 3)
+        self.assertEqual(daily_context["top8_platforms"][0]["platform"], "Sohu")
+        self.assertEqual(daily_context["top8_platforms"][0]["weight_pct"], 66.7)
+        self.assertEqual(daily_context["top8_platforms"][0]["mention_rate"], 50.0)
+        self.assertEqual(daily_context["top8_platforms"][0]["top_articles"][0]["platform"], "Sohu")
+        self.assertEqual(daily_context["emerging_str"], "Sohu")
+        self.assertIn("【Sohu】权重66.7%", daily_context["platform_summary"])
+
+        self.assertEqual(
+            extract_content_instruction("x CONTENT_INSTRUCTION_START\nhello\nCONTENT_INSTRUCTION_END y"),
+            "hello",
+        )
+
+
+class RecordStatsTests(unittest.TestCase):
+    def test_build_raw_platform_stats_preserves_route_shape(self):
+        from services.record_stats import build_raw_platform_stats
+
+        records = [
+            {
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 1},
+                    {"title": "Article B", "url": "https://b.example", "platform": "Zhihu", "position": 3},
+                ],
+            },
+            {
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 5},
+                ],
+            },
+        ]
+
+        stats = build_raw_platform_stats(records)
+
+        self.assertEqual(stats["total_records"], 2)
+        self.assertEqual(stats["total_refs"], 3)
+        self.assertEqual(stats["platform_weights"][0]["platform"], "Sohu")
+        self.assertEqual(stats["platform_weights"][0]["pct"], 66.7)
+        self.assertEqual(stats["platform_weights"][0]["avg_position"], 3.0)
+        self.assertEqual(stats["platform_weights"][0]["sample_articles"], [
+            {"title": "Article A", "url": "https://a.example"},
+        ])
+        self.assertEqual(stats["top_articles"][0]["title"], "Article A")
+        self.assertEqual(stats["top_articles"][0]["count"], 2)
+
+    def test_build_precise_stats_preserves_precise_route_shapes(self):
+        from services.record_stats import (
+            build_precise_diagnosis,
+            build_precise_question_ref_stats,
+            filter_records_by_question,
+        )
+
+        records = [
+            {
+                "question": "预算怎么选",
+                "brand_mentioned": True,
+                "geo_score": 80,
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu"},
+                    {"title": "Article B", "url": "https://b.example", "platform": "Sohu"},
+                ],
+            },
+            {
+                "question": "预算怎么选",
+                "brand_mentioned": False,
+                "geo_score": 20,
+                "refs": [
+                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu"},
+                    {"title": "Article C", "url": "https://c.example", "platform": "Zhihu"},
+                ],
+            },
+            {
+                "question": "其他问题",
+                "brand_mentioned": False,
+                "geo_score": 0,
+                "refs": [],
+            },
+            {
+                "question": "其他问题",
+                "brand_mentioned": False,
+                "geo_score": 0,
+                "refs": [],
+            },
+        ]
+
+        diagnosis = build_precise_diagnosis(records)
+        self.assertEqual(diagnosis[0]["question"], "其他问题")
+        self.assertEqual(diagnosis[1]["question"], "预算怎么选")
+        self.assertEqual(diagnosis[1]["total"], 2)
+        self.assertEqual(diagnosis[1]["mention_rate"], 50.0)
+        self.assertEqual(diagnosis[1]["avg_geo"], 50.0)
+        self.assertEqual(diagnosis[1]["avg_refs"], 2.0)
+
+        matched = filter_records_by_question(records, "预算")
+        stats = build_precise_question_ref_stats(matched)
+
+        self.assertEqual(len(matched), 2)
+        self.assertEqual(stats["top_articles"][0], {
+            "title": "Article A",
+            "url": "https://a.example",
+            "platform": "Sohu",
+            "count": 2,
+        })
+        self.assertEqual(stats["platform_dist"], [
+            {"platform": "Sohu", "count": 2, "pct": 66.7},
+            {"platform": "Zhihu", "count": 1, "pct": 33.3},
+        ])
+
+
 class BackfillTaskIdTests(unittest.TestCase):
     def test_plan_backfill_updates_matches_records_to_task_window(self):
         from scripts.backfill_task_ids import plan_backfill_updates
