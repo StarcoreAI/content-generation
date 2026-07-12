@@ -232,69 +232,6 @@ class RecordStatsTests(unittest.TestCase):
         self.assertEqual(stats["top_articles"][0]["title"], "Article A")
         self.assertEqual(stats["top_articles"][0]["count"], 2)
 
-    def test_build_precise_stats_preserves_precise_route_shapes(self):
-        from services.record_stats import (
-            build_precise_diagnosis,
-            build_precise_question_ref_stats,
-            filter_records_by_question,
-        )
-
-        records = [
-            {
-                "question": "预算怎么选",
-                "brand_mentioned": True,
-                "geo_score": 80,
-                "refs": [
-                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu"},
-                    {"title": "Article B", "url": "https://b.example", "platform": "Sohu"},
-                ],
-            },
-            {
-                "question": "预算怎么选",
-                "brand_mentioned": False,
-                "geo_score": 20,
-                "refs": [
-                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu"},
-                    {"title": "Article C", "url": "https://c.example", "platform": "Zhihu"},
-                ],
-            },
-            {
-                "question": "其他问题",
-                "brand_mentioned": False,
-                "geo_score": 0,
-                "refs": [],
-            },
-            {
-                "question": "其他问题",
-                "brand_mentioned": False,
-                "geo_score": 0,
-                "refs": [],
-            },
-        ]
-
-        diagnosis = build_precise_diagnosis(records)
-        self.assertEqual(diagnosis[0]["question"], "其他问题")
-        self.assertEqual(diagnosis[1]["question"], "预算怎么选")
-        self.assertEqual(diagnosis[1]["total"], 2)
-        self.assertEqual(diagnosis[1]["mention_rate"], 50.0)
-        self.assertEqual(diagnosis[1]["avg_geo"], 50.0)
-        self.assertEqual(diagnosis[1]["avg_refs"], 2.0)
-
-        matched = filter_records_by_question(records, "预算")
-        stats = build_precise_question_ref_stats(matched)
-
-        self.assertEqual(len(matched), 2)
-        self.assertEqual(stats["top_articles"][0], {
-            "title": "Article A",
-            "url": "https://a.example",
-            "platform": "Sohu",
-            "count": 2,
-        })
-        self.assertEqual(stats["platform_dist"], [
-            {"platform": "Sohu", "count": 2, "pct": 66.7},
-            {"platform": "Zhihu", "count": 1, "pct": 33.3},
-        ])
-
 
 class BackfillTaskIdTests(unittest.TestCase):
     def test_plan_backfill_updates_matches_records_to_task_window(self):

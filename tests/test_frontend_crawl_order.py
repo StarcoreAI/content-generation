@@ -54,21 +54,14 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("kimi:'Kimi'", html)
         self.assertIn("function sortCrawlPlatforms(platforms)", html)
 
-        logged_in_body = re.search(
-            r"async function getLoggedInCrawlPlatforms\(\) \{(?P<body>.*?)\n\}",
+        job_choice_body = re.search(
+            r"function getGroupCrawlPlatformChoicesForJobs\(\) \{(?P<body>.*?)\n\}",
             html,
             re.S,
         )
-        self.assertIsNotNone(logged_in_body)
-        self.assertIn("return sortCrawlPlatforms(", logged_in_body.group("body"))
-
-        target_body = re.search(
-            r"async function getTargetCrawlPlatforms\(scope='current'\) \{(?P<body>.*?)\n\}",
-            html,
-            re.S,
-        )
-        self.assertIsNotNone(target_body)
-        self.assertIn("getSelectedGroupCrawlPlatformIds()", target_body.group("body"))
+        self.assertIsNotNone(job_choice_body)
+        self.assertIn("return sortCrawlPlatforms(", job_choice_body.group("body"))
+        self.assertIn("getSelectedGroupCrawlPlatformIds()", job_choice_body.group("body"))
 
     def test_group_crawl_repeat_selector_includes_two_rounds(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
@@ -77,15 +70,19 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="grpRepeat"', html)
         self.assertIn('<option value="2">2次</option>', html)
 
-    def test_platform_crawl_uses_limited_parallel_pool(self):
+    def test_direct_platform_crawl_frontend_is_removed(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
             html = f.read()
 
-        self.assertIn("const CRAWL_PLATFORM_CONCURRENCY = 2;", html)
-        self.assertIn("async function runCrawlPlatformPool(", html)
-        self.assertIn("await Promise.all(runners);", html)
-        self.assertIn("await runCrawlPlatformPool(targetPlatforms", html)
-        self.assertIn("await runCrawlPlatformPool(platforms", html)
+        for retired in [
+            "CRAWL_PLATFORM_CONCURRENCY",
+            "async function runCrawlPlatformPool(",
+            "async function runGroupCrawlForPlatform(",
+            "function getLoggedInCrawlPlatforms()",
+            "function getTargetCrawlPlatforms(",
+            "fetch('/api/platform/crawl'",
+        ]:
+            self.assertNotIn(retired, html)
 
     def test_group_crawl_can_enqueue_local_worker_jobs(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:
@@ -197,6 +194,24 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("篇文章合并", html)
         self.assertIn('id="referenceAnalyzeProgress"', html)
         self.assertIn("cancelReferenceAnalysis", html)
+
+    def test_retired_agent_precise_and_platform_compare_frontend_is_removed(self):
+        with open(INDEX_HTML, "r", encoding="utf-8") as f:
+            html = f.read()
+
+        for retired in [
+            "agentBall",
+            "agentPanel",
+            "agentState",
+            "/api/agent/",
+            "/api/precise/",
+            "/api/platform/compare",
+            "loadPlatformCompare",
+            "compareChart",
+            "crawlByGroup",
+            "autoCheckPlatforms",
+        ]:
+            self.assertNotIn(retired, html)
 
     def test_daily_top_articles_show_ai_platform_coverage(self):
         with open(INDEX_HTML, "r", encoding="utf-8") as f:

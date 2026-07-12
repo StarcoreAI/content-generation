@@ -298,12 +298,12 @@ Follow-up implementation result:
   helpers/constants out of `app.py`.
 - Created `services/deep_analysis.py` and moved raw/daily deep-analysis data
   preparation plus content-instruction extraction out of route handlers.
-- Created `services/record_stats.py` for pure raw-record platform stats and
-  precise-optimization stats.
+- Created `services/record_stats.py` for pure raw-record platform stats.
 - Replaced inline loops in `/api/raw_records/platform_stats`,
-  `/api/raw_records/deep_analyze`, `/api/daily/deep_analyze`,
-  `/api/precise/diagnosis`, and `/api/precise/question_refs` with service
+  `/api/raw_records/deep_analyze`, and `/api/daily/deep_analyze` with service
   calls.
+- Removed retired Agent Bot, platform compare, and precise-optimization routes
+  after confirming they are no longer used.
 - Kept route URLs, request parameters, response keys, prompt text, AI calls,
   record persistence, delete/clear behavior, and stored JSON shapes unchanged.
 - Did not touch local worker scripts, direct `/api/platform/crawl`, Node

@@ -662,6 +662,13 @@ class CoreFunctionTests(unittest.TestCase):
             "/api/crawl/daily_list",
             "/api/crawl/daily_analyze",
             "/api/settings/rawpath",
+            "/api/platform/compare",
+            "/api/agent/checklist",
+            "/api/agent/chat",
+            "/api/agent/summary",
+            "/api/precise/diagnosis",
+            "/api/precise/question_refs",
+            "/api/precise/generate",
         }
         active_routes = {str(rule.rule) for rule in geo_app.app.url_map.iter_rules()}
 
