@@ -5,12 +5,40 @@ import unittest
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 INDEX_HTML = os.path.join(ROOT, "templates", "index.html")
+APP_CSS = os.path.join(ROOT, "static", "css", "app.css")
+APP_JS = os.path.join(ROOT, "static", "js", "app.js")
+
+
+def read_file(path):
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+def read_index_html():
+    return read_file(INDEX_HTML)
+
+
+def read_frontend_source():
+    parts = [read_index_html()]
+    for path in (APP_CSS, APP_JS):
+        if os.path.exists(path):
+            parts.append(read_file(path))
+    return "\n".join(parts)
 
 
 class FrontendCrawlOrderTests(unittest.TestCase):
+    def test_frontend_css_and_js_are_static_assets(self):
+        html = read_index_html()
+
+        self.assertIn('href="{{ url_for(\'static\', filename=\'css/app.css\') }}"', html)
+        self.assertIn('src="{{ url_for(\'static\', filename=\'js/app.js\') }}"', html)
+        self.assertTrue(os.path.exists(APP_CSS))
+        self.assertTrue(os.path.exists(APP_JS))
+        self.assertNotIn("<style>", html)
+        self.assertNotRegex(html, r"<script>\s*//")
+
     def test_frontend_defaults_to_groups_and_removes_retired_modules(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('class="page on" id="page-groups"', html)
         self.assertNotIn('class="page on" id="page-dashboard"', html)
@@ -31,8 +59,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
             self.assertNotIn(retired, html)
 
     def test_client_switch_clears_open_group_detail(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("function clearActiveGroupSelection()", html)
         match = re.search(
@@ -44,8 +71,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("clearActiveGroupSelection();", match.group("body"))
 
     def test_crawl_platform_order_puts_doubao_last_for_all_entry_points(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn(
             "const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];",
@@ -64,15 +90,13 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("getSelectedGroupCrawlPlatformIds()", job_choice_body.group("body"))
 
     def test_group_crawl_repeat_selector_includes_two_rounds(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="grpRepeat"', html)
         self.assertIn('<option value="2">2次</option>', html)
 
     def test_direct_platform_crawl_frontend_is_removed(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         for retired in [
             "CRAWL_PLATFORM_CONCURRENCY",
@@ -85,8 +109,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
             self.assertNotIn(retired, html)
 
     def test_group_crawl_can_enqueue_local_worker_jobs(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertNotIn('id="btnQueueLocalCrawl"', html)
         self.assertIn('id="btnCrawlGroup" onclick="enqueueGroupCrawlJobs()"', html)
@@ -97,8 +120,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("repeat_count: repeat", html)
 
     def test_group_questions_use_batch_add_textarea(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="groupBatchQuestionInput"', html)
         self.assertIn("function parseBatchQuestions", html)
@@ -108,8 +130,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("prompt(", html)
 
     def test_global_platform_selector_is_removed_for_contract_platform_flow(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertNotIn('id="globalPlatform"', html)
         self.assertNotIn("onPlatformChange()", html)
@@ -124,8 +145,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("saveClientPlatforms", html)
 
     def test_batch_task_filters_are_wired_into_records_and_daily_pages(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="rec-task-filter"', html)
         self.assertNotIn('id="dailyTaskFilter"', html)
@@ -137,8 +157,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("task_id: taskId", html)
 
     def test_daily_insights_sections_are_wired(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="dailyAiPlatformCompare"', html)
         self.assertIn('id="dailyEntityMentions"', html)
@@ -153,8 +172,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("zero_ref_records", html)
 
     def test_daily_entity_mentions_can_be_deleted_from_aggregate_list(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("function renderDailyEntityDeleteButton(", html)
         self.assertIn("async function deleteDailyEntity(", html)
@@ -163,8 +181,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("deleteDailyEntity(decodeURIComponent", html)
 
     def test_daily_entity_status_is_shown_near_mentions(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="dailyEntityStatus"', html)
         self.assertIn("async function loadDailyEntityStatus(", html)
@@ -173,8 +190,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("实体识别", html)
 
     def test_reference_intelligence_page_is_wired(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("引用情报分析", html)
         self.assertIn("navTo('reference'", html)
@@ -196,8 +212,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("cancelReferenceAnalysis", html)
 
     def test_retired_agent_precise_and_platform_compare_frontend_is_removed(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         for retired in [
             "agentBall",
@@ -214,23 +229,20 @@ class FrontendCrawlOrderTests(unittest.TestCase):
             self.assertNotIn(retired, html)
 
     def test_daily_top_articles_show_ai_platform_coverage(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("a.ai_platforms", html)
         self.assertIn("CRAWL_PLATFORM_NAMES[pid]", html)
 
     def test_daily_top_articles_are_grouped_inside_top_articles_section(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("stats.top_articles_by_ai", html)
         self.assertIn("renderDailyTopArticleRows", html)
         self.assertIn("Top12", html)
 
     def test_daily_top_articles_show_competitor_match_status(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("competitor_match_status", html)
         self.assertIn("competitor_matched_entities", html)
@@ -239,8 +251,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("正文未确认", html)
 
     def test_daily_competitor_articles_separate_area_is_removed(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertNotIn("优质竞品宣传文章（人工挑选）", html)
         self.assertNotIn('id="dailyCompetitorArticles"', html)
@@ -249,15 +260,13 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("selected_competitors", html)
 
     def test_daily_kpi_mention_rate_uses_insights_scope(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn("insights.mention_rate", html)
         self.assertIn("document.getElementById('dk-mention').textContent", html)
 
     def test_daily_record_rows_do_not_show_mention_or_geo_badges(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         match = re.search(
             r"function renderDailyRecord\(r\) \{(?P<body>.*?)\n\}\n\nfunction renderDailyRecordPage",
@@ -272,8 +281,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("brand_mentioned", body)
 
     def test_content_page_uses_simplified_ops_opinion_generation_flow(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="contentOpinion"', html)
         self.assertIn('id="contentSampleLinks"', html)
@@ -319,8 +327,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn('id="topicInstruction"', html)
 
     def test_content_material_library_auto_parses_and_only_exposes_delete(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         self.assertIn('id="materialUpload"', html)
         self.assertIn("multiple", html)
@@ -335,8 +342,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("materialDisplayStatus(", html)
 
     def test_retired_content_and_dashboard_api_calls_are_removed(self):
-        with open(INDEX_HTML, "r", encoding="utf-8") as f:
-            html = f.read()
+        html = read_frontend_source()
 
         retired_snippets = [
             "/api/articles",
