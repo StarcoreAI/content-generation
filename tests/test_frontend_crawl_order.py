@@ -265,7 +265,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("insights.mention_rate", html)
         self.assertIn("document.getElementById('dk-mention').textContent", html)
 
-    def test_daily_record_rows_do_not_show_mention_or_geo_badges(self):
+    def test_daily_record_rows_show_platform_and_brand_mention_badge(self):
         html = read_frontend_source()
 
         match = re.search(
@@ -275,10 +275,13 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         )
         self.assertIsNotNone(match)
         body = match.group("body")
+        self.assertIn("function dailyRecordPlatformName", html)
+        self.assertIn("r.source_platform", html)
+        self.assertIn("dailyRecordPlatformName", body)
+        self.assertIn("品牌已提及", body)
+        self.assertIn("brand_mentioned", body)
         self.assertNotIn("未提及", body)
-        self.assertNotIn("已提及", body)
         self.assertNotIn("GEO ${geoScore}", body)
-        self.assertNotIn("brand_mentioned", body)
 
     def test_content_page_uses_simplified_ops_opinion_generation_flow(self):
         html = read_frontend_source()

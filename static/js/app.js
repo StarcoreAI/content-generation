@@ -1629,7 +1629,14 @@ let dailyAnalysisData = null;
 
 const DAILY_PAGE_SIZE = 20;
 
+function dailyRecordPlatformName(r) {
+  const platform = (r.source_platform || '').trim();
+  return platform ? (CRAWL_PLATFORM_NAMES[platform] || platform) : '未知平台';
+}
+
 function renderDailyRecord(r) {
+  const platformName = dailyRecordPlatformName(r);
+  const brandMentionBadge = r.brand_mentioned ? '<span class="badge badge-g">品牌已提及</span>' : '';
   const div = document.createElement('div');
   div.id = 'rec-' + r.id;
   div.style.cssText = 'display:flex;align-items:flex-start;gap:10px;padding:10px;background:rgba(255,255,255,.8);border:1.5px solid var(--border2);border-radius:var(--r-sm);margin-bottom:6px';
@@ -1638,6 +1645,8 @@ function renderDailyRecord(r) {
     <div style="flex:1;min-width:0">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px;flex-wrap:wrap">
         <span style="font-size:12px;font-weight:800;color:#312e81">${r.question}</span>
+        <span class="badge badge-p">${escHtml(platformName)}</span>
+        ${brandMentionBadge}
         ${r.round > 1 ? `<span class="badge badge-pk">第${r.round}次</span>` : ''}
         <span style="font-size:10px;color:var(--text3);margin-left:auto">${r.crawl_time||''}</span>
       </div>
