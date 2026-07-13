@@ -66,8 +66,12 @@ and internal maintenance documentation.
 
 ## Cloud deploy and data sync
 
-- Prefer `scripts/deploy_cloud_package.sh` for ECS code sync. Do not paste a
-  long multi-line deploy block into SSH unless the helper itself is broken.
+- Prefer Git for ECS code sync: commit and push locally, then run
+  `git pull --ff-only` in `/srv/geo-content-v2`, restart
+  `geo-content-v2.service`, and verify `/api/health`.
+- Keep `scripts/deploy_cloud_package.sh` as a fallback when Git is unavailable.
+  Do not paste a long multi-line deploy block into SSH unless both Git and the
+  helper path are unavailable.
 - A code package deploy may restart `geo-content-v2.service`, but it must not
   overwrite cloud `data/`, `pdf/`, `logs/`, or `.env`.
 - Before changing cloud files, create a timestamped backup under

@@ -120,6 +120,23 @@ sudo systemctl restart geo-content-v2.service
 sudo systemctl stop geo-content-v2.service
 ```
 
+## Git Deploy For Current Trial
+
+The current preferred deploy path is Git, not a zip package. Keep runtime data
+out of the repo and pull code only:
+
+```bash
+cd /srv/geo-content-v2
+git status --short --branch
+git pull --ff-only
+sudo systemctl restart geo-content-v2.service
+curl -fsS http://127.0.0.1:18080/api/health
+```
+
+If `git status --short` shows local changes other than expected untracked
+runtime files such as `.env`, stop and inspect before pulling. Do not overwrite
+cloud `data/`, `pdf/`, `logs/`, or `.env`.
+
 Public browser test URL after the Alibaba Cloud security group allows `18080`:
 
 ```text
@@ -215,8 +232,9 @@ docker compose up -d --build
 
 ## Zip Package Deploy Helper
 
-For the current ECS trial, prefer the checked-in helper instead of pasting a
-long deployment block into SSH.
+For the current ECS trial, this is now a fallback path when Git is unavailable.
+Prefer Git deploy first. If a zip package is necessary, use the checked-in
+helper instead of pasting a long deployment block into SSH.
 
 Upload the zip package to `/home/geosystem/`, then run:
 

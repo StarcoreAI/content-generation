@@ -6,13 +6,14 @@ and verification commands.
 
 ## Reading Map
 
-- `app.py`: about 4400 lines, 60+ Flask routes. It currently holds app setup,
-  storage path constants, auth helpers, AI calls, content-generation prompts,
-  reference-intelligence orchestration, daily analysis, crawl jobs, platform
-  crawling, agent bot, and precise optimization.
-- `templates/index.html`: 3954 lines. It contains all page markup and nearly all
-  front-end controller code. Reference intelligence is a relatively small block
-  compared with problem-group crawling, daily analysis, and agent code.
+- `app.py`: about 2800 lines. It is still the Flask integration layer for app
+  setup, storage path constants, auth helpers, route handlers, AI calls,
+  platform crawling, request validation, and service-module wiring.
+- `templates/index.html`: about 500 lines. It now holds page structure and
+  static asset references, not the full frontend controller.
+- `static/js/app.js`: about 2050 lines. It contains the current frontend
+  controller code and still uses shared globals.
+- `static/css/app.css`: about 200 lines. It contains the extracted page styles.
 - Existing service modules already cover some boundaries:
   - `services/reference_stage1.py`, `reference_stage2.py`,
     `reference_stage3.py`: LLM prompt/result normalization for the 3-stage
@@ -21,8 +22,11 @@ and verification commands.
   - `services/article_structure.py`: older/general single-article structure
     analysis endpoint support.
   - `services/crawl_jobs.py`, `services/records.py`,
-    `services/content_generations.py`, `services/materials.py`: partial
-    extracted domains.
+    `services/content_generations.py`, `services/materials.py`,
+    `services/reference_intelligence.py`, `services/daily_stats.py`,
+    `services/record_stats.py`, `services/content_prompts.py`, and
+    `services/deep_analysis.py`: extracted domains from the first
+    maintainability pass.
 - Tests are concentrated in `tests/test_app_core.py`, with dedicated smaller
   tests for reference stages and article fetching. Reference-intelligence
   behavior is covered well enough for a behavior-preserving extraction.
@@ -30,10 +34,9 @@ and verification commands.
 ## Global Rough Read
 
 Current backend shape:
-- `app.py` is the integration layer and also holds several domain modules inline.
-  The largest inline blocks are content-generation prompts, reference
-  intelligence orchestration, daily analysis/statistics, platform crawling,
-  agent actions, and precise optimization.
+- `app.py` is still the integration layer and still contains route-level glue.
+  The largest remaining inline area is platform crawling / Node bridge wiring,
+  plus request/auth/storage coordination around the service modules.
 - Some domains already have service modules, but `app.py` still wraps or
   extends them with path constants, request validation, user access checks, and
   persistence glue.
@@ -43,41 +46,29 @@ Current backend shape:
   plain functions/classes plus thin Flask routes.
 
 Current frontend shape:
-- `templates/index.html` is a single-page UI with all scripts inline.
-- The reference-intelligence JS block is relatively contained, but it depends on
-  shared globals such as current client/date/toast/api helpers.
-- Frontend splitting should wait until backend boundaries are clearer. Moving JS
-  first would create churn without reducing much backend risk.
+- The frontend is now split into `templates/index.html`,
+  `static/css/app.css`, and `static/js/app.js`.
+- `static/js/app.js` is still one large global script. Further frontend
+  modularization should only happen when it clearly reduces a real maintenance
+  problem.
 
 Risk ordering:
-- Low risk: reference intelligence backend. It has a visible contiguous block,
-  focused stage-service tests, and app-level tests for routes/job progress.
-- Medium risk: crawl job API and local worker persistence. There is already a
-  `services/crawl_jobs.py`, but persistence still touches raw records, crawl
-  task reports, brand analysis fallback, and worker result shape.
-- Medium risk: content generation. Storage is already extracted, but prompts are
-  product behavior and tightly coupled to material bundles, reference plugins,
-  sample articles, and history.
-- Higher risk: daily analysis/raw records/entity reports. This is data-sensitive
-  and used by several pages: records, daily stats, reference-intelligence input,
-  content samples, and precise optimization.
+- Lower risk, mostly done: reference intelligence, crawl job result
+  persistence, content prompt extraction, daily stats, raw-record stats, deep
+  analysis preparation, and static frontend asset split.
 - Higher risk: platform crawling and Node bridge. It crosses Python crawler
   modules, Node process output, login state, SSE progress, and raw-record writes.
-- Defer: agent and precise optimization. They are downstream features and not
-  currently blocking maintainability of the main data flow.
+- Higher risk: storage architecture changes. Cloud already has historical JSON
+  data, so database migration or cross-process locking needs a separate plan.
+- Out of scope for this pass: local operator worker package and already shipped
+  operator crawl scripts.
 
 Recommended order:
-1. Move reference-intelligence backend code out of `app.py` without renaming
-   route URLs, stored JSON fields, function names exposed by `app.py`, prompts,
-   or progress anchors.
-2. Run focused reference and app-route tests. If stable, commit this as the
-   first small refactor.
-3. Re-read the moved module and decide whether any duplicated helpers can be
-   merged. Do not merge during the first move unless it is mechanically obvious.
-4. Consider crawl-job persistence next, but only after the reference move proves
-   the extraction style.
-5. Leave frontend splitting, daily analysis, and platform crawling for later
-   passes.
+1. Stop the first maintainability pass here unless a real bug or product need
+   appears.
+2. Keep future changes small, tested, and easy to deploy by Git.
+3. Before any heavier refactor, discuss the operational benefit and rollback
+   path first.
 
 ## Module Notes
 
@@ -315,9 +306,24 @@ Verification for follow-up:
 - `.\.venv\Scripts\python.exe -m unittest tests.test_app_core.FlaskApiTests`
 - `.\run_tests.bat` - 250 tests passed.
 
+### Frontend Asset Split And First-Pass Closure
+
+Implementation result:
+- Split `templates/index.html` into page structure plus two static assets:
+  `static/css/app.css` and `static/js/app.js`.
+- Added static-asset coverage to `tests/test_frontend_crawl_order.py`.
+- Kept frontend behavior, route URLs, API calls, and backend handlers unchanged.
+- Preserved backend `/api/platform/crawl` for future local or experimental
+  crawling, while removing the old frontend direct-crawl controls.
+
+Verified after implementation:
+- `git diff --check`
+- `.\run_tests.bat` - 251 tests passed.
+- Flask test client returned 200 for `/static/css/app.css` and
+  `/static/js/app.js`.
+
 ## Open Questions
 
-- Before implementing: should the first cut keep tests patching
-  `app.queue_reference_analysis_job` / `app.run_reference_analysis_job` by
-  re-exporting those functions from `app.py`, or should tests be updated to
-  import the new service module directly? Re-exporting is less disruptive.
+- No open questions for the first maintainability pass.
+- If the next pass is heavier than small extraction/deletion, discuss scope,
+  benefit, and rollback before editing.
