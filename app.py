@@ -2434,10 +2434,27 @@ def persist_local_crawl_job_results(job):
     )
 
 
+def current_crawl_job_owner_filter():
+    if auth_disabled() or is_admin():
+        return None
+    user = current_user() or {}
+    return user.get("username", "")
+
+
+def current_crawl_job_worker_owner_filter():
+    if auth_disabled():
+        return None
+    user = current_user() or {}
+    return user.get("username", "")
+
+
 @app.route("/api/crawl_jobs", methods=["GET"])
 def list_crawl_jobs_api():
     client_id = request.args.get("client_id", "").strip()
-    jobs = crawl_job_store.load_jobs(F_CRAWL_JOBS)
+    jobs = crawl_job_store.filter_jobs_by_owner(
+        crawl_job_store.load_jobs(F_CRAWL_JOBS),
+        current_crawl_job_owner_filter(),
+    )
     if client_id:
         jobs = [job for job in jobs if job.get("client_id") == client_id]
     return jsonify({"ok": True, "jobs": jobs})
@@ -2514,13 +2531,24 @@ def claim_next_crawl_job_api():
     platform = request.args.get("platform", "").strip()
     if platform and platform not in CRAWL_PLATFORMS:
         return jsonify({"error": f"不支持的平台: {platform}"}), 400
-    job = crawl_job_store.claim_next_job(F_CRAWL_JOBS, worker_id, platform, now_str)
+    job = crawl_job_store.claim_next_job(
+        F_CRAWL_JOBS,
+        worker_id,
+        platform,
+        now_str,
+        created_by=current_crawl_job_worker_owner_filter(),
+    )
     return jsonify({"ok": True, "job": job})
 
 
 @app.route("/api/crawl_jobs/<job_id>/cancel", methods=["POST"])
 def cancel_crawl_job_api(job_id):
-    job = crawl_job_store.cancel_job(F_CRAWL_JOBS, job_id, now_str)
+    job = crawl_job_store.cancel_job(
+        F_CRAWL_JOBS,
+        job_id,
+        now_str,
+        created_by=current_crawl_job_owner_filter(),
+    )
     if not job:
         return jsonify({"error": "job_not_found"}), 404
     return jsonify({"ok": True, "job": job})
@@ -2528,7 +2556,13 @@ def cancel_crawl_job_api(job_id):
 
 @app.route("/api/crawl_jobs/<job_id>/result", methods=["POST"])
 def finish_crawl_job_api(job_id):
-    job = crawl_job_store.finish_job(F_CRAWL_JOBS, job_id, request.json or {}, now_str)
+    job = crawl_job_store.finish_job(
+        F_CRAWL_JOBS,
+        job_id,
+        request.json or {},
+        now_str,
+        created_by=current_crawl_job_worker_owner_filter(),
+    )
     if not job:
         return jsonify({"error": "job_not_found"}), 404
     persisted = persist_local_crawl_job_results(job)

@@ -33,6 +33,15 @@ def load_jobs(path):
     return jobs if isinstance(jobs, list) else []
 
 
+def filter_jobs_by_owner(jobs, created_by=None):
+    if created_by is None:
+        return list(jobs or [])
+    return [
+        job for job in jobs or []
+        if str((job or {}).get("created_by") or "") == str(created_by or "")
+    ]
+
+
 def create_job(path, payload, uid_fn, now_fn, created_by=""):
     job_type = payload.get("job_type") if payload.get("job_type") in {"crawl", "login"} else "crawl"
     job = {
@@ -58,7 +67,7 @@ def create_job(path, payload, uid_fn, now_fn, created_by=""):
     return update_json(path, [], append_job)
 
 
-def claim_next_job(path, worker_id, platform, now_fn):
+def claim_next_job(path, worker_id, platform, now_fn, created_by=None):
     worker_id = (worker_id or "local-worker").strip() or "local-worker"
     platform = (platform or "").strip()
     claimed = None
@@ -70,7 +79,8 @@ def claim_next_job(path, worker_id, platform, now_fn):
         for job in jobs:
             item = dict(job)
             if claimed is None and item.get("status") == "pending":
-                if not platform or item.get("platform") == platform:
+                owner_ok = created_by is None or str(item.get("created_by") or "") == str(created_by or "")
+                if owner_ok and (not platform or item.get("platform") == platform):
                     item["status"] = "running"
                     item["assigned_to"] = worker_id
                     item["claimed_at"] = now_fn()
@@ -82,7 +92,7 @@ def claim_next_job(path, worker_id, platform, now_fn):
     return update_json(path, [], claim)
 
 
-def finish_job(path, job_id, payload, now_fn):
+def finish_job(path, job_id, payload, now_fn, created_by=None):
     payload = payload or {}
     status = payload.get("status") if payload.get("status") in {"completed", "failed"} else "completed"
     result_summary = payload.get("summary") or {
@@ -105,6 +115,9 @@ def finish_job(path, job_id, payload, now_fn):
         for job in jobs:
             item = dict(job)
             if item.get("id") == job_id:
+                if created_by is not None and str(item.get("created_by") or "") != str(created_by or ""):
+                    updated.append(item)
+                    continue
                 if item.get("status") == "canceled":
                     item["updated_at"] = now_fn()
                     item["ignored_result_summary"] = sanitize_worker_payload(result_summary)
@@ -261,7 +274,7 @@ def persist_local_crawl_job_results(
     }
 
 
-def cancel_job(path, job_id, now_fn):
+def cancel_job(path, job_id, now_fn, created_by=None):
     canceled = None
 
     def update_job(jobs):
@@ -271,6 +284,9 @@ def cancel_job(path, job_id, now_fn):
         for job in jobs:
             item = dict(job)
             if item.get("id") == job_id:
+                if created_by is not None and str(item.get("created_by") or "") != str(created_by or ""):
+                    updated.append(item)
+                    continue
                 item["status"] = "canceled"
                 item["canceled_at"] = now_fn()
                 item["updated_at"] = now_fn()

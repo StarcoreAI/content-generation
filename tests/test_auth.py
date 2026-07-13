@@ -14,6 +14,9 @@ from services.auth import authenticate_user, create_user, load_users
 def isolated_auth_app():
     original = {
         "F_CLIENTS": geo_app.F_CLIENTS,
+        "F_GROUPS": getattr(geo_app, "F_GROUPS", None),
+        "F_RAW_RECORDS": getattr(geo_app, "F_RAW_RECORDS", None),
+        "F_CRAWL_JOBS": getattr(geo_app, "F_CRAWL_JOBS", None),
         "F_SETTINGS": geo_app.F_SETTINGS,
         "F_CONTENT_GENERATIONS": getattr(geo_app, "F_CONTENT_GENERATIONS", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
@@ -26,6 +29,9 @@ def isolated_auth_app():
     }
     with tempfile.TemporaryDirectory() as tmp:
         geo_app.F_CLIENTS = os.path.join(tmp, "clients.json")
+        geo_app.F_GROUPS = os.path.join(tmp, "probe_groups.json")
+        geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
+        geo_app.F_CRAWL_JOBS = os.path.join(tmp, "crawl_jobs.json")
         geo_app.F_SETTINGS = os.path.join(tmp, "settings.json")
         geo_app.F_CONTENT_GENERATIONS = os.path.join(tmp, "content_generations.json")
         if hasattr(geo_app, "F_MATERIALS_INDEX"):
@@ -42,6 +48,11 @@ def isolated_auth_app():
             yield tmp
         finally:
             geo_app.F_CLIENTS = original["F_CLIENTS"]
+            for key in ["F_GROUPS", "F_RAW_RECORDS", "F_CRAWL_JOBS"]:
+                if original[key] is None and hasattr(geo_app, key):
+                    delattr(geo_app, key)
+                else:
+                    setattr(geo_app, key, original[key])
             geo_app.F_SETTINGS = original["F_SETTINGS"]
             if original["F_CONTENT_GENERATIONS"] is None and hasattr(geo_app, "F_CONTENT_GENERATIONS"):
                 delattr(geo_app, "F_CONTENT_GENERATIONS")
@@ -196,6 +207,56 @@ class CustomerOwnershipTests(unittest.TestCase):
                 sorted(c["name"] for c in admin.get("/api/clients").get_json()),
                 ["Alice 客户", "Bob 客户"],
             )
+
+    def test_crawl_worker_only_claims_jobs_for_logged_in_operator(self):
+        with isolated_auth_app():
+            create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+            create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+            create_user(geo_app.F_USERS, "admin", "secret-pass", role="admin")
+
+            alice = geo_app.app.test_client()
+            login_as(alice, "alice")
+            alice_client = create_client(alice, "Alice 客户")
+            created = alice.post("/api/crawl_jobs", json={
+                "client_id": alice_client["id"],
+                "platform": "qwen",
+                "questions": ["Alice 问题"],
+            })
+            self.assertEqual(created.status_code, 200)
+            job_id = created.get_json()["job"]["id"]
+
+            bob = geo_app.app.test_client()
+            login_as(bob, "bob")
+            bob_jobs = bob.get("/api/crawl_jobs")
+            self.assertEqual(bob_jobs.status_code, 200)
+            self.assertEqual(bob_jobs.get_json()["jobs"], [])
+
+            bob_cancel = bob.post(f"/api/crawl_jobs/{job_id}/cancel")
+            self.assertEqual(bob_cancel.status_code, 404)
+
+            bob_result = bob.post(f"/api/crawl_jobs/{job_id}/result", json={
+                "status": "completed",
+                "summary": {"total": 1, "success": 1},
+                "results": [],
+            })
+            self.assertEqual(bob_result.status_code, 404)
+
+            bob_claim = bob.get("/api/crawl_jobs/next?worker_id=bob-laptop&platform=qwen")
+            self.assertEqual(bob_claim.status_code, 200)
+            self.assertIsNone(bob_claim.get_json()["job"])
+
+            admin = geo_app.app.test_client()
+            login_as(admin, "admin")
+            admin_jobs = admin.get("/api/crawl_jobs")
+            self.assertEqual(admin_jobs.status_code, 200)
+            self.assertEqual([job["id"] for job in admin_jobs.get_json()["jobs"]], [job_id])
+            admin_claim = admin.get("/api/crawl_jobs/next?worker_id=admin-laptop&platform=qwen")
+            self.assertEqual(admin_claim.status_code, 200)
+            self.assertIsNone(admin_claim.get_json()["job"])
+
+            alice_claim = alice.get("/api/crawl_jobs/next?worker_id=alice-laptop&platform=qwen")
+            self.assertEqual(alice_claim.status_code, 200)
+            self.assertEqual(alice_claim.get_json()["job"]["id"], job_id)
 
 
 class ContentOwnershipTests(unittest.TestCase):
