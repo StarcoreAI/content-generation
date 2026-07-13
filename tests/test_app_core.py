@@ -1912,6 +1912,72 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(raw_records[0]["source_platform"], "qwen")
             self.assertEqual(raw_records[0]["crawler_engine"], "local_worker_node")
 
+    def test_crawl_job_result_does_not_queue_entity_normalize_automatically(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            create_response = self.client.post("/api/crawl_jobs", json={
+                "client_id": "client-1",
+                "platform": "qwen",
+                "questions": ["问题一"],
+            })
+            job_id = create_response.get_json()["job"]["id"]
+            self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-1&platform=qwen")
+
+            with patch.object(
+                geo_app,
+                "queue_entity_normalize_task",
+                return_value={"ok": True, "status": "queued", "queued": True},
+            ) as queue_entities:
+                result_response = self.client.post(f"/api/crawl_jobs/{job_id}/result", json={
+                    "status": "completed",
+                    "summary": {"total": 1, "success": 1},
+                    "results": [
+                        {"ok": True, "question": "问题一", "answer": "测试品牌被提到", "refs": []}
+                    ],
+                })
+
+            self.assertEqual(result_response.status_code, 200)
+            payload = result_response.get_json()
+            self.assertNotIn("entity_normalize", payload["persisted"])
+            queue_entities.assert_not_called()
+
+    def test_daily_entities_generate_queues_current_scope(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            queued_result = {"ok": True, "status": "queued", "queued": True}
+            with patch.object(geo_app, "queue_entity_normalize_task", return_value=queued_result) as queue_entities:
+                response = self.client.post("/api/daily/entities/generate", json={
+                    "client_id": "client-1",
+                    "date": "2026-07-13",
+                    "group_id": "group-1",
+                    "platform": "qwen",
+                    "task_id": "task-1",
+                })
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["entity_normalize"], queued_result)
+            self.assertEqual(payload["scope_task_id"], "task-1")
+            self.assertTrue(os.path.basename(payload["task_report"]).startswith("2026-07-13_"))
+            queue_entities.assert_called_once()
+            args, kwargs = queue_entities.call_args
+            self.assertEqual(args[:3], ("client-1", "2026-07-13", "task-1"))
+            self.assertEqual(args[3], payload["task_report"])
+            self.assertEqual(kwargs, {"username": "", "group_id": "group-1", "platform": "qwen"})
+
+            report = geo_app.load(payload["task_report"], {})
+            self.assertEqual(report["client_id"], "client-1")
+            self.assertEqual(report["date"], "2026-07-13")
+            self.assertEqual(report["scope_task_id"], "task-1")
+            self.assertEqual(report["group_id"], "group-1")
+            self.assertEqual(report["source_platform"], "qwen")
+            self.assertEqual(report["entity_normalize"], queued_result)
+
     def test_cloud_can_create_login_job_for_local_worker(self):
         with isolated_app_data():
             create_response = self.client.post("/api/crawl_jobs/login", json={"platform": "qwen"})
@@ -2091,13 +2157,8 @@ class FlaskApiTests(unittest.TestCase):
                         ],
                     }
 
-                queued_result = {
-                    "ok": True,
-                    "status": "queued",
-                    "queued": True,
-                }
                 with patch("services.node_crawler_bridge.run_node_crawler", side_effect=fake_run_node_crawler), \
-                        patch.object(geo_app, "queue_entity_normalize_task", return_value=queued_result) as queue_entities, \
+                        patch.object(geo_app, "queue_entity_normalize_task") as queue_entities, \
                         patch.object(geo_app, "auto_normalize_task_entities") as auto_entities:
                     response = self.client.post(
                         "/api/platform/crawl",
@@ -2120,12 +2181,9 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertIn("output_dir", calls[0]["kwargs"])
                 self.assertTrue(os.path.isabs(calls[0]["kwargs"]["output_dir"]))
                 self.assertTrue(calls[0]["kwargs"]["output_dir"].endswith(os.path.join("tasks", "node", payload["task_id"], "qwen")))
-                queue_entities.assert_called_once()
-                queue_args = queue_entities.call_args.args
-                self.assertEqual(queue_args[:3], ("client-1", geo_app.today_str(), payload["task_id"]))
-                self.assertEqual(queue_args[3], payload["task_report"])
+                queue_entities.assert_not_called()
                 auto_entities.assert_not_called()
-                self.assertEqual(payload["entity_normalize"], queued_result)
+                self.assertNotIn("entity_normalize", payload)
 
                 records = geo_app.load(geo_app.F_RAW_RECORDS, [])
                 self.assertEqual(len(records), 1)
@@ -2137,7 +2195,7 @@ class FlaskApiTests(unittest.TestCase):
                 self.assertEqual(report["crawler_engine"], "node")
                 self.assertEqual(report["node_output_dir"], calls[0]["kwargs"]["output_dir"])
                 self.assertEqual(report["status"], "completed")
-                self.assertEqual(report["entity_normalize"], queued_result)
+                self.assertNotIn("entity_normalize", report)
         finally:
             if old_value is None:
                 os.environ.pop("GEO_NODE_CRAWLER_PLATFORMS", None)

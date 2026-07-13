@@ -855,12 +855,12 @@ def save_raw_record(client_id, group_id, brand, question, round_num,
     )
 
 
-def auto_normalize_task_entities(client_id, date_str, task_id, username=None):
+def auto_normalize_task_entities(client_id, date_str, task_id="", username=None, group_id="", platform=""):
     """Incrementally extract competitor entities for records created by one crawl task."""
     settings = get_settings(username)
     if not settings.get("api_key"):
         return {"ok": True, "skipped": True, "reason": "missing_api_key", "changed": 0}
-    if not client_id or not date_str or not task_id:
+    if not client_id or not date_str:
         return {"ok": False, "skipped": True, "reason": "missing_scope", "changed": 0}
 
     from scripts import normalize_entities
@@ -871,6 +871,8 @@ def auto_normalize_task_entities(client_id, date_str, task_id, username=None):
         client_id=client_id,
         date=date_str,
         task_id=task_id,
+        group_id=group_id,
+        platform=platform,
         include_existing=False,
     )
     if not selected:
@@ -892,6 +894,8 @@ def auto_normalize_task_entities(client_id, date_str, task_id, username=None):
         "client_id": client_id,
         "date": date_str,
         "task_id": task_id,
+        "group_id": group_id,
+        "source_platform": platform,
         "competitor_category": competitor_category,
         "own_brand": own_brand,
         "data_written": False,
@@ -913,9 +917,16 @@ def auto_normalize_task_entities(client_id, date_str, task_id, username=None):
     }
 
 
-def run_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None):
+def run_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None, group_id="", platform=""):
     try:
-        result = auto_normalize_task_entities(client_id, date_str, task_id, username=username)
+        result = auto_normalize_task_entities(
+            client_id,
+            date_str,
+            task_id,
+            username=username,
+            group_id=group_id,
+            platform=platform,
+        )
     except Exception as exc:
         result = {"ok": False, "status": "failed", "error": str(exc), "changed": 0}
     report = load(task_report_path, {})
@@ -925,11 +936,11 @@ def run_entity_normalize_task(client_id, date_str, task_id, task_report_path, us
     return result
 
 
-def queue_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None):
+def queue_entity_normalize_task(client_id, date_str, task_id, task_report_path, username=None, group_id="", platform=""):
     status = {"ok": True, "status": "queued", "queued": True}
     thread = threading.Thread(
         target=run_entity_normalize_task,
-        args=(client_id, date_str, task_id, task_report_path, username),
+        args=(client_id, date_str, task_id, task_report_path, username, group_id, platform),
         daemon=True,
     )
     thread.start()
@@ -1542,7 +1553,11 @@ def latest_entity_report_status(client_id, date_str, task_id=""):
         report = load(path, {})
         if report.get("client_id") != client_id:
             continue
-        if task_id and report.get("task_id") != task_id:
+        if "entity_normalize" not in report and not report.get("entity_normalize_finished_at"):
+            continue
+        report_task_id = report.get("task_id") or ""
+        scope_task_id = report.get("scope_task_id") or ""
+        if task_id and task_id not in {report_task_id, scope_task_id}:
             continue
         reports.append((report.get("created_at") or report.get("finished_at") or "", path, report))
     if not reports:
@@ -1557,7 +1572,7 @@ def latest_entity_report_status(client_id, date_str, task_id=""):
     return {
         "ok": True,
         "status": status,
-        "task_id": report.get("task_id") or "",
+        "task_id": report.get("scope_task_id") or report.get("task_id") or "",
         "task_report": path,
         "finished_at": report.get("entity_normalize_finished_at") or "",
         "changed": entity.get("changed", 0),
@@ -1630,6 +1645,51 @@ def daily_entity_status():
     date_str = request.args.get("date", today_str()).strip()
     task_id = request.args.get("task_id", "").strip()
     return jsonify(latest_entity_report_status(client_id, date_str, task_id))
+
+
+@app.route("/api/daily/entities/generate", methods=["POST"])
+def generate_daily_entities():
+    payload = request.json or {}
+    client_id = (payload.get("client_id") or "").strip()
+    if not client_id:
+        return jsonify({"error": "client_id required"}), 400
+    if not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+
+    date_str = (payload.get("date") or today_str()).strip()
+    group_id = (payload.get("group_id") or "").strip()
+    platform = normalize_platform_filter((payload.get("platform") or "").strip()) or ""
+    scope_task_id = (payload.get("task_id") or "").strip()
+    report_task_id = f"entity_{uid()}"
+    entity_normalize = {"ok": True, "status": "queued", "queued": True}
+    report = {
+        "task_id": report_task_id,
+        "scope_task_id": scope_task_id,
+        "status": "entity_normalize",
+        "created_at": now_str(),
+        "client_id": client_id,
+        "date": date_str,
+        "group_id": group_id,
+        "source_platform": platform,
+        "entity_normalize": entity_normalize,
+    }
+    task_report_path = save_crawl_task_report(report)
+    entity_normalize = queue_entity_normalize_task(
+        client_id,
+        date_str,
+        scope_task_id,
+        task_report_path,
+        username=settings_username(),
+        group_id=group_id,
+        platform=platform,
+    )
+    return jsonify({
+        "ok": True,
+        "task_id": report_task_id,
+        "scope_task_id": scope_task_id,
+        "task_report": task_report_path,
+        "entity_normalize": entity_normalize,
+    })
 
 
 @app.route("/api/article_structure/extract", methods=["POST"])
@@ -3018,8 +3078,6 @@ def platform_crawl_impl():
         except:
             pass
 
-    entity_normalize = {"ok": True, "status": "queued", "queued": True}
-
     # 推送完成事件
     crawl_sessions[session_id]["events"].append({"status": "finished"})
 
@@ -3037,16 +3095,8 @@ def platform_crawl_impl():
         "analysis_errors": errors,
         "analysis_fallbacks": analysis_fallbacks,
         "batch_summary": batch_summary,
-        "entity_normalize": entity_normalize,
     })
     task_path = save_crawl_task_report(task_report)
-    entity_normalize = queue_entity_normalize_task(
-        client_id,
-        today_str(),
-        task_id,
-        task_path,
-        settings_username(),
-    )
 
     return jsonify({
         "ok": True,
@@ -3064,7 +3114,6 @@ def platform_crawl_impl():
         "errors": len(error_details),
         "results": saved,
         "batch_summary": batch_summary,
-        "entity_normalize": entity_normalize,
         "analysis_fallbacks": analysis_fallbacks,
         "error_details": error_details
     })

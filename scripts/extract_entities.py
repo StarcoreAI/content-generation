@@ -119,7 +119,8 @@ AI回答正文：
 """
 
 
-def select_records(records, client_id="", date="", task_id="", limit=0, include_existing=False):
+def select_records(records, client_id="", date="", task_id="", limit=0, include_existing=False,
+                   group_id="", platform=""):
     selected = []
     for record in records:
         if client_id and record.get("client_id") != client_id:
@@ -127,6 +128,10 @@ def select_records(records, client_id="", date="", task_id="", limit=0, include_
         if date and record.get("today") != date:
             continue
         if task_id and record.get("task_id") != task_id:
+            continue
+        if group_id and record.get("group_id") != group_id:
+            continue
+        if platform and platform != "all" and record.get("source_platform", "doubao") != platform:
             continue
         if not include_existing and record.get("mentioned_entities"):
             continue

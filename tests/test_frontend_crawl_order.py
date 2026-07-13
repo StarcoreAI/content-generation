@@ -184,10 +184,14 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertIn('id="dailyEntityStatus"', html)
+        self.assertIn('id="dailyEntityGenerateBtn"', html)
         self.assertIn("async function loadDailyEntityStatus(", html)
+        self.assertIn("async function generateDailyEntities(", html)
         self.assertIn("function renderDailyEntityStatus(", html)
         self.assertIn("/api/daily/entity_status", html)
+        self.assertIn("/api/daily/entities/generate", html)
         self.assertIn("实体识别", html)
+        self.assertIn("生成竞品提及", html)
 
     def test_reference_intelligence_page_is_wired(self):
         html = read_frontend_source()

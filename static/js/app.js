@@ -1811,6 +1811,38 @@ async function loadDailyEntityStatus(date, taskId='') {
   }
 }
 
+async function generateDailyEntities() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const btn = document.getElementById('dailyEntityGenerateBtn');
+  const oldHtml = btn ? btn.innerHTML : '';
+  const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
+  const groupId = document.getElementById('dailyGroupFilter')?.value || '';
+  const taskId = document.getElementById('dailyTaskFilter')?.value || '';
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i class="ti ti-loader-2"></i> 生成中';
+  }
+  try {
+    const r = await api('/api/daily/entities/generate', 'POST', {
+      client_id: currentClientId,
+      date,
+      platform: currentPlatform,
+      group_id: groupId,
+      task_id: taskId,
+    });
+    if (r.error) { toast(r.message || r.error, 'err'); return; }
+    renderDailyEntityStatus(r.entity_normalize || {status:'queued'});
+    toast('已开始生成竞品提及');
+  } catch(e) {
+    toast('生成失败：' + e.message, 'err');
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = oldHtml;
+    }
+  }
+}
+
 function renderDailyEntityDeleteButton(entityName) {
   const encodedName = encodeURIComponent(entityName || '');
   return `<button class="btn btn-danger btn-sm" title="从当前筛选范围删除该实体" onclick="deleteDailyEntity(decodeURIComponent('${encodedName}'))">删除</button>`;

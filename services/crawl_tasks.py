@@ -10,9 +10,10 @@ def get_crawl_task_dir(data_dir):
 
 def save_crawl_task_report(data_dir, report, uid_fn, today_fn, now_fn):
     task_id = report.get("task_id") or uid_fn()
+    report_date = str(report.get("date") or today_fn()).strip() or today_fn()
     report["task_id"] = task_id
     report["updated_at"] = now_fn()
-    path = os.path.join(get_crawl_task_dir(data_dir), f"{today_fn()}_{task_id}.json")
+    path = os.path.join(get_crawl_task_dir(data_dir), f"{report_date}_{task_id}.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
     return path

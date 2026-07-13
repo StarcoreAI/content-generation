@@ -772,6 +772,43 @@ class EntityExtractionTests(unittest.TestCase):
 
 
 class EntityNormalizeScriptTests(unittest.TestCase):
+    def test_select_records_can_filter_manual_entity_scope(self):
+        from scripts.extract_entities import select_records
+
+        records = [
+            {
+                "id": "keep",
+                "client_id": "c1",
+                "today": "2026-07-13",
+                "group_id": "g1",
+                "source_platform": "qwen",
+                "answer": "A",
+                "mentioned_entities": [],
+            },
+            {
+                "id": "other-group",
+                "client_id": "c1",
+                "today": "2026-07-13",
+                "group_id": "g2",
+                "source_platform": "qwen",
+                "answer": "B",
+                "mentioned_entities": [],
+            },
+            {
+                "id": "other-platform",
+                "client_id": "c1",
+                "today": "2026-07-13",
+                "group_id": "g1",
+                "source_platform": "doubao",
+                "answer": "C",
+                "mentioned_entities": [],
+            },
+        ]
+
+        selected = select_records(records, client_id="c1", date="2026-07-13", group_id="g1", platform="qwen")
+
+        self.assertEqual([item["id"] for item in selected], ["keep"])
+
     def test_filter_entity_candidates_only_dedupes_first_layer_candidates(self):
         from scripts.normalize_entities import filter_entity_candidates
 

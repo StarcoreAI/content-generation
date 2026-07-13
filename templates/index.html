@@ -118,7 +118,15 @@
       <div id="dailyAiPlatformCompare"><div class="empty"><i class="ti ti-layout-grid"></i><p>加载中...</p></div></div>
     </div>
     <div class="card">
-      <div class="card-hd"><span class="card-title">竞品/门店提及</span><span style="font-size:11px;color:var(--text3)" id="dailyEntityStatus">实体识别状态待加载</span></div>
+      <div class="card-hd">
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <span class="card-title">竞品/门店提及</span>
+          <button class="btn btn-o btn-sm" id="dailyEntityGenerateBtn" onclick="generateDailyEntities()" title="按当前筛选范围生成竞品提及">
+            <i class="ti ti-sparkles"></i> 生成竞品提及
+          </button>
+        </div>
+        <span style="font-size:11px;color:var(--text3)" id="dailyEntityStatus">实体识别状态待加载</span>
+      </div>
       <div id="dailyEntityMentions"><div style="color:var(--text3);font-size:12px">暂无数据</div></div>
     </div>
   </div>
