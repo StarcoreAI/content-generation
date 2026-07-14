@@ -2556,6 +2556,7 @@ def create_crawl_job_api():
             "platform": platform,
             "questions": questions,
             "repeat_count": repeat_count,
+            "batch_id": (payload.get("batch_id") or "").strip(),
         },
         uid,
         now_str,

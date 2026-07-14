@@ -254,7 +254,12 @@ def run_once(cloud_client, worker_id, platforms, run_crawler=run_node_crawler, o
         if not job:
             continue
         job_type = job.get("job_type") or "crawl"
-        log(f"claimed job: {job.get('id')} / {platform} / {job_type} / {len(job.get('questions') or [])} questions")
+        log(
+            f"claimed job: {job.get('id')} / {platform} / {job_type} / "
+            f"client={job.get('client_id', '')} / brand={job.get('brand', '')} / "
+            f"group={job.get('group_id', '')} / batch={job.get('batch_id', '')} / "
+            f"{len(job.get('questions') or [])} questions"
+        )
         if job_type == "login":
             payload = run_login_job(job, timeout_s=timeout_s)
         else:
@@ -326,7 +331,13 @@ def build_parser():
     parser.add_argument("--base-url", default=os.environ.get("GEO_WORKER_BASE_URL", DEFAULT_BASE_URL))
     parser.add_argument("--username", default=os.environ.get("GEO_WORKER_USERNAME", ""))
     parser.add_argument("--password", default=os.environ.get("GEO_WORKER_PASSWORD", ""))
-    parser.add_argument("--worker-id", default=os.environ.get("GEO_WORKER_ID", os.environ.get("COMPUTERNAME", "local-worker")))
+    parser.add_argument(
+        "--worker-id",
+        default=os.environ.get("GEO_WORKER_ID")
+        or os.environ.get("COMPUTERNAME")
+        or os.environ.get("HOSTNAME")
+        or "local-worker",
+    )
     parser.add_argument("--platforms", default=os.environ.get("GEO_WORKER_PLATFORMS", "all"))
     parser.add_argument("--poll-interval", type=int, default=int(os.environ.get("GEO_WORKER_POLL_INTERVAL", "10")))
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("GEO_WORKER_CRAWL_TIMEOUT", "1800")))

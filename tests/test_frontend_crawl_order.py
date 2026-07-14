@@ -118,6 +118,8 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("group_id: currentGroupId", html)
         self.assertIn("platform: platform.id", html)
         self.assertIn("repeat_count: repeat", html)
+        self.assertIn("const batchId = `batch-${Date.now()}-", html)
+        self.assertIn("batch_id: batchId", html)
 
     def test_group_questions_use_batch_add_textarea(self):
         html = read_frontend_source()

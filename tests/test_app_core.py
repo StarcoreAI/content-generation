@@ -1912,6 +1912,70 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(raw_records[0]["source_platform"], "qwen")
             self.assertEqual(raw_records[0]["crawler_engine"], "local_worker_node")
 
+    def test_crawl_job_create_sets_expiry_and_batch_id(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+
+            with patch.object(geo_app, "now_str", return_value="2026-07-14 10:00"):
+                response = self.client.post("/api/crawl_jobs", json={
+                    "client_id": "client-1",
+                    "platform": "qwen",
+                    "questions": ["问题一"],
+                    "batch_id": "batch-123",
+                })
+
+            self.assertEqual(response.status_code, 200)
+            job = response.get_json()["job"]
+            self.assertEqual(job["batch_id"], "batch-123")
+            self.assertEqual(job["expires_at"], "2026-07-14 10:02")
+
+    def test_crawl_job_pending_expiry_skips_stale_job(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-old", "name": "旧客户", "brand": "旧品牌"},
+                {"id": "client-new", "name": "新客户", "brand": "新品牌"},
+            ])
+            with patch.object(geo_app, "now_str", return_value="2026-07-14 10:00"):
+                old_response = self.client.post("/api/crawl_jobs", json={
+                    "client_id": "client-old",
+                    "platform": "doubao",
+                    "questions": ["旧问题"],
+                })
+            with patch.object(geo_app, "now_str", return_value="2026-07-14 10:03"):
+                new_response = self.client.post("/api/crawl_jobs", json={
+                    "client_id": "client-new",
+                    "platform": "doubao",
+                    "questions": ["新问题"],
+                })
+                claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop&platform=doubao")
+
+            self.assertEqual(claim_response.status_code, 200)
+            claimed = claim_response.get_json()["job"]
+            self.assertEqual(claimed["id"], new_response.get_json()["job"]["id"])
+            self.assertEqual(claimed["client_id"], "client-new")
+            jobs = geo_app.load(geo_app.F_CRAWL_JOBS, [])
+            old_job = next(job for job in jobs if job["id"] == old_response.get_json()["job"]["id"])
+            self.assertEqual(old_job["status"], "expired")
+
+    def test_crawl_job_pending_expiry_keeps_fresh_job(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [
+                {"id": "client-1", "name": "测试客户", "brand": "测试品牌"}
+            ])
+            with patch.object(geo_app, "now_str", return_value="2026-07-14 10:00"):
+                create_response = self.client.post("/api/crawl_jobs", json={
+                    "client_id": "client-1",
+                    "platform": "qwen",
+                    "questions": ["问题一"],
+                })
+            with patch.object(geo_app, "now_str", return_value="2026-07-14 10:01"):
+                claim_response = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop&platform=qwen")
+
+            self.assertEqual(claim_response.status_code, 200)
+            self.assertEqual(claim_response.get_json()["job"]["id"], create_response.get_json()["job"]["id"])
+
     def test_crawl_job_result_does_not_queue_entity_normalize_automatically(self):
         with isolated_app_data():
             geo_app.save(geo_app.F_CLIENTS, [

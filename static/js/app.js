@@ -843,6 +843,7 @@ async function enqueueGroupCrawlJobs() {
   try {
     const jobs = [];
     const errors = [];
+    const batchId = `batch-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     for (const platform of platforms) {
       const resp = await fetch('/api/crawl_jobs', {
         method: 'POST',
@@ -852,7 +853,8 @@ async function enqueueGroupCrawlJobs() {
           brand: currentBrand,
           group_id: currentGroupId,
           platform: platform.id,
-          repeat_count: repeat
+          repeat_count: repeat,
+          batch_id: batchId
         })
       });
       const data = await resp.json();

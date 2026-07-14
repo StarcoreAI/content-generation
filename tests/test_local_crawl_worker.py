@@ -1,6 +1,7 @@
 import tempfile
 import threading
 import unittest
+import os
 from unittest import mock
 from pathlib import Path
 
@@ -58,6 +59,12 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             ["deepseek", "yuanbao", "qwen", "kimi", "doubao"],
         )
 
+    def test_default_worker_id_uses_hostname_when_computername_is_missing(self):
+        with mock.patch.dict(os.environ, {"HOSTNAME": "ops-macbook"}, clear=True):
+            args = local_crawl_worker.build_parser().parse_args([])
+
+        self.assertEqual(args.worker_id, "ops-macbook")
+
     def test_expand_job_questions_repeats_each_question(self):
         job = {"questions": ["问题A", "问题B"], "repeat_count": 2}
 
@@ -106,6 +113,46 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertEqual(cloud.submitted[0][0], "job-1")
         self.assertEqual(cloud.submitted[0][1]["status"], "completed")
         self.assertEqual(cloud.submitted[0][1]["summary"], {"total": 2, "success": 2})
+
+    def test_run_once_logs_claimed_job_scope_before_crawling(self):
+        cloud = FakeCloudClient([
+            {
+                "id": "job-1",
+                "platform": "doubao",
+                "client_id": "client-1",
+                "brand": "测试品牌",
+                "group_id": "group-1",
+                "batch_id": "batch-1",
+                "questions": ["问题A"],
+                "repeat_count": 1,
+            }
+        ])
+        messages = []
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            return {
+                "ok": True,
+                "total": 1,
+                "success": 1,
+                "results": [{"ok": True, "question": "问题A", "answer": "回答", "refs": []}],
+            }
+
+        with mock.patch.object(local_crawl_worker, "log", side_effect=messages.append), \
+                tempfile.TemporaryDirectory() as tmp:
+            local_crawl_worker.run_once(
+                cloud,
+                worker_id="ops-laptop",
+                platforms=["doubao"],
+                run_crawler=fake_run_node_crawler,
+                output_root=Path(tmp),
+            )
+
+        claimed_logs = [message for message in messages if message.startswith("claimed job:")]
+        self.assertEqual(len(claimed_logs), 1)
+        self.assertIn("client=client-1", claimed_logs[0])
+        self.assertIn("brand=测试品牌", claimed_logs[0])
+        self.assertIn("group=group-1", claimed_logs[0])
+        self.assertIn("batch=batch-1", claimed_logs[0])
 
     def test_check_environment_reports_cloud_node_root_and_storage_state(self):
         cloud = FakeCloudClient([], health_payload={"ok": True, "version": "2.3"})
