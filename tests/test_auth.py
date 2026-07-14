@@ -25,6 +25,7 @@ def isolated_auth_app():
         "F_USERS": getattr(geo_app, "F_USERS", None),
         "F_USER_SETTINGS": getattr(geo_app, "F_USER_SETTINGS", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
+        "ALLOW_PUBLIC_REGISTER": geo_app.app.config.get("ALLOW_PUBLIC_REGISTER"),
         "SECRET_KEY": geo_app.app.config.get("SECRET_KEY"),
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -43,6 +44,7 @@ def isolated_auth_app():
         geo_app.F_USERS = os.path.join(tmp, "users.json")
         geo_app.F_USER_SETTINGS = os.path.join(tmp, "user_settings")
         geo_app.app.config["AUTH_DISABLED"] = False
+        geo_app.app.config["ALLOW_PUBLIC_REGISTER"] = False
         geo_app.app.config["SECRET_KEY"] = "test-secret"
         try:
             yield tmp
@@ -75,6 +77,10 @@ def isolated_auth_app():
                 geo_app.app.config.pop("AUTH_DISABLED", None)
             else:
                 geo_app.app.config["AUTH_DISABLED"] = original["AUTH_DISABLED"]
+            if original["ALLOW_PUBLIC_REGISTER"] is None:
+                geo_app.app.config.pop("ALLOW_PUBLIC_REGISTER", None)
+            else:
+                geo_app.app.config["ALLOW_PUBLIC_REGISTER"] = original["ALLOW_PUBLIC_REGISTER"]
             geo_app.app.config["SECRET_KEY"] = original["SECRET_KEY"]
 
 
@@ -130,8 +136,23 @@ class AuthRouteTests(unittest.TestCase):
             self.assertEqual(logout.status_code, 200)
             self.assertIsNone(client.get("/api/auth/me").get_json()["user"])
 
-    def test_register_creates_operator_and_logs_in(self):
+    def test_register_is_disabled_by_default(self):
         with isolated_auth_app():
+            client = geo_app.app.test_client()
+
+            response = client.post(
+                "/api/auth/register",
+                json={"username": "new-operator", "password": "secret-pass"},
+            )
+
+            self.assertEqual(response.status_code, 403)
+            self.assertEqual(response.get_json()["error"], "registration_disabled")
+            self.assertIsNone(authenticate_user(geo_app.F_USERS, "new-operator", "secret-pass"))
+            self.assertIsNone(client.get("/api/auth/me").get_json()["user"])
+
+    def test_register_creates_operator_and_logs_in_when_explicitly_enabled(self):
+        with isolated_auth_app():
+            geo_app.app.config["ALLOW_PUBLIC_REGISTER"] = True
             client = geo_app.app.test_client()
 
             response = client.post(
@@ -147,8 +168,9 @@ class AuthRouteTests(unittest.TestCase):
             self.assertEqual(client.get("/api/auth/me").get_json()["user"]["username"], "new-operator")
             self.assertIsNotNone(authenticate_user(geo_app.F_USERS, "new-operator", "secret-pass"))
 
-    def test_register_rejects_duplicate_username(self):
+    def test_register_rejects_duplicate_username_when_explicitly_enabled(self):
         with isolated_auth_app():
+            geo_app.app.config["ALLOW_PUBLIC_REGISTER"] = True
             create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
             client = geo_app.app.test_client()
 
@@ -161,6 +183,25 @@ class AuthRouteTests(unittest.TestCase):
             self.assertEqual(response.get_json()["error"], "user_exists")
             self.assertIsNone(authenticate_user(geo_app.F_USERS, "alice", "new-pass"))
             self.assertIsNotNone(authenticate_user(geo_app.F_USERS, "alice", "secret-pass"))
+
+    def test_login_page_hides_public_register_by_default(self):
+        with isolated_auth_app():
+            client = geo_app.app.test_client()
+
+            page = client.get("/login").get_data(as_text=True)
+
+            self.assertIn("loginForm", page)
+            self.assertNotIn("registerForm", page)
+
+    def test_login_page_shows_public_register_when_explicitly_enabled(self):
+        with isolated_auth_app():
+            geo_app.app.config["ALLOW_PUBLIC_REGISTER"] = True
+            client = geo_app.app.test_client()
+
+            page = client.get("/login").get_data(as_text=True)
+
+            self.assertIn("loginForm", page)
+            self.assertIn("registerForm", page)
 
 
 def login_as(client, username, password="secret-pass"):

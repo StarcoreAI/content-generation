@@ -118,6 +118,13 @@ def auth_disabled():
     return bool(app.config.get("AUTH_DISABLED"))
 
 
+def public_register_enabled():
+    value = app.config.get("ALLOW_PUBLIC_REGISTER")
+    if value is None:
+        value = os.environ.get("GEO_ALLOW_PUBLIC_REGISTER", "")
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
 def can_access_client(client):
     if auth_disabled():
         return bool(client)
@@ -547,38 +554,18 @@ def parse_ai_json(raw):
 # ══════════════════════════════════════════════════════
 @app.route("/login")
 def login_page():
-    return """<!doctype html>
-<html lang="zh-CN">
-<head><meta charset="utf-8"><title>GEO Agent 登录</title></head>
-<body>
-  <h1>GEO Agent</h1>
-  <form id="loginForm">
-    <input name="username" placeholder="用户名" autocomplete="username">
-    <input name="password" type="password" placeholder="密码" autocomplete="current-password">
-    <button type="submit">登录</button>
-  </form>
+    register_html = ""
+    register_script = ""
+    if public_register_enabled():
+        register_html = """
   <hr>
   <h2>新同事注册</h2>
   <form id="registerForm">
     <input name="username" placeholder="用户名" autocomplete="username">
     <input name="password" type="password" placeholder="密码" autocomplete="new-password">
     <button type="submit">注册并进入</button>
-  </form>
-  <script>
-    document.getElementById('loginForm').addEventListener('submit', async (event) => {
-      event.preventDefault();
-      const form = new FormData(event.target);
-      const response = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          username: form.get('username'),
-          password: form.get('password')
-        })
-      });
-      if (response.ok) location.href = '/';
-      else alert('用户名或密码错误');
-    });
+  </form>"""
+        register_script = """
     document.getElementById('registerForm').addEventListener('submit', async (event) => {
       event.preventDefault();
       const form = new FormData(event.target);
@@ -595,10 +582,38 @@ def login_page():
         const payload = await response.json().catch(() => ({}));
         alert(payload.message || '注册失败');
       }
+    });"""
+    page = """<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>GEO Agent 登录</title></head>
+<body>
+  <h1>GEO Agent</h1>
+  <form id="loginForm">
+    <input name="username" placeholder="用户名" autocomplete="username">
+    <input name="password" type="password" placeholder="密码" autocomplete="current-password">
+    <button type="submit">登录</button>
+  </form>
+{register_html}
+  <script>
+    document.getElementById('loginForm').addEventListener('submit', async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          username: form.get('username'),
+          password: form.get('password')
+        })
+      });
+      if (response.ok) location.href = '/';
+      else alert('用户名或密码错误');
     });
+{register_script}
   </script>
 </body>
 </html>"""
+    return page.replace("{register_html}", register_html).replace("{register_script}", register_script)
 
 
 @app.route("/")
@@ -616,6 +631,8 @@ def auth_login():
 
 @app.route("/api/auth/register", methods=["POST"])
 def auth_register():
+    if not public_register_enabled():
+        return jsonify({"error": "registration_disabled", "message": "注册入口已关闭，请联系管理员创建账号"}), 403
     data = request.json or {}
     username = str(data.get("username") or "").strip()
     password = str(data.get("password") or "")
