@@ -67,8 +67,8 @@ if not exist "%GEO_NODE_CRAWLER_ROOT%\src\adapters\index.js" (
 if not exist "%GEO_NODE_CRAWLER_ROOT%\storage" mkdir "%GEO_NODE_CRAWLER_ROOT%\storage"
 set "STORAGE_STATE_PATH=%GEO_NODE_CRAWLER_ROOT%\storage\state.json"
 
-echo [GEO] preflight check...
-python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --username "%GEO_WORKER_USERNAME%" --password "%GEO_WORKER_PASSWORD%" --platforms "%GEO_WORKER_PLATFORMS%" --check --auth-mode soft
+echo [GEO] environment preflight check...
+python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --username "%GEO_WORKER_USERNAME%" --password "%GEO_WORKER_PASSWORD%" --platforms "%GEO_WORKER_PLATFORMS%" --check --auth-mode none
 if errorlevel 1 (
   echo [ERROR] preflight check failed.
   exit /b 1

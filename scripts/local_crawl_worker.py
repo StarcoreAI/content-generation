@@ -160,13 +160,30 @@ def print_check_result(result):
     log("preflight basic checks passed" if result["ok"] else "preflight basic checks failed")
 
 
-def run_job(job, run_crawler=run_node_crawler, output_root=None, timeout_s=1800):
+def is_login_recovery_error(error):
+    message = str(error or "").lower()
+    return any(
+        marker in message
+        for marker in [
+            "need_login",
+            "cookie_expired",
+            "login action",
+            "login required",
+            "saved state is missing",
+            "no longer valid",
+        ]
+    )
+
+
+def run_job(job, run_crawler=run_node_crawler, run_login=None, output_root=None, timeout_s=1800):
     platform = job.get("platform", "")
     questions = expand_job_questions(job)
     output_root = Path(output_root or Path("logs") / "local-worker")
     output_dir = output_root / str(job.get("id") or "unknown-job") / platform
     output_dir.mkdir(parents=True, exist_ok=True)
-    try:
+    run_login = run_login or run_login_job
+
+    def crawl_once():
         result = run_crawler(
             platform,
             questions,
@@ -183,11 +200,32 @@ def run_job(job, run_crawler=run_node_crawler, output_root=None, timeout_s=1800)
             "logs": [str(output_dir)],
             "crawler_engine": "node",
         }
+
+    try:
+        return crawl_once()
     except Exception as exc:
+        first_error = str(exc)
+        if is_login_recovery_error(first_error):
+            log(f"{platform} login expired during crawl; opening manual login and retrying job once")
+            login_payload = run_login(job, timeout_s=timeout_s)
+            if login_payload.get("status") == "completed":
+                try:
+                    return crawl_once()
+                except Exception as retry_exc:
+                    return {
+                        "status": "failed",
+                        "summary": {"total": len(questions), "success": 0},
+                        "error": str(retry_exc),
+                        "results": [],
+                        "logs": [str(output_dir)],
+                        "crawler_engine": "node",
+                    }
+            login_error = login_payload.get("error") or "manual login failed"
+            first_error = f"{first_error}; login recovery failed: {login_error}"
         return {
             "status": "failed",
             "summary": {"total": len(questions), "success": 0},
-            "error": str(exc),
+            "error": first_error,
             "results": [],
             "logs": [str(output_dir)],
             "crawler_engine": "node",

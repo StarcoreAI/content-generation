@@ -342,9 +342,9 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertEqual(cloud.submit_attempts, 2)
         self.assertEqual(len(cloud.submitted), 1)
 
-    def test_run_job_returns_failed_payload_when_crawler_raises(self):
+    def test_run_job_returns_failed_payload_when_crawler_raises_non_login_error(self):
         def failing_crawler(*_args, **_kwargs):
-            raise RuntimeError("need_login: login action detected")
+            raise RuntimeError("network timeout")
 
         with tempfile.TemporaryDirectory() as tmp:
             payload = local_crawl_worker.run_job(
@@ -354,8 +354,44 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             )
 
         self.assertEqual(payload["status"], "failed")
-        self.assertIn("need_login", payload["error"])
+        self.assertIn("network timeout", payload["error"])
         self.assertEqual(payload["summary"], {"total": 1, "success": 0})
+
+    def test_run_job_recovers_login_failure_and_retries_current_job_once(self):
+        calls = []
+        login_calls = []
+
+        def flaky_crawler(platform, questions, **kwargs):
+            calls.append({"platform": platform, "questions": questions, "kwargs": kwargs})
+            if len(calls) == 1:
+                raise RuntimeError("need_login: login action detected")
+            return {
+                "ok": True,
+                "total": len(questions),
+                "success": len(questions),
+                "results": [
+                    {"ok": True, "question": question, "answer": "回答", "refs": []}
+                    for question in questions
+                ],
+            }
+
+        def fake_login(job, timeout_s=1800):
+            login_calls.append((job["platform"], timeout_s))
+            return {"status": "completed", "summary": {"total": 1, "success": 1}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = local_crawl_worker.run_job(
+                {"id": "job-1", "platform": "qwen", "questions": ["问题A"]},
+                run_crawler=flaky_crawler,
+                run_login=fake_login,
+                output_root=Path(tmp),
+                timeout_s=77,
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["summary"], {"total": 1, "success": 1})
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(login_calls, [("qwen", 77)])
 
     def test_run_once_handles_login_job_with_manual_auth_preflight(self):
         cloud = FakeCloudClient([
