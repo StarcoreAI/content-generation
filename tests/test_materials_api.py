@@ -12,7 +12,6 @@ def isolated_material_app():
     original = {
         "D": geo_app.D,
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
-        "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
@@ -20,11 +19,9 @@ def isolated_material_app():
     with tempfile.TemporaryDirectory() as tmp:
         geo_app.D = tmp
         geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
-        geo_app.LOCAL_PDF_FOLDER = os.path.join(tmp, "pdf")
         geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
         geo_app.app.config["AUTH_DISABLED"] = True
-        os.makedirs(geo_app.LOCAL_PDF_FOLDER, exist_ok=True)
         try:
             yield tmp
         finally:
@@ -42,37 +39,16 @@ def isolated_material_app():
 
 
 class MaterialApiTests(unittest.TestCase):
-    def test_local_list_import_auto_parses_confirms_and_delete(self):
+    def test_local_pdf_import_endpoints_are_removed(self):
         with isolated_material_app():
-            with open(os.path.join(geo_app.LOCAL_PDF_FOLDER, "client_profile.txt"), "w", encoding="utf-8") as f:
-                f.write("Rabbit Dental has clinics, doctors, orthodontics, and implant services.")
             client = geo_app.app.test_client()
 
-            local = client.get("/api/materials/local")
-            self.assertEqual(local.status_code, 200)
-            self.assertEqual(local.get_json()["files"][0]["name"], "client_profile.txt")
-
-            imported = client.post(
+            self.assertEqual(client.get("/api/materials/local").status_code, 404)
+            response = client.post(
                 "/api/materials/client-1/import-local",
                 json={"filenames": ["client_profile.txt"]},
             )
-            self.assertEqual(imported.status_code, 200)
-            material = imported.get_json()["materials"][0]
-            self.assertEqual(material["source"], "local_pdf_folder")
-            self.assertEqual(material["original_name"], "client_profile.txt")
-            self.assertTrue(material["confirmed"])
-            self.assertIn("cache_dir", material)
-            self.assertGreater(material["text_chars"], 10)
-
-            listed = client.get("/api/materials/client-1")
-            self.assertEqual(listed.status_code, 200)
-            listed_material = listed.get_json()[0]
-            self.assertEqual(listed_material["id"], material["id"])
-            self.assertTrue(listed_material["confirmed"])
-
-            deleted = client.delete(f"/api/materials/client-1/{material['id']}")
-            self.assertEqual(deleted.status_code, 200)
-            self.assertEqual(client.get("/api/materials/client-1").get_json(), [])
+            self.assertIn(response.status_code, {404, 405})
 
     def test_upload_accepts_multiple_files_and_auto_parses(self):
         with isolated_material_app():
@@ -95,6 +71,77 @@ class MaterialApiTests(unittest.TestCase):
             self.assertEqual([m["original_name"] for m in body["materials"]], ["a.txt", "b.md"])
             self.assertTrue(all(m["confirmed"] for m in body["materials"]))
             self.assertTrue(all(m.get("cache_dir") for m in body["materials"]))
+
+    def test_upload_accepts_xlsx_for_package_analysis(self):
+        with isolated_material_app():
+            client = geo_app.app.test_client()
+            response = client.post(
+                "/api/materials/client-1/upload",
+                data={
+                    "file": [
+                        (io.BytesIO(b"not a real workbook but saved for package extractor"), "params.xlsx"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+
+            self.assertEqual(response.status_code, 200)
+            body = response.get_json()
+            self.assertTrue(body["ok"])
+            self.assertEqual(body["materials"][0]["original_name"], "params.xlsx")
+
+    def test_analyze_package_returns_preview_and_download(self):
+        original_runner = geo_app.run_material_package_pipeline
+        try:
+            def fake_runner(package_dir, output_dir, **_kwargs):
+                from pathlib import Path
+                from services.storage import save_json
+
+                output = Path(output_dir)
+                output.mkdir(parents=True, exist_ok=True)
+                markdown = "# 客户资料注入包\n\n测试结果"
+                (output / "latest_injection.md").write_text(markdown, encoding="utf-8")
+                status = {
+                    "ok": True,
+                    "status": "completed",
+                    "filter": {"readable_units": 1, "kept_units": 1, "errors": 0},
+                    "reducer": {"input_units": 1, "reduced_units": 1, "errors": 0},
+                    "output": {"markdown_chars": len(markdown), "errors": 0},
+                    "outputs": {
+                        "filter": str(output / "latest_filter.json"),
+                        "reducer": str(output / "latest_reducer.json"),
+                        "markdown": str(output / "latest_injection.md"),
+                        "status": str(output / "latest_status.json"),
+                    },
+                }
+                save_json(output / "latest_status.json", status)
+                return status
+
+            geo_app.run_material_package_pipeline = fake_runner
+            with isolated_material_app():
+                client = geo_app.app.test_client()
+                client.post(
+                    "/api/materials/client-1/upload",
+                    data={"file": [(io.BytesIO(b"Client profile text for package."), "profile.txt")]},
+                    content_type="multipart/form-data",
+                )
+
+                analyzed = client.post("/api/materials/client-1/analyze-package")
+                self.assertEqual(analyzed.status_code, 200)
+                analyzed_body = analyzed.get_json()
+                self.assertTrue(analyzed_body["ok"])
+                self.assertIn("测试结果", analyzed_body["markdown"])
+
+                latest = client.get("/api/materials/client-1/package-result")
+                self.assertEqual(latest.status_code, 200)
+                self.assertIn("测试结果", latest.get_json()["markdown"])
+
+                download = client.get("/api/materials/client-1/injection.md")
+                self.assertEqual(download.status_code, 200)
+                self.assertIn("测试结果", download.get_data(as_text=True))
+                download.close()
+        finally:
+            geo_app.run_material_package_pipeline = original_runner
 
 
 if __name__ == "__main__":

@@ -28,7 +28,6 @@ def isolated_app_data():
         "F_CRAWL_JOBS": getattr(geo_app, "F_CRAWL_JOBS", None),
         "F_REFERENCE_INTELLIGENCE": getattr(geo_app, "F_REFERENCE_INTELLIGENCE", None),
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
-        "LOCAL_PDF_FOLDER": getattr(geo_app, "LOCAL_PDF_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
@@ -50,9 +49,6 @@ def isolated_app_data():
         geo_app.F_REFERENCE_INTELLIGENCE = os.path.join(tmp, "reference_intelligence")
         if hasattr(geo_app, "UPLOAD_FOLDER"):
             geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
-        if hasattr(geo_app, "LOCAL_PDF_FOLDER"):
-            geo_app.LOCAL_PDF_FOLDER = os.path.join(tmp, "pdf")
-            os.makedirs(geo_app.LOCAL_PDF_FOLDER, exist_ok=True)
         if hasattr(geo_app, "F_MATERIALS_INDEX"):
             geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         if hasattr(geo_app, "MATERIAL_CACHE_FOLDER"):
@@ -434,8 +430,8 @@ class CoreFunctionTests(unittest.TestCase):
     def test_content_generation_material_bundle_uses_confirmed_fact_cards(self):
         with isolated_app_data():
             cid = "client-1"
-            local_file = os.path.join(geo_app.LOCAL_PDF_FOLDER, "doctor.txt")
-            with open(local_file, "w", encoding="utf-8") as f:
+            source_file = os.path.join(geo_app.D, "doctor.txt")
+            with open(source_file, "w", encoding="utf-8") as f:
                 f.write(
                     "兔博士口腔成立于2003年。\n"
                     "李璞医生，隐适美认证医师，从事正畸专科13年。\n"
@@ -443,7 +439,7 @@ class CoreFunctionTests(unittest.TestCase):
                     "禁止写保证治愈、全市第一、最低价。\n"
                 )
             service = geo_app.material_service()
-            material = service.import_local_material(cid, "doctor.txt")
+            material = service.save_uploaded_material(cid, source_file, "doctor.txt")
             service.parse_material(cid, material["id"])
             service.confirm_material(cid, material["id"], True)
 

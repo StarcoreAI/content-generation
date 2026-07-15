@@ -8,6 +8,7 @@ function navTo(page, el) {
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
+  if (page === 'materials') loadMaterialAnalysis();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
@@ -20,7 +21,6 @@ let currentGoal = '';
 let currentPlatform = 'all';  // 数据页固定汇总全部平台
 let currentClientPlatforms = [];
 let groupPlatformMode = 'contract';
-const loginPollTimers = {};
 const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
 const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];
 
@@ -149,10 +149,8 @@ function onClientChange() {
   if (document.getElementById('page-daily')?.classList.contains('on')) {
     loadDailyPage();
   }
-  // 如果当前在内容生产页面，自动刷新资料+模板
-  if (document.getElementById('page-content')?.classList.contains('on')) {
-    loadContent();
-  }
+  if (document.getElementById('page-content')?.classList.contains('on')) loadContent();
+  if (document.getElementById('page-materials')?.classList.contains('on')) loadMaterialAnalysis();
   if (document.getElementById('page-reference')?.classList.contains('on')) {
     loadReferenceIntelligence();
   }
@@ -217,16 +215,12 @@ async function delClient(id) {
   toast('已删除'); loadClients(); loadClientsDropdown();
 }
 
-// ── 平台登录状态 ──────────────────────────────────────
+// ── 平台重新登录 ──────────────────────────────────────
 async function platformLogin(platform) {
   const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
   const pName = platform.charAt(0).toUpperCase() + platform.slice(1);
   const btnId = `btnLogin${pName}`;
   const btn = document.getElementById(btnId);
-  if (loginPollTimers[platform]) {
-    clearInterval(loginPollTimers[platform]);
-    delete loginPollTimers[platform];
-  }
   if (btn) { btn.disabled = true; btn.textContent = '通知中…'; }
   try {
     await api('/api/crawl_jobs/login', 'POST', { platform });
@@ -242,34 +236,6 @@ async function platformLogin(platform) {
 }
 function doubaoLogin() { platformLogin('doubao'); }
 
-async function checkAllLoginStatus() {
-  const platforms = CRAWL_PLATFORM_ORDER;
-  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
-  const statusDiv = document.getElementById('platformLoginStatus');
-  const legacyEl = document.getElementById('loginStatus');
-  let html = '';
-  for (const p of platforms) {
-    try {
-      const s = await api(`/api/platform/check_login?platform=${p}`);
-      const statusMap = {
-        ok: {color:'var(--teal)', icon:'✅', label:'已登录'},
-        expired: {color:'var(--amber)', icon:'⚠', label:'已过期'},
-        unknown: {color:'var(--amber)', icon:'?', label:'需重新登录'},
-        missing: {color:'var(--text3)', icon:'○', label:'未登录'}
-      };
-      const meta = statusMap[s.status] || statusMap.missing;
-      html += `<span title="${s.message||''}" style="font-size:11px;color:${meta.color};font-weight:600">${meta.icon} ${names[p]} ${meta.label}</span>`;
-      if (p === 'doubao' && legacyEl) {
-        legacyEl.innerHTML = s.logged_in
-          ? '<div style="width:8px;height:8px;border-radius:50%;background:#4ade80"></div><span style="color:var(--teal)">已登录</span>'
-          : `<div style="width:8px;height:8px;border-radius:50%;background:#f59e0b"></div><span style="color:var(--amber)">${meta.label}</span>`;
-      }
-    } catch {}
-  }
-  if (statusDiv) statusDiv.innerHTML = html;
-}
-function checkLoginStatus() { checkAllLoginStatus(); }
-
 // ── Content ───────────────────────────────────────────
 let contentTop20Articles = [];
 let contentReferencePlugins = [];
@@ -278,7 +244,6 @@ let selectedContentReferencePluginIndex = -1;
 
 async function loadContent() {
   ensureContentHistoryDate();
-  loadMaterials();
   loadContentTop20Samples();
   loadContentSubtypePlugins();
   loadContentGenerations();
@@ -738,7 +703,6 @@ async function openGroup(gid) {
   document.getElementById('groupDetailCard').scrollIntoView({behavior:'smooth'});
   renderGroupQuestions();
   renderGroupPlatformChoices();
-  checkAllLoginStatus();
 }
 
 function renderGroupQuestions() {
@@ -1184,13 +1148,19 @@ function renderRefTags(refs, brand) {
 // 资料上传 & 智能主题生成
 // ══════════════════════════════════════════════════════
 let smartTopics = [];
+let latestMaterialPackageMarkdown = '';
+
+function loadMaterialAnalysis() {
+  loadMaterials();
+  loadMaterialPackageResult();
+}
 
 async function loadMaterials() {
   if (!currentClientId) return;
   const files = await api('/api/materials/' + currentClientId);
   const el = document.getElementById('materialList');
   if (!files.length) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / docx</div>';
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / doc / docx / xlsx</div>';
     return;
   }
   el.innerHTML = files.map(f => `
@@ -1258,41 +1228,92 @@ function materialIssueText(file) {
   return '';
 }
 
-async function loadLocalMaterials() {
-  const box = document.getElementById('localMaterialList');
+function renderMaterialPackageResult(result) {
+  const box = document.getElementById('materialPackageResult');
+  if (!box) return;
+  const status = result?.status || result || {};
+  const markdown = result?.markdown || '';
+  latestMaterialPackageMarkdown = markdown;
+  if (!markdown && status.status !== 'failed') {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
   box.style.display = 'block';
-  box.innerHTML = '<div style="font-size:11px;color:var(--text3)">读取本地 pdf/ 文件夹中...</div>';
+  if (status.status === 'failed') {
+    box.innerHTML = `<div style="font-size:12px;font-weight:800;color:var(--red)">AI解析失败：${escHtml(status.error || '未知错误')}</div>`;
+    return;
+  }
+  const filter = status.filter || {};
+  const reducer = status.reducer || {};
+  const output = status.output || {};
+  const preview = window.marked ? marked.parse(markdown) : `<pre>${escHtml(markdown)}</pre>`;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:13px;font-weight:900;color:#312e81">AI资料解析结果</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">
+          可读 ${filter.readable_units ?? '-'} · 保留 ${filter.kept_units ?? '-'} · 二阶段输出 ${reducer.reduced_units ?? '-'} · Markdown ${output.markdown_chars ?? markdown.length} 字
+        </div>
+      </div>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" onclick="copyMaterialPackageMarkdown()">复制</button>
+        <button class="btn btn-p btn-sm" onclick="downloadMaterialPackageMarkdown()">下载.md</button>
+      </div>
+    </div>
+    <div class="report-md" style="max-height:360px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${preview}</div>
+  `;
+}
+
+async function loadMaterialPackageResult() {
+  if (!currentClientId) return;
+  const result = await api(`/api/materials/${currentClientId}/package-result`);
+  if (result?.ok === false && !result.markdown) {
+    renderMaterialPackageResult({});
+    return;
+  }
+  renderMaterialPackageResult(result);
+}
+
+async function analyzeMaterialPackage() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const box = document.getElementById('materialPackageResult');
+  if (box) {
+    box.style.display = 'block';
+    box.innerHTML = '<div style="font-size:12px;font-weight:800;color:var(--pri)">AI正在解析资料，请等待...</div>';
+  }
+  spin('spAnalyzeMaterials', true);
+  disableBtn('btnAnalyzeMaterials', true);
   try {
-    const r = await api('/api/materials/local');
-    const files = r.files || [];
-    if (!files.length) {
-      box.innerHTML = '<div style="font-size:11px;color:var(--text3)">本地 pdf/ 文件夹暂无可导入资料</div>';
+    const result = await api(`/api/materials/${currentClientId}/analyze-package`, 'POST', {});
+    if (result?.ok === false || result?.error) {
+      renderMaterialPackageResult({status: {status: 'failed', error: result.error || '解析失败'}, markdown: ''});
+      toast(result.error || 'AI解析失败', 'err');
       return;
     }
-    box.innerHTML = `
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-        <div style="font-size:11px;font-weight:800;color:var(--text2)">本地 pdf/ 文件夹资料</div>
-        <button class="btn btn-p btn-sm" onclick="importSelectedLocalMaterials()">导入选中</button>
-      </div>
-      ${files.map(f => `
-        <label style="display:flex;align-items:center;gap:8px;padding:6px 0;border-bottom:1px solid var(--border2);font-size:11px;color:var(--text2)">
-          <input type="checkbox" class="local-material-choice" value="${escHtml(f.name)}" style="width:auto">
-          <span style="flex:1;font-weight:700;color:var(--text)">${escHtml(f.name)}</span>
-          <span style="color:var(--text3)">${(f.size/1024).toFixed(1)}KB</span>
-        </label>`).join('')}
-    `;
+    renderMaterialPackageResult({status: result, markdown: result.markdown || ''});
+    toast('AI资料解析完成');
   } catch(e) {
-    box.innerHTML = `<div style="font-size:11px;color:var(--red)">读取失败：${escHtml(e.message)}</div>`;
+    renderMaterialPackageResult({status: {status: 'failed', error: e.message}, markdown: ''});
+    toast('AI解析失败：' + e.message, 'err');
+  } finally {
+    spin('spAnalyzeMaterials', false);
+    disableBtn('btnAnalyzeMaterials', false);
   }
 }
 
-async function importSelectedLocalMaterials() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  const filenames = Array.from(document.querySelectorAll('.local-material-choice:checked')).map(el => el.value);
-  if (!filenames.length) { toast('请选择要导入的本地资料','err'); return; }
-  const r = await api('/api/materials/' + currentClientId + '/import-local', 'POST', {filenames});
-  toast(`已导入 ${r.materials?.length || filenames.length} 份资料 ✦`);
-  loadMaterials();
+function copyMaterialPackageMarkdown() {
+  if (!latestMaterialPackageMarkdown) { toast('暂无可复制结果','err'); return; }
+  navigator.clipboard.writeText(latestMaterialPackageMarkdown).then(() => toast('资料已复制 ✦'));
+}
+
+function downloadMaterialPackageMarkdown() {
+  if (!currentClientId || !latestMaterialPackageMarkdown) { toast('暂无可下载结果','err'); return; }
+  window.location.href = `/api/materials/${currentClientId}/injection.md`;
+}
+
+function expandMaterialPackage() {
+  toast('AI联网扩展资料暂未接入', 'err');
 }
 
 // ══════════════════════════════════════════════════════

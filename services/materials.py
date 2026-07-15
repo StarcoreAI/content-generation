@@ -11,7 +11,7 @@ from xml.etree import ElementTree as ET
 from services.storage import save_json
 
 
-ALLOWED_MATERIAL_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".doc"}
+ALLOWED_MATERIAL_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".doc", ".xlsx", ".xls"}
 UNPARSED = "未解析"
 PARSED_PENDING_CONFIRM = "等待人工确认"
 PARSE_FAILED = "解析失败"
@@ -25,13 +25,11 @@ class MaterialService:
         self,
         root_dir=".",
         upload_dir="data/uploads",
-        local_pdf_dir="pdf",
         index_path="data/materials_index.json",
         cache_dir="data/material_cache",
     ):
         self.root_dir = Path(root_dir)
         self.upload_dir = Path(upload_dir)
-        self.local_pdf_dir = Path(local_pdf_dir)
         self.index_path = Path(index_path)
         self.cache_dir = Path(cache_dir)
 
@@ -84,24 +82,6 @@ class MaterialService:
     def _is_allowed(self, filename):
         return Path(filename).suffix.lower() in ALLOWED_MATERIAL_EXTENSIONS
 
-    def list_local_materials(self):
-        if not self.local_pdf_dir.exists():
-            return []
-        files = []
-        for path in sorted(self.local_pdf_dir.iterdir(), key=lambda p: p.name.lower()):
-            if not path.is_file() or not self._is_allowed(path.name):
-                continue
-            files.append(
-                {
-                    "name": path.name,
-                    "size": path.stat().st_size,
-                    "modified": time.strftime(
-                        "%Y-%m-%d %H:%M", time.localtime(path.stat().st_mtime)
-                    ),
-                }
-            )
-        return files
-
     def list_client_materials(self, client_id):
         data = self._load_index()
         items = self._client_materials(data, client_id)
@@ -131,16 +111,6 @@ class MaterialService:
         self._client_materials(data, client_id).append(material)
         self._save_index(data)
         return material
-
-    def import_local_material(self, client_id, filename):
-        if not filename or Path(filename).name != filename or not self._is_allowed(filename):
-            raise ValueError("不支持的本地资料文件")
-        source = self.local_pdf_dir / filename
-        if not source.exists() or not source.is_file():
-            raise FileNotFoundError(filename)
-        return self.save_uploaded_material(
-            client_id, source, source.name, source="local_pdf_folder"
-        )
 
     def _make_material_record(
         self, client_id, material_id, original_name, stored_name, path, source

@@ -121,6 +121,26 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("const batchId = `batch-${Date.now()}-", html)
         self.assertIn("batch_id: batchId", html)
 
+    def test_group_detail_only_offers_platform_relogin_actions(self):
+        html = read_frontend_source()
+
+        self.assertIn("平台重新登录：", html)
+        for platform in ["doubao", "deepseek", "yuanbao", "qwen", "kimi"]:
+            name = platform[:1].upper() + platform[1:]
+            self.assertIn(f'id="btnLogin{name}"', html)
+            self.assertIn(f"platformLogin('{platform}')", html)
+
+        self.assertNotIn("检查状态", html)
+        self.assertNotIn('id="platformLoginStatus"', html)
+
+        open_group = re.search(
+            r"async function openGroup\(gid\) \{(?P<body>.*?)\n\}",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(open_group)
+        self.assertNotIn("checkAllLoginStatus", open_group.group("body"))
+
     def test_group_questions_use_batch_add_textarea(self):
         html = read_frontend_source()
 
@@ -335,20 +355,40 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn('id="ct-brand"', html)
         self.assertNotIn('id="topicInstruction"', html)
 
-    def test_content_material_library_auto_parses_and_only_exposes_delete(self):
+    def test_material_analysis_is_its_own_module_between_reference_and_content(self):
         html = read_frontend_source()
 
+        self.assertLess(html.index("navTo('reference'"), html.index("navTo('materials'"))
+        self.assertLess(html.index("navTo('materials'"), html.index("navTo('content'"))
+        self.assertIn('id="page-materials"', html)
+        self.assertIn("客户资料解析", html)
         self.assertIn('id="materialUpload"', html)
         self.assertIn("multiple", html)
-        self.assertIn('id="localMaterialList"', html)
-        self.assertIn("loadLocalMaterials()", html)
-        self.assertIn("importSelectedLocalMaterials()", html)
-        self.assertIn("/api/materials/local", html)
-        self.assertIn("/import-local", html)
+        self.assertIn(".xlsx", html)
+        self.assertIn('id="btnAnalyzeMaterials"', html)
+        self.assertIn('id="btnExpandMaterials"', html)
+        self.assertIn('id="materialPackageResult"', html)
+        self.assertIn("analyzeMaterialPackage()", html)
+        self.assertIn("expandMaterialPackage()", html)
+        self.assertIn("loadMaterialPackageResult()", html)
+        self.assertIn("copyMaterialPackageMarkdown()", html)
+        self.assertIn("/analyze-package", html)
+        self.assertIn("/package-result", html)
+        self.assertIn("/injection.md", html)
+        self.assertNotIn('id="localMaterialList"', html)
+        self.assertNotIn("loadLocalMaterials()", html)
+        self.assertNotIn("importSelectedLocalMaterials()", html)
+        self.assertNotIn("/api/materials/local", html)
+        self.assertNotIn("/import-local", html)
         self.assertNotIn("parseMaterial(", html)
         self.assertNotIn("confirmMaterial(", html)
         self.assertIn("delMaterial(", html)
         self.assertIn("materialDisplayStatus(", html)
+
+        content_page = html.split('id="page-content"', 1)[1].split('id="page-clients"', 1)[0]
+        self.assertNotIn('id="btnAnalyzeMaterials"', content_page)
+        self.assertNotIn('id="materialPackageResult"', content_page)
+        self.assertNotIn('id="btnExpandMaterials"', content_page)
 
     def test_retired_content_and_dashboard_api_calls_are_removed(self):
         html = read_frontend_source()

@@ -43,7 +43,6 @@ class StorageTests(unittest.TestCase):
             service = MaterialService(
                 root_dir=tmp_path,
                 upload_dir=tmp_path / "uploads",
-                local_pdf_dir=tmp_path / "pdf",
                 index_path=tmp_path / "materials_index.json",
                 cache_dir=tmp_path / "material_cache",
             )

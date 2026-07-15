@@ -25,6 +25,7 @@
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
     <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
+    <div class="t-ni" onclick="navTo('materials',this)">资料解析</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
   </div>
   <div class="t-right">
@@ -52,6 +53,7 @@
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
   <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
+  <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
   <div class="s-sec">配置</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
@@ -225,14 +227,13 @@
     </div>
     <div style="margin-top:12px;padding:10px 0;border-top:1.5px solid var(--border2)">
       <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-        <span style="font-size:11px;color:var(--text3);font-weight:600">平台登录：</span>
+        <span style="font-size:11px;color:var(--text3);font-weight:600">平台重新登录：</span>
         <button class="btn btn-o btn-sm" id="btnLoginDoubao" onclick="platformLogin('doubao')">🤖 豆包</button>
         <button class="btn btn-o btn-sm" id="btnLoginDeepseek" onclick="platformLogin('deepseek')">🔍 DeepSeek</button>
         <button class="btn btn-o btn-sm" id="btnLoginYuanbao" onclick="platformLogin('yuanbao')">💎 元宝</button>
         <button class="btn btn-o btn-sm" id="btnLoginQwen" onclick="platformLogin('qwen')">🌙 千问</button>
-        <button class="btn btn-o btn-sm" onclick="checkAllLoginStatus()" style="color:var(--text3)">检查状态</button>
+        <button class="btn btn-o btn-sm" id="btnLoginKimi" onclick="platformLogin('kimi')">✨ Kimi</button>
       </div>
-      <div id="platformLoginStatus" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:6px"></div>
     </div>
     <div style="margin-top:14px;padding-top:14px;border-top:1.5px solid var(--border2);display:flex;gap:10px;align-items:center">
       <button class="btn btn-p" id="btnCrawlGroup" onclick="enqueueGroupCrawlJobs()">
@@ -389,6 +390,30 @@
   </div>
 </div>
 
+<!-- ═══ 客户资料解析 ═══ -->
+<div class="page" id="page-materials">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>客户资料解析</em></div><div class="pg-sub">上传客户资料，生成适合注入给大模型的 Markdown 资料包</div></div>
+  </div>
+  <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">📁 客户资料库</span><div class="card-sub">支持 txt / md / pdf / doc / docx / xlsx，解析结果可预览、复制和下载</div></div>
+      <div class="acts">
+        <button class="btn btn-p btn-sm" id="btnAnalyzeMaterials" onclick="analyzeMaterialPackage()">
+          <span class="spin" id="spAnalyzeMaterials" style="display:none"></span>AI解析资料
+        </button>
+        <button class="btn btn-o btn-sm" id="btnExpandMaterials" onclick="expandMaterialPackage()">AI联网扩展资料</button>
+        <label class="btn btn-o btn-sm" style="cursor:pointer">
+          上传资料
+          <input type="file" id="materialUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="uploadMaterial(this)">
+        </label>
+      </div>
+    </div>
+    <div id="materialList"><div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / doc / docx / xlsx</div></div>
+    <div id="materialPackageResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
+  </div>
+</div>
+
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
@@ -396,21 +421,6 @@
   </div>
   <!-- 深度分析导入提示 -->
   <div id="ct-import-banner" style="display:none;padding:10px 14px;background:linear-gradient(135deg,rgba(109,92,247,.08),rgba(244,114,182,.06));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm);margin-bottom:14px;font-size:12px;font-weight:700;color:var(--pri)"></div>
-  <!-- 资料上传区 -->
-  <div class="card">
-    <div class="card-hd">
-      <div><span class="card-title">📁 客户品牌资料库</span><div class="card-sub">上传品牌介绍、产品手册等，AI生产文章时自动参考</div></div>
-      <div class="acts">
-        <button class="btn btn-o btn-sm" onclick="loadLocalMaterials()">导入本地 pdf/</button>
-        <label class="btn btn-o btn-sm" style="cursor:pointer">
-          上传资料
-          <input type="file" id="materialUpload" accept=".txt,.md,.pdf,.docx" multiple style="display:none" onchange="uploadMaterial(this)">
-        </label>
-      </div>
-    </div>
-    <div id="localMaterialList" style="display:none;margin-bottom:12px;padding:10px;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm)"></div>
-    <div id="materialList"><div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / docx</div></div>
-  </div>
 
   <div class="card">
     <div class="card-hd">

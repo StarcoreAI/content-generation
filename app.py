@@ -5,7 +5,8 @@ GEO Agent v2 — 内容投放优化工作台
 import json, os, re, asyncio, threading, glob
 from datetime import datetime, date
 from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, redirect, session, url_for, has_request_context
+from pathlib import Path
+from flask import Flask, render_template, request, jsonify, redirect, session, url_for, has_request_context, send_file
 from openai import OpenAI
 from services import crawl_tasks as crawl_task_store
 from services import crawl_jobs as crawl_job_store
@@ -34,6 +35,7 @@ from services.deep_analysis import (
     extract_content_instruction,
 )
 from services.materials import MaterialService
+from services.material_pipeline import load_latest_material_package_result, run_material_package_pipeline
 from services.record_stats import (
     build_raw_platform_stats,
 )
@@ -41,6 +43,9 @@ from services.reference_stage1 import analyze_stage1_article
 from services.reference_stage2 import analyze_stage2_clusters
 from services.reference_stage3 import analyze_stage3_plugins
 from services.storage import load_json, save_json, update_json
+from scripts.run_material_filter import choose_material_filter_model
+from scripts.run_material_output import choose_material_output_model
+from scripts.run_material_reducer import choose_material_reducer_model
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("GEO_SECRET_KEY", "dev-secret-key-change-before-deploy")
@@ -1119,14 +1124,11 @@ CONTENT_INSTRUCTION_END
 # ══════════════════════════════════════════════════════
 # 客户资料上传模块
 # ══════════════════════════════════════════════════════
-import werkzeug
-from flask import send_from_directory
 
 UPLOAD_FOLDER = "data/uploads"
-LOCAL_PDF_FOLDER = "pdf"
 F_MATERIALS_INDEX = f"{D}/materials_index.json"
 MATERIAL_CACHE_FOLDER = f"{D}/material_cache"
-ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'docx', 'doc'}
+ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'docx', 'doc', 'xlsx', 'xls'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
@@ -1136,19 +1138,45 @@ def material_service():
     return MaterialService(
         root_dir=".",
         upload_dir=UPLOAD_FOLDER,
-        local_pdf_dir=LOCAL_PDF_FOLDER,
         index_path=F_MATERIALS_INDEX,
         cache_dir=MATERIAL_CACHE_FOLDER,
     )
 
-@app.route("/api/materials/local", methods=["GET"])
-def list_local_materials():
-    """列出项目 pdf/ 文件夹下可导入的客户资料。"""
-    return jsonify({"ok": True, "files": material_service().list_local_materials()})
+def material_package_output_dir(cid):
+    return Path(D) / "material_packages" / cid
+
+def material_package_ask_json(settings, model_name):
+    chosen = {**settings, "model": model_name}
+    return lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, chosen)
+
+def material_package_ask_text(settings, model_name):
+    chosen = {**settings, "model": model_name}
+    return lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, chosen)
+
+def run_client_material_package_analysis(cid):
+    package_dir = Path(UPLOAD_FOLDER) / cid
+    if not package_dir.exists() or not any(path.is_file() for path in package_dir.rglob("*")):
+        raise FileNotFoundError("no_material_files")
+    settings = get_settings()
+    models = {
+        "filter": choose_material_filter_model(settings),
+        "reducer": choose_material_reducer_model(settings),
+        "output": choose_material_output_model(settings),
+    }
+    return run_material_package_pipeline(
+        package_dir,
+        material_package_output_dir(cid),
+        ask_filter_json=material_package_ask_json(settings, models["filter"]),
+        ask_reducer_json=material_package_ask_json(settings, models["reducer"]),
+        ask_output_text=material_package_ask_text(settings, models["output"]),
+        models=models,
+    )
 
 @app.route("/api/materials/<cid>", methods=["GET"])
 def get_materials(cid):
     """获取客户已上传的资料列表"""
+    if cid == "local":
+        return jsonify({"error": "not_found"}), 404
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     service = material_service()
@@ -1205,28 +1233,43 @@ def upload_material(cid):
         "materials": materials,
     })
 
-@app.route("/api/materials/<cid>/import-local", methods=["POST"])
-def import_local_materials(cid):
-    """从项目 pdf/ 文件夹导入资料到当前客户。"""
+@app.route("/api/materials/<cid>/analyze-package", methods=["POST"])
+def analyze_material_package(cid):
+    """Run the three-stage material package analysis for the current client's uploads."""
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    data = request.get_json(silent=True) or {}
-    filenames = data.get("filenames")
-    if isinstance(filenames, str):
-        filenames = [filenames]
-    if not isinstance(filenames, list) or not filenames:
-        return jsonify({"error": "请选择要导入的文件"}), 400
-    service = material_service()
-    materials = []
     try:
-        for filename in filenames:
-            material = service.import_local_material(cid, str(filename))
-            materials.append(service.parse_material(cid, material["id"]))
+        status = run_client_material_package_analysis(cid)
     except FileNotFoundError:
-        return jsonify({"error": "找不到本地资料文件"}), 404
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify({"ok": True, "materials": materials})
+        return jsonify({"error": "no_material_files"}), 400
+    except Exception as exc:
+        output_dir = material_package_output_dir(cid)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        status = {"ok": False, "status": "failed", "error": str(exc)}
+        save_json(output_dir / "latest_status.json", status)
+        return jsonify(status), 500
+    result = load_latest_material_package_result(material_package_output_dir(cid))
+    return jsonify({**status, "markdown": result.get("markdown", "")})
+
+@app.route("/api/materials/<cid>/package-result", methods=["GET"])
+def get_material_package_result(cid):
+    """Return latest material injection markdown for browser preview."""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    result = load_latest_material_package_result(material_package_output_dir(cid))
+    if not result.get("markdown"):
+        return jsonify({"ok": False, "status": result.get("status", {}).get("status", "missing"), "markdown": ""}), 404
+    return jsonify(result)
+
+@app.route("/api/materials/<cid>/injection.md", methods=["GET"])
+def download_material_injection(cid):
+    """Download latest material injection markdown."""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    path = material_package_output_dir(cid) / "latest_injection.md"
+    if not path.exists():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(path, as_attachment=True, download_name="material_injection.md", mimetype="text/markdown; charset=utf-8")
 
 @app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
 def parse_material(cid, material_id):

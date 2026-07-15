@@ -10,24 +10,21 @@ def make_service(tmp_path):
     return MaterialService(
         root_dir=tmp_path,
         upload_dir=tmp_path / "uploads",
-        local_pdf_dir=tmp_path / "pdf",
         index_path=tmp_path / "materials_index.json",
         cache_dir=tmp_path / "material_cache",
     )
 
 
-def test_import_local_material_copies_file_and_records_metadata(tmp_path):
+def test_save_uploaded_material_copies_file_and_records_metadata(tmp_path):
     service = make_service(tmp_path)
-    local_dir = tmp_path / "pdf"
-    local_dir.mkdir()
-    source = local_dir / "client_profile.txt"
+    source = tmp_path / "client_profile.txt"
     source.write_text("Rabbit Dental was founded in 2003.", encoding="utf-8")
 
-    material = service.import_local_material("client-1", "client_profile.txt")
+    material = service.save_uploaded_material("client-1", source, "client_profile.txt")
 
     assert material["client_id"] == "client-1"
     assert material["original_name"] == "client_profile.txt"
-    assert material["source"] == "local_pdf_folder"
+    assert material["source"] == "upload"
     assert material["confirmed"] is False
     assert Path(material["path"]).exists()
     assert Path(material["path"]).read_text(encoding="utf-8") == "Rabbit Dental was founded in 2003."
@@ -35,9 +32,7 @@ def test_import_local_material_copies_file_and_records_metadata(tmp_path):
 
 def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
     service = make_service(tmp_path)
-    local_dir = tmp_path / "pdf"
-    local_dir.mkdir()
-    source = local_dir / "profile.txt"
+    source = tmp_path / "profile.txt"
     source.write_text(
         "\n".join(
             [
@@ -50,7 +45,7 @@ def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
         ),
         encoding="utf-8",
     )
-    material = service.import_local_material("client-1", "profile.txt")
+    material = service.save_uploaded_material("client-1", source, "profile.txt")
 
     parsed = service.parse_material("client-1", material["id"])
 
@@ -67,12 +62,12 @@ def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
 
 def test_build_generation_bundle_uses_auto_confirmed_materials(tmp_path):
     service = make_service(tmp_path)
-    local_dir = tmp_path / "pdf"
-    local_dir.mkdir()
-    (local_dir / "a.txt").write_text("Rabbit Dental offers orthodontics and implant services.", encoding="utf-8")
-    (local_dir / "b.txt").write_text("Second profile includes doctors and clinic service process.", encoding="utf-8")
-    first = service.import_local_material("client-1", "a.txt")
-    second = service.import_local_material("client-1", "b.txt")
+    first_source = tmp_path / "a.txt"
+    second_source = tmp_path / "b.txt"
+    first_source.write_text("Rabbit Dental offers orthodontics and implant services.", encoding="utf-8")
+    second_source.write_text("Second profile includes doctors and clinic service process.", encoding="utf-8")
+    first = service.save_uploaded_material("client-1", first_source, "a.txt")
+    second = service.save_uploaded_material("client-1", second_source, "b.txt")
     service.parse_material("client-1", first["id"])
     service.parse_material("client-1", second["id"])
 
@@ -87,10 +82,9 @@ def test_build_generation_bundle_uses_auto_confirmed_materials(tmp_path):
 
 def test_build_generation_bundle_excludes_unusable_materials(tmp_path):
     service = make_service(tmp_path)
-    local_dir = tmp_path / "pdf"
-    local_dir.mkdir()
-    (local_dir / "short.txt").write_text("too short", encoding="utf-8")
-    material = service.import_local_material("client-1", "short.txt")
+    source = tmp_path / "short.txt"
+    source.write_text("too short", encoding="utf-8")
+    material = service.save_uploaded_material("client-1", source, "short.txt")
     parsed = service.parse_material("client-1", material["id"])
 
     bundle = service.build_generation_bundle("client-1")
@@ -103,9 +97,9 @@ def test_build_generation_bundle_excludes_unusable_materials(tmp_path):
 
 
 class MaterialServiceTests(unittest.TestCase):
-    def test_import_local_material_copies_file_and_records_metadata(self):
+    def test_save_uploaded_material_copies_file_and_records_metadata(self):
         with tempfile.TemporaryDirectory() as tmp:
-            test_import_local_material_copies_file_and_records_metadata(Path(tmp))
+            test_save_uploaded_material_copies_file_and_records_metadata(Path(tmp))
 
     def test_parse_material_cleans_repeated_lines_and_auto_confirms(self):
         with tempfile.TemporaryDirectory() as tmp:
