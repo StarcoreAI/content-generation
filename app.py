@@ -37,6 +37,12 @@ from services.deep_analysis import (
 from services.materials import MaterialService
 from services.material_pipeline import load_latest_material_package_result, run_material_package_pipeline
 from services.material_web_expansion import expand_material_web_package, tavily_search
+from services.competitor_materials import (
+    analyze_competitor_upload_package,
+    expand_competitor_web_package,
+    load_latest_competitor_result,
+    normalize_competitor_names,
+)
 from services.record_stats import (
     build_raw_platform_stats,
 )
@@ -1151,6 +1157,12 @@ def material_service():
 def material_package_output_dir(cid):
     return Path(D) / "material_packages" / cid
 
+def competitor_package_output_dir(cid):
+    return Path(D) / "competitor_material_packages" / cid
+
+def competitor_upload_dir(cid):
+    return competitor_package_output_dir(cid) / "uploads"
+
 def material_package_ask_json(settings, model_name):
     chosen = {**settings, "model": model_name}
     return lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, chosen)
@@ -1198,6 +1210,47 @@ def run_client_material_web_expansion(cid):
         client=client,
         injection_markdown=injection_markdown,
         output_dir=output_dir,
+        ask_text=ask_text,
+        search_fn=search_fn,
+    )
+
+def default_competitor_entities(cid, date_str=None, limit=10):
+    client = next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None) or {}
+    records = load_client_records(cid, date=date_str or today_str())
+    from services.record_insights import build_record_insights
+    insights = build_record_insights(
+        records,
+        own_brand=client.get("brand") or client.get("name") or "",
+        own_client_name=client.get("name") or "",
+    )
+    return [
+        {"name": item.get("name", ""), "count": item.get("count", 0), "type": item.get("type", "")}
+        for item in (insights.get("mentioned_entities") or [])[:limit]
+        if item.get("name")
+    ]
+
+def _request_competitors(payload):
+    competitors = payload.get("competitors") if isinstance(payload, dict) else None
+    if isinstance(competitors, str):
+        competitors = re.split(r"[\n,，]+", competitors)
+    return normalize_competitor_names(competitors or [])
+
+def _client_or_404(cid):
+    return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
+
+def run_client_competitor_web_expansion(cid, competitors, qualifier=""):
+    client = _client_or_404(cid) or {"id": cid}
+    settings = get_settings()
+    tavily_key = get_tavily_api_key(settings)
+    if not tavily_key:
+        raise ValueError("missing_tavily_api_key")
+    ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
+    search_fn = lambda query: tavily_search(query, tavily_key)
+    return expand_competitor_web_package(
+        client=client,
+        competitors=competitors,
+        qualifier=qualifier,
+        output_dir=competitor_package_output_dir(cid),
         ask_text=ask_text,
         search_fn=search_fn,
     )
@@ -1338,6 +1391,107 @@ def download_material_web_supplement(cid):
     if not path.exists():
         return jsonify({"error": "not_found"}), 404
     return send_file(path, as_attachment=True, download_name="material_web_supplement.md", mimetype="text/markdown; charset=utf-8")
+
+@app.route("/api/competitors/<cid>/entities", methods=["GET"])
+def get_competitor_entities(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    entities = default_competitor_entities(
+        cid,
+        date_str=request.args.get("date") or today_str(),
+        limit=10,
+    )
+    return jsonify({"ok": True, "entities": entities})
+
+@app.route("/api/competitors/<cid>/result", methods=["GET"])
+def get_competitor_material_result(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    result = load_latest_competitor_result(competitor_package_output_dir(cid))
+    if not result.get("ok"):
+        return jsonify(result), 404
+    return jsonify(result)
+
+@app.route("/api/competitors/<cid>/analyze-upload", methods=["POST"])
+def analyze_competitor_upload(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    files = request.files.getlist("file")
+    if not files:
+        return jsonify({"error": "no_competitor_material_files"}), 400
+    upload_dir = competitor_upload_dir(cid) / uid()
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    saved = []
+    for file in files:
+        if not file or not file.filename:
+            continue
+        if not allowed_file(file.filename):
+            return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/docx/xlsx"}), 400
+        safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(file.filename).name).strip(" .")
+        target = upload_dir / f"{uid()}_{safe_name or 'competitor_material'}"
+        file.save(str(target))
+        saved.append(str(target))
+    if not saved:
+        return jsonify({"error": "no_competitor_material_files"}), 400
+    competitors = normalize_competitor_names(
+        re.split(r"[\n,，]+", request.form.get("competitors", ""))
+    )
+    if not competitors:
+        competitors = [item["name"] for item in default_competitor_entities(cid)]
+    settings = get_settings()
+    ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
+    try:
+        result = analyze_competitor_upload_package(
+            upload_dir,
+            competitor_package_output_dir(cid),
+            competitors,
+            ask_text=ask_text,
+        )
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    return jsonify(result)
+
+@app.route("/api/competitors/<cid>/expand-web", methods=["POST"])
+def expand_competitor_web(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    payload = request.json or {}
+    competitors = _request_competitors(payload)
+    if not competitors:
+        competitors = [item["name"] for item in default_competitor_entities(cid)]
+    if not competitors:
+        return jsonify({"error": "missing_competitors"}), 400
+    try:
+        result = run_client_competitor_web_expansion(
+            cid,
+            competitors,
+            qualifier=(payload.get("qualifier") or "").strip(),
+        )
+    except ValueError as exc:
+        if str(exc) == "missing_tavily_api_key":
+            return jsonify({"error": "missing_tavily_api_key"}), 400
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(result)
+
+@app.route("/api/competitors/<cid>/upload.md", methods=["GET"])
+def download_competitor_upload_markdown(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    path = competitor_package_output_dir(cid) / "latest_upload_competitors.md"
+    if not path.exists():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(path, as_attachment=True, download_name="competitor_upload_materials.md", mimetype="text/markdown; charset=utf-8")
+
+@app.route("/api/competitors/<cid>/web.md", methods=["GET"])
+def download_competitor_web_markdown(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    path = competitor_package_output_dir(cid) / "latest_web_competitors.md"
+    if not path.exists():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(path, as_attachment=True, download_name="competitor_web_materials.md", mimetype="text/markdown; charset=utf-8")
 
 @app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
 def parse_material(cid, material_id):

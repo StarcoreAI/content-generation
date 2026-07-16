@@ -110,6 +110,44 @@ function escHtml(v) {
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
 }
+function normalizeClipboardText(text) {
+  return String(text ?? '').replace(/\u0000/g, '').replace(/\r\n?/g, '\n');
+}
+function fallbackCopyText(text, successMessage) {
+  const ta = document.createElement('textarea');
+  ta.value = text;
+  ta.setAttribute('readonly', '');
+  ta.style.position = 'fixed';
+  ta.style.left = '-9999px';
+  ta.style.top = '0';
+  document.body.appendChild(ta);
+  ta.focus();
+  ta.select();
+  ta.setSelectionRange(0, ta.value.length);
+  try {
+    const ok = document.execCommand('copy');
+    if (!ok) throw new Error('copy rejected');
+    toast(successMessage);
+    return true;
+  } catch(e) {
+    toast('复制失败，请手动选中复制', 'err');
+    return false;
+  } finally {
+    document.body.removeChild(ta);
+  }
+}
+async function copyTextToClipboard(text, successMessage='已复制 ✦') {
+  const value = normalizeClipboardText(text);
+  if (!value) { toast('暂无可复制内容', 'err'); return false; }
+  try {
+    if (navigator.clipboard && window.isSecureContext) {
+      await navigator.clipboard.writeText(value);
+      toast(successMessage);
+      return true;
+    }
+  } catch(e) {}
+  return fallbackCopyText(value, successMessage);
+}
 
 // ── Navigation ────────────────────────────────────────
 
@@ -465,18 +503,23 @@ function renderContentGenerations(articles) {
   window._contentGenerationCache = articles;
   el.innerHTML = articles.map(a => {
     const subtypeLabel = contentGenerationSubtypeLabel(a);
+    const title = escHtml(a.title || '未命名文章');
+    const model = escHtml(a.model || '未知模型');
+    const articleType = escHtml(a.article_type || '未标记类型');
+    const createdAt = escHtml(a.created_at || '');
+    const summary = escHtml((a.content || '').slice(0, 160));
     return `
     <div class="article-card">
-      <div class="article-title">${a.title || '未命名文章'}</div>
+      <div class="article-title">${title}</div>
       <div class="article-meta">
-        <span class="badge badge-p">调用模型：${a.model || '未知模型'}</span>
-        <span class="badge badge-g">${a.article_type || '未标记类型'}</span>
+        <span class="badge badge-p">调用模型：${model}</span>
+        <span class="badge badge-g">${articleType}</span>
         ${subtypeLabel ? `<span class="badge badge-a">子类型：${escHtml(subtypeLabel)}</span>` : ''}
         <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
         <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
-        <span style="font-size:10px;color:var(--text3)">${a.created_at || ''}</span>
+        <span style="font-size:10px;color:var(--text3)">${createdAt}</span>
       </div>
-      <div class="article-summary">${(a.content || '').slice(0, 160)}${(a.content || '').length > 160 ? '...' : ''}</div>
+      <div class="article-summary">${summary}${(a.content || '').length > 160 ? '...' : ''}</div>
       <div class="article-acts">
         <button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button>
         <button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button>
@@ -490,13 +533,14 @@ function viewContentGeneration(id) {
   if (!a) return;
   const subtypeLabel = contentGenerationSubtypeLabel(a);
   const subtypeHtml = subtypeLabel ? `<div class="content-generation-subtype">文章子类型：${escHtml(subtypeLabel)}</div>` : '';
+  const title = escHtml(a.title || '生成文章');
   const win = window.open('','_blank','width=760,height=680');
-  win.document.write(`<html><head><title>${a.title || '生成文章'}</title><link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet"></head><body>${subtypeHtml}<h1>${a.title || '生成文章'}</h1><pre>${a.content || ''}</pre></body></html>`);
+  win.document.write(`<html><head><title>${title}</title><link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet"></head><body>${subtypeHtml}<h1>${title}</h1><pre>${escHtml(a.content || '')}</pre></body></html>`);
 }
 function copyContentGeneration(id) {
   const a = (window._contentGenerationCache || []).find(x => x.id === id);
   if (!a) return;
-  navigator.clipboard.writeText(a.content || '').then(() => toast('文章已复制 ✦'));
+  copyTextToClipboard(a.content || '', '文章已复制 ✦');
 }
 async function deleteContentGeneration(id) {
   if (!currentClientId || !id) return;
@@ -1158,11 +1202,15 @@ function renderRefTags(refs, brand) {
 let smartTopics = [];
 let latestMaterialPackageMarkdown = '';
 let latestMaterialWebSupplementMarkdown = '';
+let latestCompetitorUploadMarkdown = '';
+let latestCompetitorWebMarkdown = '';
 
 function loadMaterialAnalysis() {
   loadMaterials();
   loadMaterialPackageResult();
   loadMaterialWebSupplement();
+  loadCompetitorEntities();
+  loadCompetitorResult();
 }
 
 async function loadMaterials() {
@@ -1405,6 +1453,148 @@ function copyMaterialWebSupplementMarkdown() {
 function downloadMaterialWebSupplementMarkdown() {
   if (!currentClientId || !latestMaterialWebSupplementMarkdown) { toast('暂无可下载结果','err'); return; }
   window.location.href = `/api/materials/${currentClientId}/web-supplement.md`;
+}
+
+function competitorNamesFromInput() {
+  const value = document.getElementById('competitorNames')?.value || '';
+  return value.split(/[\n,，]+/).map(s => s.trim()).filter(Boolean).slice(0, 10);
+}
+
+async function loadCompetitorEntities() {
+  if (!currentClientId) return;
+  const el = document.getElementById('competitorNames');
+  if (!el || el.value.trim()) return;
+  try {
+    const date = document.getElementById('dailyDate')?.value || new Date().toISOString().slice(0,10);
+    const result = await api(`/api/competitors/${currentClientId}/entities?date=${date}`);
+    const names = (result.entities || []).map(e => e.name).filter(Boolean);
+    if (names.length && !el.value.trim()) el.value = names.join('\n');
+  } catch(e) {}
+}
+
+function renderCompetitorMaterialResult(result) {
+  const box = document.getElementById('competitorMaterialResult');
+  if (!box) return;
+  latestCompetitorUploadMarkdown = result?.upload_markdown || result?.uploadMarkdown || result?.upload || '';
+  latestCompetitorWebMarkdown = result?.web_markdown || result?.webMarkdown || result?.markdown || '';
+  const combined = [
+    latestCompetitorUploadMarkdown ? `## 上传资料整理\n\n${latestCompetitorUploadMarkdown}` : '',
+    latestCompetitorWebMarkdown ? `## 联网资料补充\n\n${latestCompetitorWebMarkdown}` : ''
+  ].filter(Boolean).join('\n\n---\n\n');
+  if (!combined && !result?.error) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'block';
+  if (result?.error) {
+    box.innerHTML = `<div style="font-size:12px;font-weight:800;color:var(--red)">竞品资料处理失败：${escHtml(result.error)}</div>`;
+    return;
+  }
+  const preview = window.marked ? marked.parse(combined) : `<pre>${escHtml(combined)}</pre>`;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:13px;font-weight:900;color:#312e81">竞品资料解析结果</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">真实竞品名称分组，可复制或下载</div>
+      </div>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" onclick="copyCompetitorMaterialMarkdown()">复制</button>
+        <button class="btn btn-o btn-sm" onclick="downloadCompetitorUploadMarkdown()">下载上传.md</button>
+        <button class="btn btn-p btn-sm" onclick="downloadCompetitorWebMarkdown()">下载联网.md</button>
+      </div>
+    </div>
+    <div class="report-md" style="max-height:360px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${preview}</div>
+  `;
+}
+
+async function loadCompetitorResult() {
+  if (!currentClientId) return;
+  const result = await api(`/api/competitors/${currentClientId}/result`);
+  if (result?.ok === false) {
+    renderCompetitorMaterialResult({});
+    return;
+  }
+  renderCompetitorMaterialResult(result);
+}
+
+async function analyzeCompetitorUpload(input) {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  const formData = new FormData();
+  files.forEach(file => formData.append('file', file));
+  formData.append('competitors', competitorNamesFromInput().join('\n'));
+  const box = document.getElementById('competitorMaterialResult');
+  if (box) {
+    box.style.display = 'block';
+    box.innerHTML = '<div style="font-size:12px;font-weight:800;color:var(--pri)">AI正在整理上传竞品资料...</div>';
+  }
+  try {
+    const res = await fetch(`/api/competitors/${currentClientId}/analyze-upload`, { method: 'POST', body: formData });
+    const result = await res.json();
+    if (result?.error || result?.ok === false) {
+      renderCompetitorMaterialResult({error: result.error || '竞品资料解析失败'});
+      toast(result.error || '竞品资料解析失败', 'err');
+      return;
+    }
+    latestCompetitorUploadMarkdown = result.markdown || '';
+    renderCompetitorMaterialResult({upload_markdown: latestCompetitorUploadMarkdown, web_markdown: latestCompetitorWebMarkdown});
+    toast('竞品上传资料解析完成');
+  } catch(e) {
+    renderCompetitorMaterialResult({error: e.message});
+    toast('竞品资料解析失败：' + e.message, 'err');
+  } finally {
+    input.value = '';
+  }
+}
+
+async function expandCompetitorWeb() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const competitors = competitorNamesFromInput();
+  if (!competitors.length) { toast('请先填写竞品名称','err'); return; }
+  const qualifier = document.getElementById('competitorQualifier')?.value || '';
+  const box = document.getElementById('competitorMaterialResult');
+  if (box) {
+    box.style.display = 'block';
+    box.innerHTML = '<div style="font-size:12px;font-weight:800;color:var(--pri)">AI正在联网搜索并整理竞品资料...</div>';
+  }
+  spin('spCompetitorWeb', true);
+  disableBtn('btnCompetitorWeb', true);
+  try {
+    const result = await api(`/api/competitors/${currentClientId}/expand-web`, 'POST', { competitors, qualifier });
+    if (result?.error || result?.ok === false) {
+      const message = result.error === 'missing_tavily_api_key' ? '缺少 Tavily API Key，请先在系统设置中配置' : (result.error || '竞品联网扩展失败');
+      renderCompetitorMaterialResult({error: message});
+      toast(message, 'err');
+      return;
+    }
+    latestCompetitorWebMarkdown = result.markdown || '';
+    renderCompetitorMaterialResult({upload_markdown: latestCompetitorUploadMarkdown, web_markdown: latestCompetitorWebMarkdown});
+    toast('竞品联网资料整理完成');
+  } catch(e) {
+    renderCompetitorMaterialResult({error: e.message});
+    toast('竞品联网扩展失败：' + e.message, 'err');
+  } finally {
+    spin('spCompetitorWeb', false);
+    disableBtn('btnCompetitorWeb', false);
+  }
+}
+
+function copyCompetitorMaterialMarkdown() {
+  const markdown = [latestCompetitorUploadMarkdown, latestCompetitorWebMarkdown].filter(Boolean).join('\n\n---\n\n');
+  if (!markdown) { toast('暂无可复制结果','err'); return; }
+  navigator.clipboard.writeText(markdown).then(() => toast('竞品资料已复制 ✦'));
+}
+
+function downloadCompetitorUploadMarkdown() {
+  if (!currentClientId || !latestCompetitorUploadMarkdown) { toast('暂无上传资料整理结果','err'); return; }
+  window.location.href = `/api/competitors/${currentClientId}/upload.md`;
+}
+
+function downloadCompetitorWebMarkdown() {
+  if (!currentClientId || !latestCompetitorWebMarkdown) { toast('暂无联网资料整理结果','err'); return; }
+  window.location.href = `/api/competitors/${currentClientId}/web.md`;
 }
 
 // ══════════════════════════════════════════════════════

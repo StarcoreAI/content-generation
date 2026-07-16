@@ -95,6 +95,26 @@ class ContentGenerationStoreTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in session["articles"]], ["today"])
             self.assertEqual([item["content"] for item in messages], ["today request", "today article"])
 
+    def test_load_session_preserves_article_subtype_for_result_badge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+
+            store.append_generation(
+                "client-a",
+                {
+                    **article("a1", "2026-01-01 10:00:00"),
+                    "article_type": "对比型",
+                    "article_subtype": "本地机构筛选标准型",
+                },
+                {"role": "user", "content": "request", "created_at": "2026-01-01 10:00:00"},
+                {"role": "assistant", "content": "article", "created_at": "2026-01-01 10:00:00", "article_id": "a1"},
+            )
+
+            session = store.load_session("client-a")
+
+            self.assertEqual(session["articles"][0]["article_type"], "对比型")
+            self.assertEqual(session["articles"][0]["article_subtype"], "本地机构筛选标准型")
+
     def test_delete_generation_removes_article_and_messages(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))

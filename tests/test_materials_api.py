@@ -14,6 +14,9 @@ def isolated_material_app():
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
+        "F_CLIENTS": getattr(geo_app, "F_CLIENTS", None),
+        "F_SETTINGS": getattr(geo_app, "F_SETTINGS", None),
+        "F_RAW_RECORDS": getattr(geo_app, "F_RAW_RECORDS", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -21,6 +24,9 @@ def isolated_material_app():
         geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
         geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
+        geo_app.F_CLIENTS = os.path.join(tmp, "clients.json")
+        geo_app.F_SETTINGS = os.path.join(tmp, "settings.json")
+        geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
         geo_app.app.config["AUTH_DISABLED"] = True
         try:
             yield tmp
@@ -142,6 +148,110 @@ class MaterialApiTests(unittest.TestCase):
                 download.close()
         finally:
             geo_app.run_material_package_pipeline = original_runner
+
+    def test_competitor_entities_default_to_top_daily_mentions(self):
+        with isolated_material_app():
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户", "brand": "客户品牌"}])
+            geo_app.save(geo_app.F_RAW_RECORDS, [
+                {
+                    "id": "r1",
+                    "client_id": "client-1",
+                    "today": "2026-07-16",
+                    "crawl_time": "2026-07-16 10:00:00",
+                    "brand": "客户品牌",
+                    "mentioned_entities": [
+                        {"name": "第一竞品", "type": "品牌", "evidence": "第一竞品"},
+                        {"name": "第二竞品", "type": "品牌", "evidence": "第二竞品"},
+                    ],
+                },
+                {
+                    "id": "r2",
+                    "client_id": "client-1",
+                    "today": "2026-07-16",
+                    "crawl_time": "2026-07-16 11:00:00",
+                    "brand": "客户品牌",
+                    "mentioned_entities": [
+                        {"name": "第一竞品", "type": "品牌", "evidence": "第一竞品"},
+                    ],
+                },
+            ])
+
+            response = geo_app.app.test_client().get("/api/competitors/client-1/entities?date=2026-07-16")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual([item["name"] for item in body["entities"]], ["第一竞品", "第二竞品"])
+
+    def test_competitor_expand_web_uses_manual_qualifier(self):
+        original = geo_app.expand_competitor_web_package
+        try:
+            captured = {}
+
+            def fake_expand(client, competitors, qualifier, output_dir, ask_text, search_fn):
+                captured["client"] = client
+                captured["competitors"] = competitors
+                captured["qualifier"] = qualifier
+                return {
+                    "ok": True,
+                    "queries": [{"competitor": "第一竞品", "query": "第一竞品 牙齿矫正"}],
+                    "source_count": 1,
+                    "competitors": [],
+                    "markdown": "# 竞品联网资料补充包",
+                    "path": str(output_dir / "latest_web_competitors.md"),
+                }
+
+            geo_app.expand_competitor_web_package = fake_expand
+            with isolated_material_app():
+                geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户", "industry": "口腔"}])
+                geo_app.save(geo_app.F_SETTINGS, {"tavily_api_key": "tvly-test", "api_key": "model-key"})
+
+                response = geo_app.app.test_client().post(
+                    "/api/competitors/client-1/expand-web",
+                    json={"competitors": ["第一竞品"], "qualifier": "牙齿矫正"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(captured["competitors"], ["第一竞品"])
+            self.assertEqual(captured["qualifier"], "牙齿矫正")
+            self.assertEqual(captured["client"]["industry"], "口腔")
+        finally:
+            geo_app.expand_competitor_web_package = original
+
+    def test_competitor_analyze_upload_accepts_files_and_competitor_names(self):
+        original = geo_app.analyze_competitor_upload_package
+        try:
+            captured = {}
+
+            def fake_analyze(package_dir, output_dir, competitors, ask_text):
+                captured["package_dir"] = package_dir
+                captured["competitors"] = competitors
+                return {
+                    "ok": True,
+                    "status": "completed",
+                    "markdown": "# 竞品上传资料整理包\n\n## 第一竞品",
+                    "path": str(output_dir / "latest_upload_competitors.md"),
+                }
+
+            geo_app.analyze_competitor_upload_package = fake_analyze
+            with isolated_material_app():
+                geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户"}])
+
+                response = geo_app.app.test_client().post(
+                    "/api/competitors/client-1/analyze-upload",
+                    data={
+                        "competitors": "第一竞品\n第二竞品",
+                        "file": [(io.BytesIO(b"Competitor material body with enough text."), "competitors.txt")],
+                    },
+                    content_type="multipart/form-data",
+                )
+
+                self.assertTrue(os.path.exists(captured["package_dir"]))
+
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.get_json()["ok"])
+            self.assertEqual(captured["competitors"], ["第一竞品", "第二竞品"])
+        finally:
+            geo_app.analyze_competitor_upload_package = original
 
 
 if __name__ == "__main__":

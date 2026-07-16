@@ -415,6 +415,31 @@
     <div id="materialPackageResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
     <div id="materialWebSupplementResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
   </div>
+  <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">竞品资料解析</span><div class="card-sub">按真实竞品名称整理上传资料，或用竞品名 + 行业/品类联网补充</div></div>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" id="btnCompetitorWeb" onclick="expandCompetitorWeb()">
+          <span class="spin" id="spCompetitorWeb" style="display:none"></span>联网搜索竞品资料
+        </button>
+        <label class="btn btn-p btn-sm" style="cursor:pointer">
+          上传并解析竞品资料
+          <input type="file" id="competitorUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="analyzeCompetitorUpload(this)">
+        </label>
+      </div>
+    </div>
+    <div class="form-row col2">
+      <div class="fld">
+        <label>竞品名称（默认取当日整理 Top10，可编辑）</label>
+        <textarea id="competitorNames" rows="5" placeholder="每行一个竞品名称"></textarea>
+      </div>
+      <div class="fld">
+        <label>联网搜索限定词（可选）</label>
+        <input id="competitorQualifier" placeholder="如：口腔、汽车音响改装、成人学历提升；不填则使用客户行业/品类">
+      </div>
+    </div>
+    <div id="competitorMaterialResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
+  </div>
 </div>
 
 <!-- ═══ 内容生产 ═══ -->

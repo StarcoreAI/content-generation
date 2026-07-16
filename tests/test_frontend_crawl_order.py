@@ -346,8 +346,10 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("getSelectedContentTopArticles()", html)
         self.assertIn("generateContentArticle()", html)
         self.assertIn('id="contentArticleList"', html)
-        self.assertIn("调用模型：${a.model || '未知模型'}", html)
-        self.assertIn("${a.article_type || '未标记类型'}", html)
+        self.assertIn("const model = escHtml(a.model || '未知模型')", html)
+        self.assertIn("调用模型：${model}", html)
+        self.assertIn("const articleType = escHtml(a.article_type || '未标记类型')", html)
+        self.assertIn("${articleType}", html)
         self.assertIn("function contentGenerationSubtypeLabel(a)", html)
         self.assertIn("子类型：${escHtml(subtypeLabel)}", html)
         self.assertIn("文章子类型：${escHtml(subtypeLabel)}", html)
@@ -361,6 +363,42 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn('id="ct-platform-checks"', html)
         self.assertNotIn('id="ct-brand"', html)
         self.assertNotIn('id="topicInstruction"', html)
+
+    def test_content_generation_cards_escape_ai_text_and_copy_with_fallback(self):
+        html = read_frontend_source()
+
+        render_match = re.search(
+            r"function renderContentGenerations\(articles\) \{(?P<body>.*?)\n\}\nfunction viewContentGeneration",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(render_match)
+        render_body = render_match.group("body")
+        self.assertIn("escHtml(a.title || '未命名文章')", render_body)
+        self.assertIn("escHtml(a.model || '未知模型')", render_body)
+        self.assertIn("escHtml(a.article_type || '未标记类型')", render_body)
+        self.assertIn("escHtml((a.content || '').slice(0, 160))", render_body)
+
+        view_match = re.search(
+            r"function viewContentGeneration\(id\) \{(?P<body>.*?)\n\}\nfunction copyContentGeneration",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(view_match)
+        view_body = view_match.group("body")
+        self.assertIn("escHtml(a.title || '生成文章')", view_body)
+        self.assertIn("<pre>${escHtml(a.content || '')}</pre>", view_body)
+
+        copy_match = re.search(
+            r"function copyContentGeneration\(id\) \{(?P<body>.*?)\n\}\nasync function deleteContentGeneration",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(copy_match)
+        self.assertIn("function copyTextToClipboard", html)
+        self.assertIn("fallbackCopyText", html)
+        self.assertIn("copyTextToClipboard(a.content || '', '文章已复制", copy_match.group("body"))
+        self.assertNotIn("navigator.clipboard.writeText(a.content || '').then", html)
 
     def test_material_analysis_is_its_own_module_between_reference_and_content(self):
         html = read_frontend_source()
@@ -376,8 +414,20 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="btnExpandMaterials"', html)
         self.assertIn('id="materialPackageResult"', html)
         self.assertIn('id="materialWebSupplementResult"', html)
+        self.assertIn('id="competitorNames"', html)
+        self.assertIn('id="competitorQualifier"', html)
+        self.assertIn('id="competitorUpload"', html)
+        self.assertIn('id="competitorMaterialResult"', html)
         self.assertIn("analyzeMaterialPackage()", html)
         self.assertIn("expandMaterialPackage()", html)
+        self.assertIn("analyzeCompetitorUpload(", html)
+        self.assertIn("expandCompetitorWeb()", html)
+        self.assertIn("loadCompetitorEntities()", html)
+        self.assertIn("/api/competitors/", html)
+        self.assertIn("/expand-web", html)
+        self.assertIn("/analyze-upload", html)
+        self.assertIn("/upload.md", html)
+        self.assertIn("/web.md", html)
         self.assertIn("loadMaterialPackageResult()", html)
         self.assertIn("loadMaterialWebSupplement()", html)
         self.assertIn("copyMaterialPackageMarkdown()", html)

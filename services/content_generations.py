@@ -169,6 +169,7 @@ class ContentGenerationStore:
                 sample_links_json TEXT NOT NULL DEFAULT '[]',
                 selected_articles_json TEXT NOT NULL DEFAULT '[]',
                 article_type TEXT NOT NULL DEFAULT '',
+                article_subtype TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (client_id, id)
             )
@@ -188,6 +189,7 @@ class ContentGenerationStore:
             """
         )
         self._ensure_column(conn, "content_articles", "article_type", "TEXT NOT NULL DEFAULT ''")
+        self._ensure_column(conn, "content_articles", "article_subtype", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "content_messages", "article_type", "TEXT NOT NULL DEFAULT ''")
         conn.execute(
             """
@@ -269,9 +271,9 @@ class ContentGenerationStore:
             INSERT OR REPLACE INTO content_articles (
                 id, client_id, sequence, title, content, operator_opinion, model,
                 material_count, sample_link_count, selected_article_count,
-                sample_links_json, selected_articles_json, article_type, created_at
+                sample_links_json, selected_articles_json, article_type, article_subtype, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(article.get("id") or ""),
@@ -287,6 +289,7 @@ class ContentGenerationStore:
                 json.dumps(article.get("sample_links") or [], ensure_ascii=False),
                 json.dumps(article.get("selected_articles") or [], ensure_ascii=False),
                 self._normalize_article_type(article.get("article_type")),
+                str(article.get("article_subtype") or "").strip(),
                 str(article.get("created_at") or ""),
             ),
         )
@@ -326,6 +329,7 @@ class ContentGenerationStore:
             "sample_links": self._loads_list(row["sample_links_json"]),
             "selected_articles": self._loads_list(row["selected_articles_json"]),
             "article_type": row["article_type"],
+            "article_subtype": row["article_subtype"],
             "created_at": row["created_at"],
         }
 
