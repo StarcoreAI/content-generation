@@ -715,6 +715,8 @@ class CoreFunctionTests(unittest.TestCase):
             "/api/precise/diagnosis",
             "/api/precise/question_refs",
             "/api/precise/generate",
+            "/api/raw_records/deep_analyze",
+            "/api/daily/deep_analyze",
         }
         active_routes = {str(rule.rule) for rule in geo_app.app.url_map.iter_rules()}
 

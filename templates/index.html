@@ -76,7 +76,7 @@
 <div class="page" id="page-daily">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>当日数据整理</em></div>
-    <div class="pg-sub">查看今日爬取数据，删除错误记录，统计引用源，一键进入深度分析</div></div>
+    <div class="pg-sub">查看今日爬取数据，删除错误记录，统计引用源</div></div>
     <div class="acts">
       <input type="date" id="dailyDate" onchange="resetDailyTaskFilter();loadDailyData()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
       <button class="btn btn-danger btn-sm" onclick="clearDailyData()" title="清空当日所有爬取记录">
@@ -90,17 +90,7 @@
         style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white;color:var(--text2);font-weight:800;white-space:nowrap">
         今日全部
       </span>
-      <button class="btn btn-p btn-sm" id="btnDailyAnalyze" onclick="startDailyAnalyze()">
-        <span class="spin" id="spDailyAnalyze" style="display:none"></span>
-        🔍 深度分析
-      </button>
     </div>
-  </div>
-
-  <!-- 软文模板状态提示（只读，上传入口在内容生产页） -->
-  <div id="dailyTemplateHint" style="display:none;margin-bottom:14px;padding:10px 14px;background:rgba(52,211,153,.06);border:1.5px solid rgba(52,211,153,.2);border-radius:var(--r-sm);display:flex;align-items:center;justify-content:space-between">
-    <span style="font-size:12px;font-weight:700;color:#065f46">📄 已加载软文模板：<span id="dailyTemplateName" style="color:var(--pri)"></span></span>
-    <span style="font-size:11px;color:var(--text3)">深度分析将基于此模板生成各平台专属内容模板 · <span style="cursor:pointer;color:var(--pri);text-decoration:underline" onclick="navTo('content',null)">前往内容生产页管理模板</span></span>
   </div>
 
   <!-- 数据概览卡片 -->
@@ -155,33 +145,6 @@
     <div id="dailyRecordList"><div class="empty"><i class="ti ti-database"></i><p>暂无数据</p></div></div>
   </div>
 
-  <!-- 深度分析结果 -->
-  <div id="dailyAnalysisResult" style="display:none">
-    <!-- 当前分析范围标签 -->
-    <div id="dailyAnalysisScope" style="display:none;margin-bottom:10px;padding:8px 14px;background:rgba(99,102,241,.07);border:1.5px solid rgba(99,102,241,.2);border-radius:var(--r-sm);font-size:12px;color:#312e81;font-weight:700"></div>
-    <!-- 平台分类标签页 -->
-    <div class="card">
-      <div class="card-hd">
-        <span class="card-title">✦ 各平台数据详情</span>
-        <span style="font-size:11px;color:var(--text3)">点击平台查看详细数据和专属提示词</span>
-      </div>
-      <div id="platformTabs" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"></div>
-      <div id="platformDetail"></div>
-    </div>
-
-    <!-- 深度分析报告 -->
-    <div class="card">
-      <div class="card-hd">
-        <span class="card-title">✦ 深度分析报告</span>
-        <div class="acts">
-          <button class="btn btn-o btn-sm" onclick="copyDailyReport()">复制报告</button>
-          <button class="btn btn-p btn-sm" onclick="importDailyToContent()">🚀 导入内容生产</button>
-        </div>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px" id="dailyAnalysisStats"></div>
-      <div class="report-md" id="dailyAnalysisReport"></div>
-    </div>
-  </div>
 </div>
 
 <!-- ═══ 问题组管理 ═══ -->
@@ -268,11 +231,6 @@
 <div class="page" id="page-records">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>爬取记录库</em></div><div class="pg-sub">完整原始数据，含豆包回答全文和引用源超链接</div></div>
-    <div class="acts">
-      <button class="btn btn-p btn-sm" onclick="loadDeepAnalysis()">
-        <span class="spin" id="spDeep" style="display:none"></span>深度分析
-      </button>
-    </div>
   </div>
 
   <!-- 筛选栏 -->
@@ -334,25 +292,6 @@
     <div id="rawRecordList"><div class="empty"><i class="ti ti-database"></i><p>暂无记录</p></div></div>
   </div>
 
-  <!-- 深度分析报告 -->
-  <div class="card" id="deepAnalysisCard" style="display:none">
-    <div class="card-hd">
-      <span class="card-title">✦ 深度分析报告</span>
-      <div class="acts">
-        <button class="btn btn-o btn-sm" onclick="copyDeepReport()">复制报告</button>
-        <button class="btn btn-p btn-sm" id="btnImportContent" onclick="importToContent()" style="display:none">
-          🚀 导入内容生产
-        </button>
-      </div>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px" id="deepStats"></div>
-    <div class="report-md" id="deepReportContent"></div>
-    <!-- 内容指令预览 -->
-    <div id="contentInstructionBox" style="display:none;margin-top:16px;padding:14px;background:linear-gradient(135deg,rgba(109,92,247,.06),rgba(167,139,250,.04));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm)">
-      <div style="font-size:12px;font-weight:800;color:#312e81;margin-bottom:10px">📋 内容生产指令（将自动导入内容生产模块）</div>
-      <pre id="contentInstructionText" style="font-size:11px;color:var(--text2);white-space:pre-wrap;line-height:1.7;font-family:monospace"></pre>
-    </div>
-  </div>
 </div>
 
 <!-- ═══ 引用情报分析 ═══ -->

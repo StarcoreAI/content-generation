@@ -195,7 +195,6 @@ function onClientChange() {
     loadReferenceIntelligence();
   }
   // 全局刷新模板提示条（当日整理顶部）和内容生产模板列表
-  loadTemplates();
   loadTemplatesForContent();
   loadMaterials();
 }
@@ -1146,74 +1145,6 @@ function renderPlatformStats(stats) {
   }
 }
 
-async function loadDeepAnalysis() {
-  if (!currentClientId) { toast('请先选择客户','err'); return; }
-  spin('spDeep', true);
-  const group_id = document.getElementById('rec-group-filter')?.value || '';
-  const date = document.getElementById('rec-date-filter')?.value || '';
-  const question = document.getElementById('rec-question-filter')?.value || '';
-  const mentioned = document.getElementById('rec-mentioned-filter')?.value || '';
-  const taskId = document.getElementById('rec-task-filter')?.value || '';
-  try {
-    const r = await api('/api/raw_records/deep_analyze', 'POST', {
-      client_id: currentClientId,
-      platform: currentPlatform, group_id, date, question,
-      mentioned_only: mentioned,
-      task_id: taskId
-    });
-    if (r.error) { toast(r.error,'err'); return; }
-    const card = document.getElementById('deepAnalysisCard');
-    card.style.display = 'block';
-    card.scrollIntoView({behavior:'smooth'});
-    const s = r.stats;
-    document.getElementById('deepStats').innerHTML = [
-      ['记录数', s.total, '条', 'var(--pri)'],
-      ['品牌提及', s.mentioned, '次', 'var(--teal)'],
-      ['提及率', s.mention_rate, '%', 'var(--pink)'],
-      ['平均GEO', s.avg_score, '分', 'var(--amber)'],
-    ].map(([l,v,u,c]) => `
-      <div style="padding:12px;background:rgba(255,255,255,.85);border-radius:var(--r-sm);border:1.5px solid var(--border2);text-align:center">
-        <div style="font-size:20px;font-weight:900;color:${c}">${v}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
-        <div style="font-size:10px;color:var(--text2);font-weight:700;margin-top:3px">${l}</div>
-      </div>`).join('');
-    document.getElementById('deepReportContent').innerHTML = marked.parse(r.report);
-
-    // 处理内容生产指令
-    if (r.content_instruction) {
-      window._lastContentInstruction = r.content_instruction;
-      window._lastDeepStats = r.stats;
-      document.getElementById('btnImportContent').style.display = 'inline-flex';
-      document.getElementById('contentInstructionBox').style.display = 'block';
-      document.getElementById('contentInstructionText').textContent = r.content_instruction;
-    }
-
-    toast('深度分析完成 ✦');
-  } finally { spin('spDeep', false); }
-}
-
-function copyDeepReport() {
-  navigator.clipboard.writeText(document.getElementById('deepReportContent').innerText)
-    .then(() => toast('报告已复制 ✦'));
-}
-
-function importToContent() {
-  if (!window._lastContentInstruction) { toast('暂无内容指令', 'err'); return; }
-  navTo('content', document.querySelector('.s-nav[onclick*="content"]'));
-  setTimeout(() => {
-    appendContentOpinion(window._lastContentInstruction, '深度分析指令');
-    toast('内容生产指令已导入 ✦');
-    const opinionEl = document.getElementById('contentOpinion');
-    if (opinionEl) {
-      opinionEl.style.borderColor = 'var(--pri)';
-      opinionEl.style.background = 'var(--pri-ll)';
-      setTimeout(() => {
-        opinionEl.style.borderColor = '';
-        opinionEl.style.background = '';
-      }, 3000);
-    }
-  }, 400);
-}
-
 const PLATFORM_CLASS = {
   '土巴兔': 'ptag-tubaitu', '新浪家居': 'ptag-sina', '新浪': 'ptag-sina',
   '网易家居': 'ptag-163', '网易': 'ptag-163',
@@ -1789,12 +1720,6 @@ async function loadTemplates() {
     status.style.color = 'var(--teal)';
   }
   if (detailBtn) detailBtn.style.display = 'inline-flex';
-  const hint = document.getElementById('dailyTemplateHint');
-  const tname = document.getElementById('dailyTemplateName');
-  if (hint && active) {
-    hint.style.display = 'flex';
-    if (tname) tname.textContent = active.original || active.name;
-  }
 
   if (el) el.innerHTML = files.map(f => `
     <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid var(--border2)">
@@ -2094,7 +2019,6 @@ async function cancelReferenceAnalysis() {
 // 当日数据整理模块
 // ══════════════════════════════════════════════════════
 let dailySelectedIds = new Set();
-let dailyAnalysisData = null;
 
 
 const DAILY_PAGE_SIZE = 20;
@@ -2168,7 +2092,6 @@ function onDailyScroll() {
 function loadDailyPage() {
   const el = document.getElementById('dailyDate');
   if (el && !el.value) el.value = new Date().toISOString().slice(0,10);
-  loadTemplates();  // 每次进入页面刷新模板列表
   if (!currentClientId) {
     document.getElementById('dailyRecordList').innerHTML = '<div class="info-banner">请先在右上角选择客户，再查看当日数据 喵～</div>';
     return;
@@ -2192,9 +2115,6 @@ async function loadDailyData() {
   if (!currentClientId) return;
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const groupId = document.getElementById('dailyGroupFilter')?.value || '';
-  const analysisResult = document.getElementById('dailyAnalysisResult');
-  if (analysisResult) analysisResult.style.display = 'none';
-  dailyAnalysisData = null;
 
   // 加载记录列表（带问题组过滤）
   const allRecords = await api(`/api/daily/records?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${groupId ? '&group_id='+groupId : ''}`);
@@ -2518,188 +2438,6 @@ async function batchDeleteDailyRecords() {
   dailySelectedIds.clear();
   loadDailyData();
 }
-
-async function startDailyAnalyze() {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
-  const groupSel = document.getElementById('dailyGroupFilter');
-  const groupId = groupSel?.value || '';
-  const groupName = groupId ? (groupSel.options[groupSel.selectedIndex]?.text || '') : '';
-  const taskId = document.getElementById('dailyTaskFilter')?.value || '';
-  spin('spDailyAnalyze', true);
-  disableBtn('btnDailyAnalyze', true);
-  try {
-    const r = await api('/api/daily/deep_analyze', 'POST', {
-      client_id: currentClientId, date, brand: currentBrand,
-      platform: currentPlatform, group_id: groupId, group_name: groupName,
-      task_id: taskId
-    });
-    if (r.error) { toast(r.error, 'err'); return; }
-    dailyAnalysisData = r;
-    document.getElementById('dailyAnalysisResult').style.display = 'block';
-    document.getElementById('dailyAnalysisResult').scrollIntoView({ behavior: 'smooth' });
-    // 显示当前分析范围标签
-    const scopeEl = document.getElementById('dailyAnalysisScope');
-    if (scopeEl) {
-      scopeEl.style.display = 'block';
-      const taskScope = taskId ? ` &nbsp;·&nbsp; 批次 <span style="color:var(--pri)">#${escHtml(taskId.slice(-8))}</span>` : '';
-      scopeEl.innerHTML = groupName
-        ? `📂 当前分析范围：<span style="color:var(--pri)">${groupName}</span> 问题组${taskScope} &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`
-        : `📊 当前分析范围：<span style="color:var(--pri)">全部问题组</span>${taskScope} &nbsp;·&nbsp; 共 ${r.stats.total_records} 条记录`;
-    }
-    renderDailyAnalysis(r);
-    toast('深度分析完成 喵～✦');
-  } finally {
-    spin('spDailyAnalyze', false);
-    disableBtn('btnDailyAnalyze', false);
-  }
-}
-
-function renderDailyAnalysis(r) {
-  // KPI统计
-  const s = r.stats;
-  document.getElementById('dailyAnalysisStats').innerHTML = [
-    ['监测问题', s.total_records, '条', 'var(--pri)'],
-    ['品牌提及', s.mentioned, '次', 'var(--teal)'],
-    ['提及率', s.mention_rate, '%', 'var(--pink)'],
-    ['平均GEO', s.avg_score, '分', 'var(--amber)'],
-  ].map(([l,v,u,c]) => `
-    <div style="padding:12px;background:rgba(255,255,255,.85);border-radius:var(--r-sm);border:1.5px solid var(--border2);text-align:center">
-      <div style="font-size:20px;font-weight:900;color:${c}">${v}<span style="font-size:10px;color:var(--text3)">${u}</span></div>
-      <div style="font-size:10px;color:var(--text2);font-weight:700;margin-top:3px">${l}</div>
-    </div>`).join('');
-
-  // 平台标签页
-  const tabs = document.getElementById('platformTabs');
-  tabs.innerHTML = r.top8_platforms.map((p,i) => `
-    <div onclick="showPlatformDetail('${p.platform}', ${i})" id="ptab-${i}"
-      style="padding:6px 12px;border-radius:20px;font-size:11px;font-weight:700;cursor:pointer;border:1.5px solid var(--border2);background:${i===0?'var(--pri-ll)':'rgba(255,255,255,.8)'};color:${i===0?'var(--pri)':'var(--text2)'}">
-      ${p.platform} <span style="font-size:10px;color:var(--text3)">${p.weight_pct}%</span>
-      ${p.is_emerging ? '<span style="color:var(--teal);font-size:9px">★新兴</span>' : ''}
-    </div>`).join('');
-
-  // 显示第一个平台的数据
-  if (r.top8_platforms.length) showPlatformDetail(r.top8_platforms[0].platform, 0);
-
-  // 报告
-  document.getElementById('dailyAnalysisReport').innerHTML = marked.parse(r.report);
-}
-
-function showPlatformDetail(platform, idx) {
-  if (!dailyAnalysisData) return;
-  const pData = dailyAnalysisData.top8_platforms.find(p => p.platform === platform);
-  if (!pData) return;
-  const prompt = dailyAnalysisData.platform_prompts?.[platform] || '';
-
-  // 更新标签高亮
-  document.querySelectorAll('[id^="ptab-"]').forEach((el, i) => {
-    el.style.background = i === idx ? 'var(--pri-ll)' : 'rgba(255,255,255,.8)';
-    el.style.color = i === idx ? 'var(--pri)' : 'var(--text2)';
-    el.style.borderColor = i === idx ? 'var(--pri)' : 'var(--border2)';
-  });
-
-  const detail = document.getElementById('platformDetail');
-  detail.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
-      <div>
-        <div style="font-size:12px;font-weight:800;color:#312e81;margin-bottom:10px">${platform} 数据概览</div>
-        <div style="display:flex;flex-direction:column;gap:6px">
-          ${[
-            ['权重占比', pData.weight_pct + '%'],
-            ['平均引用排名', '第' + pData.avg_position + '位'],
-            ['品牌提及率', pData.mention_rate + '%'],
-            ['引用次数', pData.count + '次'],
-            ['GEO价值', pData.is_emerging ? '⭐ 新兴高价值' : '稳定来源'],
-          ].map(([l,v]) => `
-            <div style="display:flex;justify-content:space-between;padding:6px 8px;background:rgba(255,255,255,.7);border-radius:6px;font-size:11px">
-              <span style="color:var(--text2);font-weight:700">${l}</span>
-              <span style="color:#312e81;font-weight:800">${v}</span>
-            </div>`).join('')}
-        </div>
-        <div style="margin-top:12px">
-          <div style="font-size:11px;font-weight:800;color:#312e81;margin-bottom:6px">高频引用文章</div>
-          ${pData.top_articles.map((a,i) => `
-            <div style="display:flex;align-items:center;gap:6px;padding:5px 0;border-bottom:1px solid var(--border2)">
-              <span style="font-size:10px;font-weight:900;color:var(--pri);width:16px">${i+1}</span>
-              <a href="${a.url||'#'}" target="_blank" style="font-size:11px;font-weight:700;color:#312e81;text-decoration:none;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${a.title}</a>
-              <span style="font-size:10px;color:var(--pri);font-weight:800;flex-shrink:0">×${a.count}</span>
-            </div>`).join('')}
-        </div>
-      </div>
-      <div>
-        <div style="font-size:12px;font-weight:800;color:#312e81;margin-bottom:8px">📋 专属内容生产提示词</div>
-        <div style="padding:12px;background:linear-gradient(135deg,rgba(109,92,247,.05),rgba(244,114,182,.05));border:1.5px solid rgba(109,92,247,.15);border-radius:var(--r-sm);font-size:11px;color:var(--text2);line-height:1.7;min-height:120px">${prompt || '生成中...'}</div>
-        <div style="display:flex;gap:8px;margin-top:10px">
-          <button class="btn btn-p btn-sm" onclick="importPlatformPrompt('${platform}')">导入内容生产</button>
-          <button class="btn btn-o btn-sm" onclick="copyPlatformPrompt('${platform}')">复制提示词</button>
-        </div>
-      </div>
-    </div>`;
-}
-
-async function refineAndFillPattern(rawText, sourceName) {
-  const opinionEl = document.getElementById('contentOpinion');
-  if (!opinionEl) return;
-  const previous = opinionEl.value;
-  opinionEl.value = previous ? `${previous}\n\n正在提炼「${sourceName}」内容规律...` : `正在提炼「${sourceName}」内容规律...`;
-  opinionEl.disabled = true;
-  try {
-    const r = await api('/api/content/refine_pattern', 'POST', { text: rawText });
-    if (r.error) {
-      opinionEl.value = previous;
-      appendContentOpinion(rawText.slice(0, 300), sourceName);
-      toast('提炼失败，已截取前300字', 'err');
-    } else {
-      opinionEl.value = previous;
-      appendContentOpinion(r.refined, sourceName);
-      toast(`「${sourceName}」内容规律已提炼导入 ✦`);
-    }
-  } catch(e) {
-    opinionEl.value = previous;
-    appendContentOpinion(rawText.slice(0, 300), sourceName);
-    toast('提炼失败，已截取前300字', 'err');
-  } finally {
-    opinionEl.disabled = false;
-  }
-}
-
-function appendContentOpinion(text, sourceName) {
-  const opinionEl = document.getElementById('contentOpinion');
-  if (!opinionEl) return;
-  const block = `【${sourceName}】\n${text}`;
-  const existing = opinionEl.value.trim();
-  opinionEl.value = existing ? `${existing}\n\n${block}` : block;
-  opinionEl.focus();
-}
-
-async function importPlatformPrompt(platform) {
-  if (!dailyAnalysisData?.platform_prompts?.[platform]) { toast('暂无该平台提示词', 'err'); return; }
-  const prompt = dailyAnalysisData.platform_prompts[platform];
-  navTo('content', null);
-  const banner = document.getElementById('ct-import-banner');
-  if (banner) { banner.style.display = 'block'; banner.textContent = `✦ 已导入「${platform}」平台内容生产指令`; }
-  await refineAndFillPattern(prompt, platform);
-}
-
-function copyPlatformPrompt(platform) {
-  const prompt = dailyAnalysisData?.platform_prompts?.[platform] || '';
-  navigator.clipboard.writeText(prompt).then(() => toast('提示词已复制 喵～✦'));
-}
-
-function copyDailyReport() {
-  navigator.clipboard.writeText(document.getElementById('dailyAnalysisReport').innerText)
-    .then(() => toast('报告已复制 喵～✦'));
-}
-
-async function importDailyToContent() {
-  if (!dailyAnalysisData) { toast('请先生成深度分析', 'err'); return; }
-  navTo('content', null);
-  const report = document.getElementById('dailyAnalysisReport').innerText;
-  const banner = document.getElementById('ct-import-banner');
-  if (banner) { banner.style.display = 'block'; banner.textContent = '✦ 已从今日深度分析导入内容生产指令'; }
-  await refineAndFillPattern(report, '深度分析报告');
-}
-
 
 // ── Init ──────────────────────────────────────────────
 refreshApiStatus();

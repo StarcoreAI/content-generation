@@ -154,53 +154,6 @@ class ContentPromptTests(unittest.TestCase):
         )
 
 
-class DeepAnalysisTests(unittest.TestCase):
-    def test_build_raw_and_daily_deep_analysis_contexts(self):
-        from services.deep_analysis import (
-            build_daily_deep_analysis_context,
-            build_raw_deep_analysis_context,
-            extract_content_instruction,
-        )
-
-        records = [
-            {
-                "brand_mentioned": True,
-                "geo_score": 40,
-                "refs": [
-                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 1},
-                    {"title": "Article B", "url": "https://b.example", "platform": "Zhihu", "position": 2},
-                ],
-            },
-            {
-                "brand_mentioned": False,
-                "geo_score": 20,
-                "refs": [
-                    {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "position": 3},
-                ],
-            },
-        ]
-
-        raw_context = build_raw_deep_analysis_context(records)
-        self.assertEqual(raw_context["platform_weights"][0], {"platform": "Sohu", "count": 2, "pct": 66.7})
-        self.assertEqual(len(raw_context["mentioned"]), 1)
-        self.assertEqual(raw_context["avg_score"], 30.0)
-        self.assertEqual(raw_context["sample_refs"][0], "【Sohu】Article A")
-
-        daily_context = build_daily_deep_analysis_context(records)
-        self.assertEqual(daily_context["total_refs"], 3)
-        self.assertEqual(daily_context["top8_platforms"][0]["platform"], "Sohu")
-        self.assertEqual(daily_context["top8_platforms"][0]["weight_pct"], 66.7)
-        self.assertEqual(daily_context["top8_platforms"][0]["mention_rate"], 50.0)
-        self.assertEqual(daily_context["top8_platforms"][0]["top_articles"][0]["platform"], "Sohu")
-        self.assertEqual(daily_context["emerging_str"], "Sohu")
-        self.assertIn("【Sohu】权重66.7%", daily_context["platform_summary"])
-
-        self.assertEqual(
-            extract_content_instruction("x CONTENT_INSTRUCTION_START\nhello\nCONTENT_INSTRUCTION_END y"),
-            "hello",
-        )
-
-
 class RecordStatsTests(unittest.TestCase):
     def test_build_raw_platform_stats_preserves_route_shape(self):
         from services.record_stats import build_raw_platform_stats

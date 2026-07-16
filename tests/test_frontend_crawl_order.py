@@ -535,6 +535,31 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         for snippet in retired_snippets:
             self.assertNotIn(snippet, html)
 
+    def test_legacy_deep_analysis_frontend_is_removed(self):
+        html = read_frontend_source()
+
+        retired_snippets = [
+            "/api/raw_records/deep_analyze",
+            "/api/daily/deep_analyze",
+            "loadDeepAnalysis(",
+            "startDailyAnalyze(",
+            "renderDailyAnalysis(",
+            "showPlatformDetail(",
+            "copyDeepReport(",
+            "copyDailyReport(",
+            "importDailyToContent(",
+            "importPlatformPrompt(",
+            "copyPlatformPrompt(",
+            "dailyAnalysisResult",
+            "deepAnalysisCard",
+            "dailyTemplateHint",
+            "contentInstructionBox",
+            "btnDailyAnalyze",
+            "spDeep",
+        ]
+        for snippet in retired_snippets:
+            self.assertNotIn(snippet, html)
+
 
 if __name__ == "__main__":
     unittest.main()
