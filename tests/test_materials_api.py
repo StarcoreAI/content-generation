@@ -14,6 +14,9 @@ def isolated_material_app():
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
+        "CONTENT_UPLOAD_FOLDER": getattr(geo_app, "CONTENT_UPLOAD_FOLDER", None),
+        "F_CONTENT_MATERIALS_INDEX": getattr(geo_app, "F_CONTENT_MATERIALS_INDEX", None),
+        "CONTENT_MATERIAL_CACHE_FOLDER": getattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER", None),
         "F_CLIENTS": getattr(geo_app, "F_CLIENTS", None),
         "F_SETTINGS": getattr(geo_app, "F_SETTINGS", None),
         "F_RAW_RECORDS": getattr(geo_app, "F_RAW_RECORDS", None),
@@ -24,6 +27,12 @@ def isolated_material_app():
         geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
         geo_app.F_MATERIALS_INDEX = os.path.join(tmp, "materials_index.json")
         geo_app.MATERIAL_CACHE_FOLDER = os.path.join(tmp, "material_cache")
+        if hasattr(geo_app, "CONTENT_UPLOAD_FOLDER"):
+            geo_app.CONTENT_UPLOAD_FOLDER = os.path.join(tmp, "content_uploads")
+        if hasattr(geo_app, "F_CONTENT_MATERIALS_INDEX"):
+            geo_app.F_CONTENT_MATERIALS_INDEX = os.path.join(tmp, "content_materials_index.json")
+        if hasattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER"):
+            geo_app.CONTENT_MATERIAL_CACHE_FOLDER = os.path.join(tmp, "content_material_cache")
         geo_app.F_CLIENTS = os.path.join(tmp, "clients.json")
         geo_app.F_SETTINGS = os.path.join(tmp, "settings.json")
         geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
@@ -95,6 +104,37 @@ class MaterialApiTests(unittest.TestCase):
             body = response.get_json()
             self.assertTrue(body["ok"])
             self.assertEqual(body["materials"][0]["original_name"], "params.xlsx")
+
+    def test_content_materials_are_separate_from_customer_materials(self):
+        with isolated_material_app():
+            client = geo_app.app.test_client()
+            customer = client.post(
+                "/api/materials/client-1/upload",
+                data={"file": [(io.BytesIO(b"Customer material text is only for customer analysis."), "customer.txt")]},
+                content_type="multipart/form-data",
+            )
+            content = client.post(
+                "/api/content/materials/client-1/upload",
+                data={"file": [(io.BytesIO(b"Content production material text is only for generation."), "content.txt")]},
+                content_type="multipart/form-data",
+            )
+
+            self.assertEqual(customer.status_code, 200)
+            self.assertEqual(content.status_code, 200)
+            content_body = content.get_json()
+            self.assertEqual(content_body["materials"][0]["original_name"], "content.txt")
+            self.assertTrue(content_body["materials"][0]["confirmed"])
+
+            customer_list = client.get("/api/materials/client-1").get_json()
+            content_list = client.get("/api/content/materials/client-1").get_json()
+            self.assertEqual([m["original_name"] for m in customer_list], ["customer.txt"])
+            self.assertEqual([m["original_name"] for m in content_list], ["content.txt"])
+
+            material_id = content_list[0]["id"]
+            deleted = client.delete(f"/api/content/materials/client-1/{material_id}")
+            self.assertEqual(deleted.status_code, 200)
+            self.assertEqual(client.get("/api/content/materials/client-1").get_json(), [])
+            self.assertEqual([m["original_name"] for m in client.get("/api/materials/client-1").get_json()], ["customer.txt"])
 
     def test_analyze_package_returns_preview_and_download(self):
         original_runner = geo_app.run_material_package_pipeline

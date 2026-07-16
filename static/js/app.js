@@ -284,6 +284,7 @@ let selectedContentReferencePluginIndex = -1;
 
 async function loadContent() {
   ensureContentHistoryDate();
+  loadContentMaterials();
   loadContentTop20Samples();
   loadContentSubtypePlugins();
   loadContentGenerations();
@@ -322,6 +323,60 @@ function getLocalDateString() {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+async function loadContentMaterials() {
+  const el = document.getElementById('contentMaterialList');
+  if (!el) return;
+  if (!currentClientId) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">请先选择客户</div>';
+    return;
+  }
+  const files = await api('/api/content/materials/' + currentClientId);
+  if (!Array.isArray(files) || !files.length) {
+    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">暂无内容生产资料，支持 txt / md / pdf / doc / docx / xlsx</div>';
+    return;
+  }
+  el.innerHTML = files.map(f => `
+    <div style="display:flex;align-items:flex-start;gap:10px;padding:9px 0;border-bottom:1px solid var(--border2)">
+      <i class="ti ti-file-text" style="color:var(--teal);font-size:16px"></i>
+      <div style="flex:1">
+        <div style="font-size:12px;font-weight:700;color:var(--text)">${escHtml(f.original_name || f.name)}</div>
+        <div style="font-size:10px;color:var(--text3)">${(f.size/1024).toFixed(1)}KB · ${escHtml(f.uploaded || '')}</div>
+        <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:5px">
+          <span class="badge ${materialStatusClass(f)}" style="font-size:9px">${escHtml(materialDisplayStatus(f))}</span>
+          ${materialIssueText(f) ? `<span class="badge badge-r" style="font-size:9px">${escHtml(materialIssueText(f))}</span>` : ''}
+        </div>
+      </div>
+      <button class="btn btn-danger btn-sm" onclick="delContentMaterial('${encodeURIComponent(f.id || f.name)}')">删除</button>
+    </div>`).join('');
+}
+
+async function uploadContentMaterial(input) {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  const formData = new FormData();
+  files.forEach(file => formData.append('file', file));
+  try {
+    const res = await fetch('/api/content/materials/' + currentClientId + '/upload', {
+      method: 'POST', body: formData
+    });
+    const r = await res.json();
+    if (r.error) { toast(r.error,'err'); return; }
+    toast(`内容生产资料上传成功：${(r.materials||[]).length || 1} 份 ✦`);
+    loadContentMaterials();
+  } catch(e) {
+    toast('上传失败：' + e.message, 'err');
+  }
+  input.value = '';
+}
+
+async function delContentMaterial(id) {
+  if (!confirm('确认删除该内容生产资料？')) return;
+  await api(`/api/content/materials/${currentClientId}/${id}`, 'DELETE');
+  toast('已删除');
+  loadContentMaterials();
 }
 
 async function loadContentTop20Samples() {

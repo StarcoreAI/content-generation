@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import tempfile
 import threading
@@ -25,6 +26,9 @@ def isolated_app_data():
         "F_RAW_RECORDS": geo_app.F_RAW_RECORDS,
         "F_COMPETITOR_ARTICLE_BODY_HITS": geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
         "F_CONTENT_GENERATIONS": getattr(geo_app, "F_CONTENT_GENERATIONS", None),
+        "CONTENT_UPLOAD_FOLDER": getattr(geo_app, "CONTENT_UPLOAD_FOLDER", None),
+        "F_CONTENT_MATERIALS_INDEX": getattr(geo_app, "F_CONTENT_MATERIALS_INDEX", None),
+        "CONTENT_MATERIAL_CACHE_FOLDER": getattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER", None),
         "F_CRAWL_JOBS": getattr(geo_app, "F_CRAWL_JOBS", None),
         "F_REFERENCE_INTELLIGENCE": getattr(geo_app, "F_REFERENCE_INTELLIGENCE", None),
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
@@ -45,6 +49,12 @@ def isolated_app_data():
         geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
         geo_app.F_COMPETITOR_ARTICLE_BODY_HITS = os.path.join(tmp, "competitor_article_body_hits.json")
         geo_app.F_CONTENT_GENERATIONS = os.path.join(tmp, "content_generations.json")
+        if hasattr(geo_app, "CONTENT_UPLOAD_FOLDER"):
+            geo_app.CONTENT_UPLOAD_FOLDER = os.path.join(tmp, "content_uploads")
+        if hasattr(geo_app, "F_CONTENT_MATERIALS_INDEX"):
+            geo_app.F_CONTENT_MATERIALS_INDEX = os.path.join(tmp, "content_materials_index.json")
+        if hasattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER"):
+            geo_app.CONTENT_MATERIAL_CACHE_FOLDER = os.path.join(tmp, "content_material_cache")
         geo_app.F_CRAWL_JOBS = os.path.join(tmp, "crawl_jobs.json")
         geo_app.F_REFERENCE_INTELLIGENCE = os.path.join(tmp, "reference_intelligence")
         if hasattr(geo_app, "UPLOAD_FOLDER"):
@@ -148,7 +158,7 @@ class CoreFunctionTests(unittest.TestCase):
                 {"name": "测试", "items": [1, 2]},
             )
 
-    def test_content_generate_uses_all_materials_history_and_stores_newest_first(self):
+    def test_content_generate_uses_content_materials_history_and_stores_newest_first(self):
         with isolated_app_data():
             cid = "client-1"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "苏韵汽车音响"}])
@@ -160,6 +170,37 @@ class CoreFunctionTests(unittest.TestCase):
                 f.write("案例资料：扬州车主升级DSP和隔音。")
 
             client = geo_app.app.test_client()
+            customer_upload = client.post(
+                f"/api/materials/{cid}/upload",
+                data={
+                    "file": [
+                        (
+                            io.BytesIO(b"CUSTOMER_ONLY_PROFILE_SHOULD_NOT_APPEAR has enough text."),
+                            "customer-profile.txt",
+                        )
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(customer_upload.status_code, 200)
+            content_upload = client.post(
+                f"/api/content/materials/{cid}/upload",
+                data={
+                    "file": [
+                        (
+                            io.BytesIO("CONTENT_ONLY_BRAND_CONTEXT: 苏韵主营汽车音响改装。".encode("utf-8")),
+                            "content-brand.txt",
+                        ),
+                        (
+                            io.BytesIO("CONTENT_ONLY_CASE_DETAIL: 扬州车主升级DSP和隔音。".encode("utf-8")),
+                            "content-case.md",
+                        ),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(content_upload.status_code, 200)
+            self.assertEqual(len(content_upload.get_json()["materials"]), 2)
             captured_messages = []
 
             def fake_deepseek_pro(messages, max_tokens=6000):
@@ -182,6 +223,9 @@ class CoreFunctionTests(unittest.TestCase):
                 self.assertEqual(second.get_json()["article"]["content"], "第二版文章")
 
             prompt_payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("CONTENT_ONLY_BRAND_CONTEXT", prompt_payload)
+            self.assertIn("CONTENT_ONLY_CASE_DETAIL", prompt_payload)
+            self.assertNotIn("CUSTOMER_ONLY_PROFILE_SHOULD_NOT_APPEAR", prompt_payload)
             self.assertIn("苏韵主营汽车音响改装", prompt_payload)
             self.assertIn("扬州车主升级DSP和隔音", prompt_payload)
             self.assertIn("写一篇面向扬州车主的宣传文章", prompt_payload)
@@ -194,6 +238,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(listing.status_code, 200)
             articles = listing.get_json()["articles"]
             self.assertEqual([a["content"] for a in articles], ["第二版文章", "第一版文章"])
+            self.assertEqual(articles[0]["material_count"], 2)
             self.assertEqual(articles[0]["model"], "deepseek-chat")
 
     def test_content_generate_records_configured_model(self):

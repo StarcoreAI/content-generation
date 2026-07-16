@@ -1140,8 +1140,12 @@ CONTENT_INSTRUCTION_END
 UPLOAD_FOLDER = "data/uploads"
 F_MATERIALS_INDEX = f"{D}/materials_index.json"
 MATERIAL_CACHE_FOLDER = f"{D}/material_cache"
+CONTENT_UPLOAD_FOLDER = f"{D}/content_uploads"
+F_CONTENT_MATERIALS_INDEX = f"{D}/content_materials_index.json"
+CONTENT_MATERIAL_CACHE_FOLDER = f"{D}/content_material_cache"
 ALLOWED_EXTENSIONS = {'txt', 'pdf', 'md', 'docx', 'doc', 'xlsx', 'xls'}
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(CONTENT_UPLOAD_FOLDER, exist_ok=True)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -1153,6 +1157,30 @@ def material_service():
         index_path=F_MATERIALS_INDEX,
         cache_dir=MATERIAL_CACHE_FOLDER,
     )
+
+def content_material_service():
+    return MaterialService(
+        root_dir=".",
+        upload_dir=CONTENT_UPLOAD_FOLDER,
+        index_path=F_CONTENT_MATERIALS_INDEX,
+        cache_dir=CONTENT_MATERIAL_CACHE_FOLDER,
+    )
+
+def upload_and_parse_material_files(cid, service):
+    files = request.files.getlist('file')
+    if not files:
+        return [], "没有文件"
+    materials = []
+    for file in files:
+        if not file or not file.filename:
+            continue
+        if not allowed_file(file.filename):
+            return [], "不支持的文件格式，请上传 txt/pdf/md/docx/xlsx"
+        material = service.save_uploaded_material(cid, file, file.filename)
+        materials.append(service.parse_material(cid, material["id"]))
+    if not materials:
+        return [], "没有文件"
+    return materials, ""
 
 def material_package_output_dir(cid):
     return Path(D) / "material_packages" / cid
@@ -1291,23 +1319,12 @@ def upload_material(cid):
     """上传客户资料文件"""
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    files = request.files.getlist('file')
-    if not files:
-        return jsonify({"error": "没有文件"}), 400
-    service = material_service()
-    materials = []
     try:
-        for file in files:
-            if not file or not file.filename:
-                continue
-            if not allowed_file(file.filename):
-                return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/docx"}), 400
-            material = service.save_uploaded_material(cid, file, file.filename)
-            materials.append(service.parse_material(cid, material["id"]))
+        materials, error = upload_and_parse_material_files(cid, material_service())
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
-    if not materials:
-        return jsonify({"error": "没有文件"}), 400
+    if error:
+        return jsonify({"error": error}), 400
     first = materials[0]
     return jsonify({
         "ok": True,
@@ -1315,6 +1332,38 @@ def upload_material(cid):
         "saved_as": first.get("stored_name"),
         "materials": materials,
     })
+
+@app.route("/api/content/materials/<cid>", methods=["GET"])
+def get_content_materials(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify(content_material_service().list_client_materials(cid))
+
+@app.route("/api/content/materials/<cid>/upload", methods=["POST"])
+def upload_content_material(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        materials, error = upload_and_parse_material_files(cid, content_material_service())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    if error:
+        return jsonify({"error": error}), 400
+    first = materials[0]
+    return jsonify({
+        "ok": True,
+        "name": first.get("original_name"),
+        "saved_as": first.get("stored_name"),
+        "materials": materials,
+    })
+
+@app.route("/api/content/materials/<cid>/<material_id>", methods=["DELETE"])
+def delete_content_material(cid, material_id):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    if not content_material_service().delete_material(cid, material_id):
+        return jsonify({"error": "not_found"}), 404
+    return jsonify({"ok": True})
 
 @app.route("/api/materials/<cid>/analyze-package", methods=["POST"])
 def analyze_material_package(cid):
@@ -1595,6 +1644,9 @@ def read_material_bundle(cid, max_chars=12000, per_file_chars=4000):
 def read_material_text(cid, max_chars=3000):
     """读取客户资料文本内容，用于内容生产参考"""
     return read_material_bundle(cid, max_chars=max_chars, per_file_chars=1000)["text"][:max_chars]
+
+def read_content_material_bundle(cid, max_chars=12000):
+    return content_material_service().build_generation_bundle(cid, max_chars=max_chars)
 
 def get_client(cid):
     return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
@@ -2029,7 +2081,7 @@ def generate_content_article():
     if not client:
         return jsonify({"error": "客户不存在"}), 404
 
-    material_bundle = read_material_bundle(cid)
+    material_bundle = read_content_material_bundle(cid)
     sample_links = normalize_sample_links(d.get("sample_links", []))
     selected_articles = normalize_selected_sample_articles(d.get("selected_articles", []))
     article_type = d.get("article_type") if d.get("article_type") in {"对比型", "介绍型"} else "对比型"

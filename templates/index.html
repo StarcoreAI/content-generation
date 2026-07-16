@@ -454,10 +454,21 @@
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">客户资料全量参考 × 运营意见多轮生成</div></div>
+    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">内容生产资料参考 × 运营意见多轮生成</div></div>
   </div>
   <!-- 深度分析导入提示 -->
   <div id="ct-import-banner" style="display:none;padding:10px 14px;background:linear-gradient(135deg,rgba(109,92,247,.08),rgba(244,114,182,.06));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm);margin-bottom:14px;font-size:12px;font-weight:700;color:var(--pri)"></div>
+
+  <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">生成参考资料</span><div class="card-sub">仅供内容生产使用，上传后会自动解析并参与文章生成</div></div>
+      <button class="btn btn-o btn-sm" onclick="document.getElementById('contentMaterialUpload').click()">
+        上传资料
+        <input type="file" id="contentMaterialUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="uploadContentMaterial(this)">
+      </button>
+    </div>
+    <div id="contentMaterialList"><div style="font-size:11px;color:var(--text3)">暂无内容生产资料</div></div>
+  </div>
 
   <div class="card">
     <div class="card-hd">
@@ -473,7 +484,7 @@
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用当前客户的全部资料，并只带上所选日期的历史生成内容</div></div>
+      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用上方内容生产资料，并只带上所选日期的历史生成内容</div></div>
     </div>
     <div class="form-row">
       <div class="fld">

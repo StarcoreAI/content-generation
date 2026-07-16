@@ -194,7 +194,7 @@ def build_content_generation_messages(client, material_bundle, history, opinion,
 品牌名称：{brand}
 
 【客户资料】
-以下为该客户已上传的全部资料，本次生成必须全部纳入参考。当前共 {material_count} 份：
+以下为内容生产模块中为该客户上传的参考资料，本次生成必须全部纳入参考。当前共 {material_count} 份：
 {material_text}
 
 【优质样例文章】
