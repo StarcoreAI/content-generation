@@ -89,7 +89,7 @@ class MaterialService:
 
     def save_uploaded_material(self, client_id, storage_file, original_filename, source="upload"):
         if not original_filename or not self._is_allowed(original_filename):
-            raise ValueError("不支持的文件格式，请上传 txt/pdf/md/docx")
+            raise ValueError("不支持的文件格式，请上传 txt/pdf/md/doc/docx/xlsx/xls")
         material_id = self._new_id()
         stored_name = self._safe_stored_name(material_id, original_filename)
         client_dir = self.upload_dir / client_id
@@ -268,8 +268,15 @@ class MaterialService:
                 diagnostics["extractor"] = "plain_text"
             elif ext == ".docx":
                 text = extract_docx_text(path, diagnostics)
+            elif ext == ".doc":
+                text = extract_legacy_doc_text(path, diagnostics)
             elif ext == ".pdf":
                 text = extract_pdf_text(path, diagnostics)
+            elif ext == ".xlsx":
+                text = extract_xlsx_text(path, diagnostics)
+            elif ext == ".xls":
+                diagnostics["dependency_error"] = "legacy .xls extraction requires conversion to .xlsx before upload"
+                text = ""
             else:
                 text = ""
         except Exception as exc:
@@ -333,6 +340,64 @@ def extract_pdf_text(path, diagnostics):
         dependency_errors.append(f"pypdf: {type(exc).__name__}: {exc}")
     diagnostics["dependency_error"] = "; ".join(dependency_errors)
     return ""
+
+
+def extract_legacy_doc_text(path, diagnostics):
+    errors = []
+    for tool in ("antiword", "catdoc"):
+        executable = shutil.which(tool)
+        if not executable:
+            continue
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                [executable, str(path)],
+                capture_output=True,
+                timeout=20,
+            )
+        except Exception as exc:
+            errors.append(f"{tool}: {type(exc).__name__}: {exc}")
+            continue
+        output = _decode_tool_output(result.stdout).strip()
+        if output:
+            diagnostics["extractor"] = tool
+            return output
+        stderr = _decode_tool_output(result.stderr).strip()
+        detail = f"{tool}: exit {result.returncode}"
+        if stderr:
+            detail += f" {stderr[:200]}"
+        errors.append(detail)
+    message = "legacy .doc extractor unavailable: install antiword or catdoc"
+    if errors:
+        message += "; " + "; ".join(errors)
+    diagnostics["dependency_error"] = message
+    return ""
+
+
+def extract_xlsx_text(path, diagnostics):
+    from services.material_package_extractor import extract_xlsx_file_text
+
+    text, file_record, units = extract_xlsx_file_text(path)
+    diagnostics["extractor"] = "material_package_extractor"
+    diagnostics["sheet_count"] = file_record.get("sheet_count", 0)
+    diagnostics["unit_count"] = len(units)
+    if file_record.get("extract_status") == "parse_failed":
+        diagnostics["dependency_error"] = file_record.get("error") or "xlsx parse failed"
+    return text
+
+
+def _decode_tool_output(data):
+    if not data:
+        return ""
+    if isinstance(data, str):
+        return data
+    for encoding in ("utf-8", "gb18030", "big5", "latin-1"):
+        try:
+            return data.decode(encoding)
+        except UnicodeDecodeError:
+            continue
+    return data.decode("utf-8", errors="ignore")
 
 
 def clean_material_text(text):

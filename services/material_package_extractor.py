@@ -4,14 +4,14 @@ import zipfile
 from pathlib import Path
 from xml.etree import ElementTree as ET
 
-from services.materials import extract_docx_text, extract_pdf_text
+from services.materials import extract_docx_text, extract_legacy_doc_text, extract_pdf_text
 
 
 TEXT_EXTENSIONS = {".txt", ".md"}
 DOC_EXTENSIONS = {".docx", ".pdf"}
 SPREADSHEET_EXTENSIONS = {".xlsx"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png"}
-LEGACY_OFFICE_EXTENSIONS = {".doc", ".xls"}
+LEGACY_OFFICE_EXTENSIONS = {".xls"}
 RTF_EXTENSIONS = {".rtf"}
 
 SPREADSHEET_NS = {"a": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -56,6 +56,15 @@ def _extract_file(root, path, sample_chars, max_text_chars, max_sheet_rows):
     if ext in TEXT_EXTENSIONS:
         text = path.read_text(encoding="utf-8", errors="ignore")
         return _text_file(base, rel_path, text, "ok", "plain_text", sample_chars, max_text_chars)
+    if ext == ".doc":
+        text, diagnostics = _extract_document_text(path)
+        if text.strip():
+            file_record, units = _text_file(
+                base, rel_path, text, "ok", diagnostics.get("extractor", ""), sample_chars, max_text_chars
+            )
+            file_record["diagnostics"] = diagnostics
+            return file_record, units
+        return _legacy_office_file(base, rel_path, path, sample_chars, diagnostics)
     if ext in DOC_EXTENSIONS:
         text, diagnostics = _extract_document_text(path)
         status = "ok" if text.strip() else "empty_text"
@@ -88,24 +97,26 @@ def _extract_file(root, path, sample_chars, max_text_chars, max_sheet_rows):
             }
         ]
     if ext in LEGACY_OFFICE_EXTENSIONS:
-        sample = _binary_probe(path, sample_chars)
-        file_record = {
-            **base,
-            "extract_status": "needs_conversion",
-            "sample": sample,
-            "text_chars": len(sample),
-        }
-        return file_record, [
-            {
-                "unit_id": rel_path,
-                "path": rel_path,
-                "kind": "legacy_office",
-                "extract_status": "needs_conversion",
-                "text": sample,
-                "sample": sample,
-            }
-        ]
+        return _legacy_office_file(base, rel_path, path, sample_chars)
     return {**base, "extract_status": "unsupported"}, []
+
+
+def extract_xlsx_file_text(path, sample_chars=800, max_text_chars=20000, max_sheet_rows=80):
+    source = Path(path)
+    base = {
+        "path": source.name,
+        "name": source.name,
+        "extension": source.suffix.lower().lstrip("."),
+        "size": source.stat().st_size,
+        "category_from_path": "",
+    }
+    file_record, units = _extract_xlsx(base, source.name, source, sample_chars, max_sheet_rows)
+    text = "\n\n".join(
+        str(unit.get("text") or "")
+        for unit in units
+        if unit.get("extract_status") == "ok" and unit.get("text")
+    )
+    return text[:max_text_chars], file_record, units
 
 
 def _text_file(base, rel_path, text, status, extractor, sample_chars, max_text_chars):
@@ -142,7 +153,32 @@ def _extract_document_text(path):
         return extract_docx_text(path, diagnostics), diagnostics
     if path.suffix.lower() == ".pdf":
         return extract_pdf_text(path, diagnostics), diagnostics
+    if path.suffix.lower() == ".doc":
+        return extract_legacy_doc_text(path, diagnostics), diagnostics
     return "", diagnostics
+
+
+def _legacy_office_file(base, rel_path, path, sample_chars, diagnostics=None):
+    sample = _binary_probe(path, sample_chars)
+    file_record = {
+        **base,
+        "extract_status": "needs_conversion",
+        "sample": sample,
+        "text_chars": len(sample),
+    }
+    if diagnostics:
+        file_record["diagnostics"] = diagnostics
+    unit = {
+        "unit_id": rel_path,
+        "path": rel_path,
+        "kind": "legacy_office",
+        "extract_status": "needs_conversion",
+        "text": sample,
+        "sample": sample,
+    }
+    if diagnostics:
+        unit["diagnostics"] = diagnostics
+    return file_record, [unit]
 
 
 def _extract_xlsx(base, rel_path, path, sample_chars, max_sheet_rows):

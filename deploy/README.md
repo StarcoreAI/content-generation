@@ -51,6 +51,13 @@ iZ0jl4w2flouy3m8qid1o9Z
 geosystem
 ```
 
+Install system tools for legacy `.doc` text extraction:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y antiword catdoc
+```
+
 ## Current Non-Docker Runbook
 
 Connect from the Windows laptop:
@@ -157,6 +164,8 @@ cp .env.example .env
 mkdir -p data pdf logs
 ```
 
+The Docker image installs `antiword` and `catdoc` for legacy `.doc` extraction.
+
 Edit `.env` and set a long random `GEO_SECRET_KEY`.
 
 Start or update the service:
@@ -182,6 +191,8 @@ The compose file mounts these persistent directories:
 Generic manual command pattern:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y antiword catdoc
 python3.12 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt

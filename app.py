@@ -1175,7 +1175,7 @@ def upload_and_parse_material_files(cid, service):
         if not file or not file.filename:
             continue
         if not allowed_file(file.filename):
-            return [], "不支持的文件格式，请上传 txt/pdf/md/docx/xlsx"
+            return [], "不支持的文件格式，请上传 txt/pdf/md/doc/docx/xlsx/xls"
         material = service.save_uploaded_material(cid, file, file.filename)
         materials.append(service.parse_material(cid, material["id"]))
     if not materials:
@@ -1475,7 +1475,7 @@ def analyze_competitor_upload(cid):
         if not file or not file.filename:
             continue
         if not allowed_file(file.filename):
-            return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/docx/xlsx"}), 400
+            return jsonify({"error": "不支持的文件格式，请上传 txt/pdf/md/doc/docx/xlsx/xls"}), 400
         safe_name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", Path(file.filename).name).strip(" .")
         target = upload_dir / f"{uid()}_{safe_name or 'competitor_material'}"
         file.save(str(target))

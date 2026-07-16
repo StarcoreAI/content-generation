@@ -20,6 +20,8 @@ class DeployConfigTests(unittest.TestCase):
         self.assertIn("GEO_HOST=0.0.0.0", dockerfile)
         self.assertIn("GEO_PORT=5000", dockerfile)
         self.assertIn("gunicorn", requirements)
+        self.assertIn("antiword", dockerfile)
+        self.assertIn("catdoc", dockerfile)
         self.assertIn("--workers", dockerfile)
         self.assertIn("1", dockerfile)
         self.assertIn("app:app", dockerfile)
