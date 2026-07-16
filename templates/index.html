@@ -25,7 +25,8 @@
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
     <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
-    <div class="t-ni" onclick="navTo('materials',this)">资料解析</div>
+    <div class="t-ni" onclick="navTo('materials',this)">客户资料解析</div>
+    <div class="t-ni" onclick="navTo('competitors',this)">竞品资料解析</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
   </div>
   <div class="t-right">
@@ -54,6 +55,7 @@
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
   <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
   <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
+  <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
   <div class="s-sec">配置</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
@@ -415,9 +417,16 @@
     <div id="materialPackageResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
     <div id="materialWebSupplementResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
   </div>
+</div>
+
+<!-- ═══ 竞品资料解析 ═══ -->
+<div class="page" id="page-competitors">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>竞品资料解析</em></div><div class="pg-sub">上传竞品资料或联网补充资料，按真实竞品实体聚合展示</div></div>
+  </div>
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">竞品资料解析</span><div class="card-sub">按真实竞品名称整理上传资料，或用竞品名 + 行业/品类联网补充</div></div>
+      <div><span class="card-title">竞品资料包</span><div class="card-sub">上传资料和联网资料会按竞品实体合并展示，两个 Markdown 文件可分开下载</div></div>
       <div class="acts">
         <button class="btn btn-o btn-sm" id="btnCompetitorWeb" onclick="expandCompetitorWeb()">
           <span class="spin" id="spCompetitorWeb" style="display:none"></span>联网搜索竞品资料

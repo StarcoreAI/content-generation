@@ -9,6 +9,7 @@ function navTo(page, el) {
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
   if (page === 'materials') loadMaterialAnalysis();
+  if (page === 'competitors') loadCompetitorAnalysis();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
@@ -189,6 +190,7 @@ function onClientChange() {
   }
   if (document.getElementById('page-content')?.classList.contains('on')) loadContent();
   if (document.getElementById('page-materials')?.classList.contains('on')) loadMaterialAnalysis();
+  if (document.getElementById('page-competitors')?.classList.contains('on')) loadCompetitorAnalysis();
   if (document.getElementById('page-reference')?.classList.contains('on')) {
     loadReferenceIntelligence();
   }
@@ -1204,13 +1206,17 @@ let latestMaterialPackageMarkdown = '';
 let latestMaterialWebSupplementMarkdown = '';
 let latestCompetitorUploadMarkdown = '';
 let latestCompetitorWebMarkdown = '';
+let latestCompetitorMergedMarkdown = '';
 
 function loadMaterialAnalysis() {
   loadMaterials();
   loadMaterialPackageResult();
   loadMaterialWebSupplement();
-  loadCompetitorEntities();
-  loadCompetitorResult();
+}
+
+async function loadCompetitorAnalysis() {
+  await loadCompetitorEntities();
+  await loadCompetitorResult();
 }
 
 async function loadMaterials() {
@@ -1461,15 +1467,119 @@ function competitorNamesFromInput() {
 }
 
 async function loadCompetitorEntities() {
-  if (!currentClientId) return;
+  if (!currentClientId) return competitorNamesFromInput();
   const el = document.getElementById('competitorNames');
-  if (!el || el.value.trim()) return;
+  if (!el) return [];
+  if (el.dataset.clientId && el.dataset.clientId !== currentClientId) el.value = '';
+  el.dataset.clientId = currentClientId;
+  if (el.value.trim()) return competitorNamesFromInput();
   try {
     const date = document.getElementById('dailyDate')?.value || new Date().toISOString().slice(0,10);
     const result = await api(`/api/competitors/${currentClientId}/entities?date=${date}`);
     const names = (result.entities || []).map(e => e.name).filter(Boolean);
     if (names.length && !el.value.trim()) el.value = names.join('\n');
+    return names;
   } catch(e) {}
+  return competitorNamesFromInput();
+}
+
+function normalizeCompetitorEntityName(name) {
+  return String(name || '').replace(/^#+\s*/, '').replace(/^[\d.、\s-]+/, '').trim();
+}
+
+function markdownHeadingTitle(line) {
+  const match = String(line || '').match(/^#{1,6}\s+(.+)$/);
+  return match ? normalizeCompetitorEntityName(match[1]) : '';
+}
+
+function splitMarkdownByHeadings(markdown) {
+  const text = String(markdown || '').trim();
+  if (!text) return [];
+  const sections = [];
+  let current = [];
+  text.split(/\n/).forEach(line => {
+    if (/^#{1,6}\s+\S/.test(line) && current.length) {
+      sections.push(current.join('\n').trim());
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  });
+  if (current.length) sections.push(current.join('\n').trim());
+  return sections.filter(Boolean);
+}
+
+function competitorEntityNamesFromResult(result) {
+  const names = [...competitorNamesFromInput()];
+  const statusNames = result?.status?.competitors || result?.competitors || [];
+  statusNames.forEach(item => names.push(typeof item === 'string' ? item : item?.name));
+  [result?.upload_markdown, result?.web_markdown, result?.uploadMarkdown, result?.webMarkdown].forEach(markdown => {
+    splitMarkdownByHeadings(markdown).forEach(section => {
+      const title = markdownHeadingTitle(section.split(/\n/, 1)[0]);
+      if (title && !/(资料|补充|整理包|上传|联网)/.test(title) && title.length <= 40) names.push(title);
+    });
+  });
+  const seen = new Set();
+  return names.map(normalizeCompetitorEntityName).filter(name => {
+    if (!name || seen.has(name)) return false;
+    seen.add(name);
+    return true;
+  }).slice(0, 20);
+}
+
+function extractCompetitorEntitySections(markdown, entityName) {
+  const text = String(markdown || '').trim();
+  const entity = String(entityName || '').trim().toLowerCase();
+  if (!text || !entity) return '';
+  const sections = splitMarkdownByHeadings(text);
+  const matched = sections.filter(section => section.toLowerCase().includes(entity));
+  if (matched.length) return matched.join('\n\n');
+  return sections.length <= 1 && text.toLowerCase().includes(entity) ? text : '';
+}
+
+function buildCompetitorEntityGroups(entityNames, uploadMarkdown, webMarkdown) {
+  const groups = (entityNames || []).map(name => ({
+    name,
+    upload: extractCompetitorEntitySections(uploadMarkdown, name),
+    web: extractCompetitorEntitySections(webMarkdown, name),
+  })).filter(group => group.upload || group.web);
+  if (!groups.length && (uploadMarkdown || webMarkdown)) {
+    groups.push({
+      name: '未按竞品实体识别',
+      upload: String(uploadMarkdown || '').trim(),
+      web: String(webMarkdown || '').trim(),
+    });
+  }
+  return groups;
+}
+
+function markdownPreview(markdown) {
+  return window.marked ? marked.parse(markdown) : `<pre>${escHtml(markdown)}</pre>`;
+}
+
+function formatCompetitorEntityGroupsMarkdown(groups) {
+  return (groups || []).map(group => [
+    `## ${group.name}`,
+    group.upload ? `### 上传资料整理\n\n${group.upload}` : '',
+    group.web ? `### 联网资料补充\n\n${group.web}` : '',
+  ].filter(Boolean).join('\n\n')).join('\n\n---\n\n');
+}
+
+function renderCompetitorEntityGroups(groups) {
+  if (!groups.length) return '<div style="font-size:12px;color:var(--text3)">暂无竞品资料结果</div>';
+  return groups.map(group => `
+    <div style="padding:12px 0;border-top:1px solid var(--border2)">
+      <div style="font-size:13px;font-weight:900;color:#312e81;margin-bottom:8px">${escHtml(group.name)}</div>
+      ${group.upload ? `
+        <div style="font-size:11px;font-weight:900;color:var(--pri);margin:8px 0 6px">上传资料整理</div>
+        <div class="report-md" style="max-height:260px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${markdownPreview(group.upload)}</div>
+      ` : ''}
+      ${group.web ? `
+        <div style="font-size:11px;font-weight:900;color:var(--teal);margin:10px 0 6px">联网资料补充</div>
+        <div class="report-md" style="max-height:260px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${markdownPreview(group.web)}</div>
+      ` : ''}
+    </div>
+  `).join('');
 }
 
 function renderCompetitorMaterialResult(result) {
@@ -1477,11 +1587,13 @@ function renderCompetitorMaterialResult(result) {
   if (!box) return;
   latestCompetitorUploadMarkdown = result?.upload_markdown || result?.uploadMarkdown || result?.upload || '';
   latestCompetitorWebMarkdown = result?.web_markdown || result?.webMarkdown || result?.markdown || '';
-  const combined = [
-    latestCompetitorUploadMarkdown ? `## 上传资料整理\n\n${latestCompetitorUploadMarkdown}` : '',
-    latestCompetitorWebMarkdown ? `## 联网资料补充\n\n${latestCompetitorWebMarkdown}` : ''
-  ].filter(Boolean).join('\n\n---\n\n');
-  if (!combined && !result?.error) {
+  const groups = buildCompetitorEntityGroups(
+    competitorEntityNamesFromResult(result),
+    latestCompetitorUploadMarkdown,
+    latestCompetitorWebMarkdown,
+  );
+  latestCompetitorMergedMarkdown = formatCompetitorEntityGroupsMarkdown(groups);
+  if (!groups.length && !result?.error) {
     box.style.display = 'none';
     box.innerHTML = '';
     return;
@@ -1491,12 +1603,11 @@ function renderCompetitorMaterialResult(result) {
     box.innerHTML = `<div style="font-size:12px;font-weight:800;color:var(--red)">竞品资料处理失败：${escHtml(result.error)}</div>`;
     return;
   }
-  const preview = window.marked ? marked.parse(combined) : `<pre>${escHtml(combined)}</pre>`;
   box.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
       <div>
         <div style="font-size:13px;font-weight:900;color:#312e81">竞品资料解析结果</div>
-        <div style="font-size:10px;color:var(--text3);margin-top:3px">真实竞品名称分组，可复制或下载</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">按竞品实体聚合展示；上传资料和联网资料可分开下载</div>
       </div>
       <div class="acts">
         <button class="btn btn-o btn-sm" onclick="copyCompetitorMaterialMarkdown()">复制</button>
@@ -1504,7 +1615,7 @@ function renderCompetitorMaterialResult(result) {
         <button class="btn btn-p btn-sm" onclick="downloadCompetitorWebMarkdown()">下载联网.md</button>
       </div>
     </div>
-    <div class="report-md" style="max-height:360px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${preview}</div>
+    ${renderCompetitorEntityGroups(groups)}
   `;
 }
 
@@ -1582,9 +1693,9 @@ async function expandCompetitorWeb() {
 }
 
 function copyCompetitorMaterialMarkdown() {
-  const markdown = [latestCompetitorUploadMarkdown, latestCompetitorWebMarkdown].filter(Boolean).join('\n\n---\n\n');
+  const markdown = latestCompetitorMergedMarkdown || [latestCompetitorUploadMarkdown, latestCompetitorWebMarkdown].filter(Boolean).join('\n\n---\n\n');
   if (!markdown) { toast('暂无可复制结果','err'); return; }
-  navigator.clipboard.writeText(markdown).then(() => toast('竞品资料已复制 ✦'));
+  copyTextToClipboard(markdown, '竞品资料已复制 ✦');
 }
 
 function downloadCompetitorUploadMarkdown() {

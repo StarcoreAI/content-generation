@@ -404,7 +404,8 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertLess(html.index("navTo('reference'"), html.index("navTo('materials'"))
-        self.assertLess(html.index("navTo('materials'"), html.index("navTo('content'"))
+        self.assertLess(html.index("navTo('materials'"), html.index("navTo('competitors'"))
+        self.assertLess(html.index("navTo('competitors'"), html.index("navTo('content'"))
         self.assertIn('id="page-materials"', html)
         self.assertIn("客户资料解析", html)
         self.assertIn('id="materialUpload"', html)
@@ -414,20 +415,8 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="btnExpandMaterials"', html)
         self.assertIn('id="materialPackageResult"', html)
         self.assertIn('id="materialWebSupplementResult"', html)
-        self.assertIn('id="competitorNames"', html)
-        self.assertIn('id="competitorQualifier"', html)
-        self.assertIn('id="competitorUpload"', html)
-        self.assertIn('id="competitorMaterialResult"', html)
         self.assertIn("analyzeMaterialPackage()", html)
         self.assertIn("expandMaterialPackage()", html)
-        self.assertIn("analyzeCompetitorUpload(", html)
-        self.assertIn("expandCompetitorWeb()", html)
-        self.assertIn("loadCompetitorEntities()", html)
-        self.assertIn("/api/competitors/", html)
-        self.assertIn("/expand-web", html)
-        self.assertIn("/analyze-upload", html)
-        self.assertIn("/upload.md", html)
-        self.assertIn("/web.md", html)
         self.assertIn("loadMaterialPackageResult()", html)
         self.assertIn("loadMaterialWebSupplement()", html)
         self.assertIn("copyMaterialPackageMarkdown()", html)
@@ -448,6 +437,11 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("delMaterial(", html)
         self.assertIn("materialDisplayStatus(", html)
 
+        materials_page = html.split('id="page-materials"', 1)[1].split('id="page-competitors"', 1)[0]
+        self.assertNotIn('id="competitorNames"', materials_page)
+        self.assertNotIn('id="competitorUpload"', materials_page)
+        self.assertNotIn('id="competitorMaterialResult"', materials_page)
+
         content_page = html.split('id="page-content"', 1)[1].split('id="page-clients"', 1)[0]
         self.assertNotIn('id="btnAnalyzeMaterials"', content_page)
         self.assertNotIn('id="materialPackageResult"', content_page)
@@ -462,6 +456,53 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIsNotNone(web_render)
         self.assertNotIn("result?.queries", web_render.group("body"))
         self.assertNotIn("source_count", web_render.group("body"))
+
+    def test_competitor_material_analysis_is_independent_and_grouped_by_entity(self):
+        html = read_frontend_source()
+
+        self.assertIn('id="page-competitors"', html)
+        self.assertIn("竞品资料解析", html)
+        self.assertIn("if (page === 'competitors') loadCompetitorAnalysis()", html)
+        self.assertIn("page-competitors", html)
+        self.assertIn('id="competitorNames"', html)
+        self.assertIn('id="competitorQualifier"', html)
+        self.assertIn('id="competitorUpload"', html)
+        self.assertIn('id="competitorMaterialResult"', html)
+        self.assertIn("analyzeCompetitorUpload(", html)
+        self.assertIn("expandCompetitorWeb()", html)
+        self.assertIn("loadCompetitorAnalysis()", html)
+        self.assertIn("loadCompetitorEntities()", html)
+        self.assertIn("el.dataset.clientId && el.dataset.clientId !== currentClientId", html)
+        self.assertIn("el.dataset.clientId = currentClientId", html)
+        self.assertIn("/api/competitors/", html)
+        self.assertIn("/expand-web", html)
+        self.assertIn("/analyze-upload", html)
+        self.assertIn("/upload.md", html)
+        self.assertIn("/web.md", html)
+
+        competitor_page = html.split('id="page-competitors"', 1)[1].split('id="page-content"', 1)[0]
+        self.assertIn("两个 Markdown 文件可分开下载", competitor_page)
+        self.assertIn("上传并解析竞品资料", competitor_page)
+        self.assertIn("联网搜索竞品资料", competitor_page)
+
+        render_match = re.search(
+            r"function renderCompetitorMaterialResult\(result\) \{(?P<body>.*?)\n\}\n\nasync function loadCompetitorResult",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(render_match)
+        render_body = render_match.group("body")
+        self.assertIn("buildCompetitorEntityGroups", render_body)
+        self.assertIn("renderCompetitorEntityGroups", render_body)
+        self.assertIn("下载上传.md", render_body)
+        self.assertIn("下载联网.md", render_body)
+        self.assertNotIn("latestCompetitorUploadMarkdown ? `## 上传资料整理", render_body)
+
+        self.assertIn("function extractCompetitorEntitySections(markdown, entityName)", html)
+        self.assertIn("function buildCompetitorEntityGroups(entityNames, uploadMarkdown, webMarkdown)", html)
+        self.assertIn("function formatCompetitorEntityGroupsMarkdown(groups)", html)
+        self.assertIn("上传资料整理", html)
+        self.assertIn("联网资料补充", html)
 
     def test_retired_content_and_dashboard_api_calls_are_removed(self):
         html = read_frontend_source()
