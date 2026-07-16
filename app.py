@@ -36,6 +36,7 @@ from services.deep_analysis import (
 )
 from services.materials import MaterialService
 from services.material_pipeline import load_latest_material_package_result, run_material_package_pipeline
+from services.material_web_expansion import expand_material_web_package, tavily_search
 from services.record_stats import (
     build_raw_platform_stats,
 )
@@ -462,7 +463,7 @@ def calibrate_analysis_brand_mention(brand, question, answer, refs, analysis):
 # ── AI 调用 ─────────────────────────────────────────────
 DEFAULT_SETTINGS = {
         "api_key": "", "base_url": "https://api.deepseek.com",
-        "model": "deepseek-chat", "preset": "deepseek"
+        "model": "deepseek-chat", "preset": "deepseek", "tavily_api_key": ""
     }
 
 
@@ -497,10 +498,15 @@ def save_current_settings(data):
     settings = load(path, {}) if username else get_global_settings()
     if data.get("api_key") and data["api_key"] not in ("***", ""):
         settings["api_key"] = data["api_key"]
+    if data.get("tavily_api_key") and data["tavily_api_key"] not in ("***", ""):
+        settings["tavily_api_key"] = data["tavily_api_key"]
     for key in ["base_url", "model", "preset"]:
         if key in data:
             settings[key] = data[key]
     save(path, settings)
+
+def get_tavily_api_key(settings=None):
+    return os.environ.get("TAVILY_API_KEY", "").strip() or str((settings or get_settings()).get("tavily_api_key") or "").strip()
 
 def ai(prompt, max_tokens=2000):
     s = get_settings()
@@ -1172,6 +1178,30 @@ def run_client_material_package_analysis(cid):
         models=models,
     )
 
+def client_material_web_context(cid):
+    client = next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None) or {"id": cid}
+    output_dir = material_package_output_dir(cid)
+    injection_path = output_dir / "latest_injection.md"
+    if not injection_path.exists():
+        raise FileNotFoundError("material_injection_not_found")
+    return client, output_dir, injection_path.read_text(encoding="utf-8", errors="ignore")
+
+def run_client_material_web_expansion(cid):
+    client, output_dir, injection_markdown = client_material_web_context(cid)
+    settings = get_settings()
+    tavily_key = get_tavily_api_key(settings)
+    if not tavily_key:
+        raise ValueError("missing_tavily_api_key")
+    ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
+    search_fn = lambda query: tavily_search(query, tavily_key)
+    return expand_material_web_package(
+        client=client,
+        injection_markdown=injection_markdown,
+        output_dir=output_dir,
+        ask_text=ask_text,
+        search_fn=search_fn,
+    )
+
 @app.route("/api/materials/<cid>", methods=["GET"])
 def get_materials(cid):
     """获取客户已上传的资料列表"""
@@ -1261,6 +1291,34 @@ def get_material_package_result(cid):
         return jsonify({"ok": False, "status": result.get("status", {}).get("status", "missing"), "markdown": ""}), 404
     return jsonify(result)
 
+@app.route("/api/materials/<cid>/expand-web", methods=["POST"])
+def expand_material_package_web(cid):
+    """Generate a lightweight public-web supplement for the latest material injection."""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        result = run_client_material_web_expansion(cid)
+    except FileNotFoundError:
+        return jsonify({"error": "material_injection_not_found"}), 404
+    except ValueError as exc:
+        if str(exc) == "missing_tavily_api_key":
+            return jsonify({"error": "missing_tavily_api_key"}), 400
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        return jsonify({"error": str(exc)}), 500
+    return jsonify(result)
+
+@app.route("/api/materials/<cid>/web-supplement", methods=["GET"])
+def get_material_web_supplement(cid):
+    """Return latest web supplement markdown for browser preview."""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    path = material_package_output_dir(cid) / "latest_web_supplement.md"
+    if not path.exists():
+        return jsonify({"ok": False, "status": "missing", "markdown": ""}), 404
+    markdown = path.read_text(encoding="utf-8", errors="ignore")
+    return jsonify({"ok": True, "status": "completed", "markdown": markdown})
+
 @app.route("/api/materials/<cid>/injection.md", methods=["GET"])
 def download_material_injection(cid):
     """Download latest material injection markdown."""
@@ -1270,6 +1328,16 @@ def download_material_injection(cid):
     if not path.exists():
         return jsonify({"error": "not_found"}), 404
     return send_file(path, as_attachment=True, download_name="material_injection.md", mimetype="text/markdown; charset=utf-8")
+
+@app.route("/api/materials/<cid>/web-supplement.md", methods=["GET"])
+def download_material_web_supplement(cid):
+    """Download latest web supplement markdown."""
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    path = material_package_output_dir(cid) / "latest_web_supplement.md"
+    if not path.exists():
+        return jsonify({"error": "not_found"}), 404
+    return send_file(path, as_attachment=True, download_name="material_web_supplement.md", mimetype="text/markdown; charset=utf-8")
 
 @app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
 def parse_material(cid, material_id):
@@ -2367,8 +2435,9 @@ def preview_template(cid):
 @app.route("/api/settings", methods=["GET"])
 def api_get_settings():
     s = get_settings()
-    s_safe = {k: v for k, v in s.items() if k != "api_key"}
+    s_safe = {k: v for k, v in s.items() if k not in ("api_key", "tavily_api_key")}
     s_safe["has_key"] = bool(s.get("api_key"))
+    s_safe["has_tavily_key"] = bool(get_tavily_api_key(s))
     return jsonify(s_safe)
 
 @app.route("/api/settings", methods=["POST"])

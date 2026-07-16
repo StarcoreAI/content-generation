@@ -37,6 +37,13 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("<style>", html)
         self.assertNotRegex(html, r"<script>\s*//")
 
+    def test_settings_page_can_save_tavily_api_key(self):
+        html = read_frontend_source()
+
+        self.assertIn('id="set-tavily-key"', html)
+        self.assertIn("has_tavily_key", html)
+        self.assertIn("tavily_api_key:tavilyKey||'***'", html)
+
     def test_frontend_defaults_to_groups_and_removes_retired_modules(self):
         html = read_frontend_source()
 
@@ -368,12 +375,18 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="btnAnalyzeMaterials"', html)
         self.assertIn('id="btnExpandMaterials"', html)
         self.assertIn('id="materialPackageResult"', html)
+        self.assertIn('id="materialWebSupplementResult"', html)
         self.assertIn("analyzeMaterialPackage()", html)
         self.assertIn("expandMaterialPackage()", html)
         self.assertIn("loadMaterialPackageResult()", html)
+        self.assertIn("loadMaterialWebSupplement()", html)
         self.assertIn("copyMaterialPackageMarkdown()", html)
+        self.assertIn("copyMaterialWebSupplementMarkdown()", html)
+        self.assertIn("downloadMaterialWebSupplementMarkdown()", html)
         self.assertIn("/analyze-package", html)
         self.assertIn("/package-result", html)
+        self.assertIn("/web-supplement", html)
+        self.assertIn("/web-supplement.md", html)
         self.assertIn("/injection.md", html)
         self.assertNotIn('id="localMaterialList"', html)
         self.assertNotIn("loadLocalMaterials()", html)
@@ -388,7 +401,17 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         content_page = html.split('id="page-content"', 1)[1].split('id="page-clients"', 1)[0]
         self.assertNotIn('id="btnAnalyzeMaterials"', content_page)
         self.assertNotIn('id="materialPackageResult"', content_page)
+        self.assertNotIn('id="materialWebSupplementResult"', content_page)
         self.assertNotIn('id="btnExpandMaterials"', content_page)
+
+        web_render = re.search(
+            r"function renderMaterialWebSupplement\([^)]*\) \{(?P<body>.*?)\n\}",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(web_render)
+        self.assertNotIn("result?.queries", web_render.group("body"))
+        self.assertNotIn("source_count", web_render.group("body"))
 
     def test_retired_content_and_dashboard_api_calls_are_removed(self):
         html = read_frontend_source()

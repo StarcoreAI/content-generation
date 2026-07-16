@@ -73,6 +73,51 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             ["问题A", "问题A", "问题B", "问题B"],
         )
 
+    def test_run_job_passes_default_node_concurrency(self):
+        calls = []
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            calls.append({"platform": platform, "questions": questions, "kwargs": kwargs})
+            return {
+                "ok": True,
+                "total": len(questions),
+                "success": len(questions),
+                "results": [
+                    {"ok": True, "question": question, "answer": "回答", "refs": []}
+                    for question in questions
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = local_crawl_worker.run_job(
+                {
+                    "id": "job-1",
+                    "platform": "qwen",
+                    "questions": ["问题A", "问题B"],
+                    "repeat_count": 1,
+                },
+                run_crawler=fake_run_node_crawler,
+                output_root=Path(tmp),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(calls[0]["kwargs"]["concurrency"], 2)
+
+    def test_login_recovery_error_includes_account_verification_markers(self):
+        messages = [
+            "verification_required",
+            "captcha challenge",
+            "security check required",
+            "\u8d26\u53f7\u5f02\u5e38",
+            "\u8bbf\u95ee\u5f02\u5e38",
+            "\u98ce\u9669\u9a8c\u8bc1",
+            "\u4eba\u673a\u9a8c\u8bc1",
+        ]
+
+        for message in messages:
+            with self.subTest(message=message):
+                self.assertTrue(local_crawl_worker.is_login_recovery_error(message))
+
     def test_run_once_claims_platform_runs_node_and_submits_result(self):
         cloud = FakeCloudClient([
             {
@@ -357,7 +402,7 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertIn("network timeout", payload["error"])
         self.assertEqual(payload["summary"], {"total": 1, "success": 0})
 
-    def test_run_job_recovers_login_failure_and_retries_current_job_once(self):
+    def test_run_job_recovers_plain_login_failure_with_configured_concurrency(self):
         calls = []
         login_calls = []
 
@@ -391,7 +436,41 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertEqual(payload["status"], "completed")
         self.assertEqual(payload["summary"], {"total": 1, "success": 1})
         self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[0]["kwargs"]["concurrency"], 2)
+        self.assertEqual(calls[1]["kwargs"]["concurrency"], 2)
         self.assertEqual(login_calls, [("qwen", 77)])
+
+    def test_run_job_recovers_verification_failure_with_one_browser_retry(self):
+        calls = []
+
+        def flaky_crawler(platform, questions, **kwargs):
+            calls.append({"platform": platform, "questions": questions, "kwargs": kwargs})
+            if len(calls) == 1:
+                raise RuntimeError("doubao verification_required: captcha challenge")
+            return {
+                "ok": True,
+                "total": len(questions),
+                "success": len(questions),
+                "results": [
+                    {"ok": True, "question": question, "answer": "回答", "refs": []}
+                    for question in questions
+                ],
+            }
+
+        def fake_login(_job, timeout_s=1800):
+            return {"status": "completed", "summary": {"total": 1, "success": 1}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = local_crawl_worker.run_job(
+                {"id": "job-1", "platform": "doubao", "questions": ["问题A"]},
+                run_crawler=flaky_crawler,
+                run_login=fake_login,
+                output_root=Path(tmp),
+            )
+
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(calls[0]["kwargs"]["concurrency"], 2)
+        self.assertEqual(calls[1]["kwargs"]["concurrency"], 1)
 
     def test_run_once_handles_login_job_with_manual_auth_preflight(self):
         cloud = FakeCloudClient([
@@ -415,10 +494,33 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             )
 
         self.assertTrue(worked)
-        run_auth.assert_called_once_with(["qwen"], timeout_s=1800, mode="manual")
+        run_auth.assert_called_once_with(
+            ["qwen"],
+            timeout_s=1800,
+            mode="manual",
+            storage_state_path=str(local_crawl_worker.ROOT / "data" / "qwen_state.json"),
+        )
         self.assertEqual(cloud.submitted[0][0], "login-qwen")
         self.assertEqual(cloud.submitted[0][1]["status"], "completed")
         self.assertEqual(cloud.submitted[0][1]["summary"], {"total": 1, "success": 1})
+
+    def test_run_login_job_saves_platform_specific_state(self):
+        with mock.patch.object(local_crawl_worker, "run_node_auth_preflight") as run_auth:
+            run_auth.return_value = {"ok": True, "message": "ready"}
+
+            payload = local_crawl_worker.run_login_job(
+                {"id": "login-doubao", "platform": "doubao"},
+                timeout_s=88,
+            )
+
+        expected_state = local_crawl_worker.ROOT / "data" / "doubao_state.json"
+        self.assertEqual(payload["status"], "completed")
+        run_auth.assert_called_once_with(
+            ["doubao"],
+            timeout_s=88,
+            mode="manual",
+            storage_state_path=str(expected_state),
+        )
 
     def test_run_once_parallel_starts_different_platforms_together(self):
         qwen_started = threading.Event()

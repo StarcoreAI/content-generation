@@ -544,6 +544,8 @@ async function loadSettings() {
   const s = await api('/api/settings');
   document.getElementById('set-url').value = s.base_url||'';
   document.getElementById('set-model').value = s.model||'';
+  const tavilyInput = document.getElementById('set-tavily-key');
+  if (tavilyInput) tavilyInput.placeholder = s.has_tavily_key ? '已配置，留空则不修改' : '填入 Tavily API Key';
   selectedPreset = s.preset||'deepseek';
   renderPresets();
   updateApiStatus(s);
@@ -564,12 +566,18 @@ function selectPreset(k) {
 }
 async function saveSettings() {
   const key = document.getElementById('set-key').value.trim();
+  const tavilyKey = document.getElementById('set-tavily-key')?.value.trim() || '';
   const url = document.getElementById('set-url').value.trim();
   const model = document.getElementById('set-model').value.trim();
   if (!url||!model) { toast('请填写接口地址和模型名称','err'); return; }
-  await api('/api/settings','POST',{api_key:key||'***',base_url:url,model,preset:selectedPreset});
-  updateApiStatus({has_key:true, model});
+  await api('/api/settings','POST',{api_key:key||'***',tavily_api_key:tavilyKey||'***',base_url:url,model,preset:selectedPreset});
+  updateApiStatus({has_key:true, has_tavily_key:!!tavilyKey, model});
   document.getElementById('set-key').value = '';
+  const tavilyInput = document.getElementById('set-tavily-key');
+  if (tavilyInput) {
+    tavilyInput.value = '';
+    if (tavilyKey) tavilyInput.placeholder = '已配置，留空则不修改';
+  }
   toast('配置已保存 ✦');
 }
 async function testApi() {
@@ -1149,10 +1157,12 @@ function renderRefTags(refs, brand) {
 // ══════════════════════════════════════════════════════
 let smartTopics = [];
 let latestMaterialPackageMarkdown = '';
+let latestMaterialWebSupplementMarkdown = '';
 
 function loadMaterialAnalysis() {
   loadMaterials();
   loadMaterialPackageResult();
+  loadMaterialWebSupplement();
 }
 
 async function loadMaterials() {
@@ -1312,8 +1322,89 @@ function downloadMaterialPackageMarkdown() {
   window.location.href = `/api/materials/${currentClientId}/injection.md`;
 }
 
-function expandMaterialPackage() {
-  toast('AI联网扩展资料暂未接入', 'err');
+function renderMaterialWebSupplement(result) {
+  const box = document.getElementById('materialWebSupplementResult');
+  if (!box) return;
+  const markdown = result?.markdown || '';
+  latestMaterialWebSupplementMarkdown = markdown;
+  if (!markdown && !result?.error) {
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  box.style.display = 'block';
+  if (result?.error) {
+    box.innerHTML = `<div style="font-size:12px;font-weight:800;color:var(--red)">联网扩展失败：${escHtml(result.error)}</div>`;
+    return;
+  }
+  const preview = window.marked ? marked.parse(markdown) : `<pre>${escHtml(markdown)}</pre>`;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px">
+      <div>
+        <div style="font-size:13px;font-weight:900;color:#312e81">AI联网扩展资料</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:3px">二阶段生成结果，可复制或下载</div>
+      </div>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" onclick="copyMaterialWebSupplementMarkdown()">复制</button>
+        <button class="btn btn-p btn-sm" onclick="downloadMaterialWebSupplementMarkdown()">下载.md</button>
+      </div>
+    </div>
+    <div class="report-md" style="max-height:360px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${preview}</div>
+  `;
+}
+
+async function loadMaterialWebSupplement() {
+  if (!currentClientId) return;
+  const result = await api(`/api/materials/${currentClientId}/web-supplement`);
+  if (result?.ok === false && !result.markdown) {
+    renderMaterialWebSupplement({});
+    return;
+  }
+  renderMaterialWebSupplement(result);
+}
+
+function materialWebErrorMessage(error) {
+  if (error === 'material_injection_not_found') return '请先完成 AI解析资料，再联网扩展';
+  if (error === 'missing_tavily_api_key') return '缺少 Tavily API Key，请先在系统设置中配置';
+  return error || '联网扩展失败';
+}
+
+async function expandMaterialPackage() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const box = document.getElementById('materialWebSupplementResult');
+  if (box) {
+    box.style.display = 'block';
+    box.innerHTML = '<div style="font-size:12px;font-weight:800;color:var(--pri)">AI正在联网扩展资料，完成后这里只显示补充资料正文...</div>';
+  }
+  spin('spExpandMaterials', true);
+  disableBtn('btnExpandMaterials', true);
+  try {
+    const result = await api(`/api/materials/${currentClientId}/expand-web`, 'POST', {});
+    if (result?.error || result?.ok === false) {
+      const message = materialWebErrorMessage(result.error);
+      renderMaterialWebSupplement({error: message});
+      toast(message, 'err');
+      return;
+    }
+    renderMaterialWebSupplement(result);
+    toast('AI联网扩展完成');
+  } catch(e) {
+    renderMaterialWebSupplement({error: e.message});
+    toast('联网扩展失败：' + e.message, 'err');
+  } finally {
+    spin('spExpandMaterials', false);
+    disableBtn('btnExpandMaterials', false);
+  }
+}
+
+function copyMaterialWebSupplementMarkdown() {
+  if (!latestMaterialWebSupplementMarkdown) { toast('暂无可复制结果','err'); return; }
+  navigator.clipboard.writeText(latestMaterialWebSupplementMarkdown).then(() => toast('联网扩展资料已复制 ✦'));
+}
+
+function downloadMaterialWebSupplementMarkdown() {
+  if (!currentClientId || !latestMaterialWebSupplementMarkdown) { toast('暂无可下载结果','err'); return; }
+  window.location.href = `/api/materials/${currentClientId}/web-supplement.md`;
 }
 
 // ══════════════════════════════════════════════════════

@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -220,6 +221,8 @@ def _packaged_browser_root(crawler_root):
             return browser_root
         if (chromium_dir / "chrome-win" / "chrome.exe").exists():
             return browser_root
+        if (chromium_dir / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium").exists():
+            return browser_root
     return None
 
 
@@ -230,6 +233,37 @@ def _set_packaged_browser_path(env, crawler_root):
     else:
         env.pop("PLAYWRIGHT_BROWSERS_PATH", None)
     return env
+
+
+def _positive_int(value, default=1):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
+def _write_parallel_accounts_file(storage_state_path, work_dir, concurrency):
+    if concurrency <= 1 or not storage_state_path:
+        return ""
+    source = Path(storage_state_path)
+    if not source.exists():
+        return ""
+
+    try:
+        accounts_file = Path(work_dir) / "accounts.txt"
+        account_paths = []
+        for index in range(concurrency):
+            if index == 0:
+                account_paths.append(str(source))
+                continue
+            account_path = Path(work_dir) / f"account-{index + 1}.json"
+            shutil.copyfile(source, account_path)
+            account_paths.append(str(account_path))
+        accounts_file.write_text("\n".join(account_paths) + "\n", encoding="utf-8")
+        return str(accounts_file)
+    except OSError:
+        return ""
 
 
 def run_node_auth_preflight(
@@ -338,6 +372,18 @@ def _run_node_process(cmd, *, cwd, env, stdout_path, stderr_path, timeout_s, out
             time.sleep(0.5)
 
 
+def _next_node_log_paths(output_path):
+    output_path = Path(output_path)
+    for index in range(1, 1000):
+        suffix = "" if index == 1 else f"-{index}"
+        stdout_path = output_path / f"node-stdout{suffix}.log"
+        stderr_path = output_path / f"node-stderr{suffix}.log"
+        if not stdout_path.exists() and not stderr_path.exists():
+            return stdout_path, stderr_path
+    timestamp = int(time.time())
+    return output_path / f"node-stdout-{timestamp}.log", output_path / f"node-stderr-{timestamp}.log"
+
+
 def run_node_crawler(
     platform,
     questions,
@@ -345,6 +391,7 @@ def run_node_crawler(
     timeout_s=1800,
     citations_limit=10,
     output_dir=None,
+    concurrency=None,
 ):
     """Run the external Node crawler CLI and normalize its Markdown output.
 
@@ -377,9 +424,17 @@ def run_node_crawler(
             "GEO_NODE_NEW_CONVERSATION_EVERY", "1"
         )
         storage_state_path = prepare_storage_state_for_node(platform, tmp_path)
-        if storage_state_path and not env.get("STORAGE_STATE_PATH"):
+        if storage_state_path:
             env["STORAGE_STATE_PATH"] = storage_state_path
+        else:
+            env.pop("STORAGE_STATE_PATH", None)
         _set_packaged_browser_path(env, root)
+        requested_concurrency = _positive_int(
+            concurrency if concurrency is not None else os.environ.get("GEO_NODE_CRAWLER_CONCURRENCY"),
+            1,
+        )
+        effective_concurrency = min(requested_concurrency, len(questions))
+        accounts_file = _write_parallel_accounts_file(storage_state_path, tmp_path, effective_concurrency)
         cmd = [
             "node",
             str(index_js),
@@ -390,8 +445,9 @@ def run_node_crawler(
             "--citations-limit",
             str(citations_limit),
         ]
-        stdout_path = output_path / "node-stdout.log"
-        stderr_path = output_path / "node-stderr.log"
+        if accounts_file:
+            cmd.extend(["--accounts-file", accounts_file, "--concurrency", str(effective_concurrency)])
+        stdout_path, stderr_path = _next_node_log_paths(output_path)
         try:
             completed = _run_node_process(
                 cmd,

@@ -40,6 +40,9 @@ function packagedBrowserRoot(crawlerRoot) {
     const chromiumRoot = path.join(browserRoot, entry.name);
     if (fs.existsSync(path.join(chromiumRoot, "chrome-win64", "chrome.exe"))) return browserRoot;
     if (fs.existsSync(path.join(chromiumRoot, "chrome-win", "chrome.exe"))) return browserRoot;
+    if (fs.existsSync(path.join(chromiumRoot, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"))) {
+      return browserRoot;
+    }
   }
   return "";
 }

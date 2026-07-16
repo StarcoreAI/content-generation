@@ -26,6 +26,29 @@ from services.node_crawler_bridge import (
 
 DEFAULT_BASE_URL = "http://127.0.0.1:18080"
 DEFAULT_PLATFORMS = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
+DEFAULT_CRAWLER_CONCURRENCY = 2
+LOGIN_RECOVERY_MARKERS = [
+    "need_login",
+    "cookie_expired",
+    "login action",
+    "login required",
+    "saved state is missing",
+    "no longer valid",
+]
+ACCOUNT_VERIFICATION_RECOVERY_MARKERS = [
+    "verification_required",
+    "verification",
+    "captcha",
+    "security check",
+    "account abnormal",
+    "account exception",
+    "账号异常",
+    "访问异常",
+    "风险验证",
+    "人机验证",
+    "安全验证",
+    "请完成验证",
+]
 
 
 def timestamp():
@@ -102,6 +125,14 @@ def parse_platforms(value):
     return [item.strip().lower() for item in value.split(",") if item.strip()]
 
 
+def positive_int(value, default):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(1, parsed)
+
+
 def expand_job_questions(job):
     questions = [str(item).strip() for item in job.get("questions") or [] if str(item).strip()]
     try:
@@ -162,20 +193,22 @@ def print_check_result(result):
 
 def is_login_recovery_error(error):
     message = str(error or "").lower()
-    return any(
-        marker in message
-        for marker in [
-            "need_login",
-            "cookie_expired",
-            "login action",
-            "login required",
-            "saved state is missing",
-            "no longer valid",
-        ]
-    )
+    return any(marker in message for marker in LOGIN_RECOVERY_MARKERS + ACCOUNT_VERIFICATION_RECOVERY_MARKERS)
 
 
-def run_job(job, run_crawler=run_node_crawler, run_login=None, output_root=None, timeout_s=1800):
+def is_account_verification_recovery_error(error):
+    message = str(error or "").lower()
+    return any(marker in message for marker in ACCOUNT_VERIFICATION_RECOVERY_MARKERS)
+
+
+def run_job(
+    job,
+    run_crawler=run_node_crawler,
+    run_login=None,
+    output_root=None,
+    timeout_s=1800,
+    crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
+):
     platform = job.get("platform", "")
     questions = expand_job_questions(job)
     output_root = Path(output_root or Path("logs") / "local-worker")
@@ -183,12 +216,14 @@ def run_job(job, run_crawler=run_node_crawler, run_login=None, output_root=None,
     output_dir.mkdir(parents=True, exist_ok=True)
     run_login = run_login or run_login_job
 
-    def crawl_once():
+    def crawl_once(concurrency=None):
+        effective_concurrency = crawler_concurrency if concurrency is None else concurrency
         result = run_crawler(
             platform,
             questions,
             timeout_s=timeout_s,
             output_dir=output_dir,
+            concurrency=effective_concurrency,
         )
         return {
             "status": "completed",
@@ -210,7 +245,12 @@ def run_job(job, run_crawler=run_node_crawler, run_login=None, output_root=None,
             login_payload = run_login(job, timeout_s=timeout_s)
             if login_payload.get("status") == "completed":
                 try:
-                    return crawl_once()
+                    retry_concurrency = 1 if is_account_verification_recovery_error(first_error) else crawler_concurrency
+                    log(
+                        f"{platform} login recovered; retrying current job "
+                        f"with {retry_concurrency} browser window(s)"
+                    )
+                    return crawl_once(concurrency=retry_concurrency)
                 except Exception as retry_exc:
                     return {
                         "status": "failed",
@@ -235,7 +275,13 @@ def run_job(job, run_crawler=run_node_crawler, run_login=None, output_root=None,
 def run_login_job(job, timeout_s=1800):
     platform = job.get("platform", "")
     try:
-        result = run_node_auth_preflight([platform], timeout_s=timeout_s, mode="manual")
+        storage_state_path = ROOT / "data" / f"{platform}_state.json"
+        result = run_node_auth_preflight(
+            [platform],
+            timeout_s=timeout_s,
+            mode="manual",
+            storage_state_path=str(storage_state_path),
+        )
         if result.get("ok"):
             return {
                 "status": "completed",
@@ -286,7 +332,15 @@ def submit_result_with_retry(cloud_client, job_id, payload, attempts=3, delay_s=
     raise RuntimeError(f"submit_result failed after {attempts} attempts: {last_error}") from last_error
 
 
-def run_once(cloud_client, worker_id, platforms, run_crawler=run_node_crawler, output_root=None, timeout_s=1800):
+def run_once(
+    cloud_client,
+    worker_id,
+    platforms,
+    run_crawler=run_node_crawler,
+    output_root=None,
+    timeout_s=1800,
+    crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
+):
     for platform in platforms:
         job = cloud_client.claim_next(worker_id, platform)
         if not job:
@@ -301,7 +355,13 @@ def run_once(cloud_client, worker_id, platforms, run_crawler=run_node_crawler, o
         if job_type == "login":
             payload = run_login_job(job, timeout_s=timeout_s)
         else:
-            payload = run_job(job, run_crawler=run_crawler, output_root=output_root, timeout_s=timeout_s)
+            payload = run_job(
+                job,
+                run_crawler=run_crawler,
+                output_root=output_root,
+                timeout_s=timeout_s,
+                crawler_concurrency=crawler_concurrency,
+            )
         try:
             canceled = cloud_client.is_job_canceled(job["id"])
         except Exception as exc:
@@ -316,7 +376,15 @@ def run_once(cloud_client, worker_id, platforms, run_crawler=run_node_crawler, o
     return False
 
 
-def run_once_parallel(cloud_client_factory, worker_id, platforms, run_crawler=run_node_crawler, output_root=None, timeout_s=1800):
+def run_once_parallel(
+    cloud_client_factory,
+    worker_id,
+    platforms,
+    run_crawler=run_node_crawler,
+    output_root=None,
+    timeout_s=1800,
+    crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
+):
     platforms = list(platforms or [])
     if not platforms:
         return False
@@ -330,6 +398,7 @@ def run_once_parallel(cloud_client_factory, worker_id, platforms, run_crawler=ru
             run_crawler=run_crawler,
             output_root=output_root,
             timeout_s=timeout_s,
+            crawler_concurrency=crawler_concurrency,
         )
 
     with ThreadPoolExecutor(max_workers=len(platforms)) as executor:
@@ -355,6 +424,7 @@ def run_platform_loop(args, platform):
                 platforms=[platform],
                 output_root=Path("logs") / "local-worker",
                 timeout_s=args.timeout,
+                crawler_concurrency=args.crawler_concurrency,
             )
         except Exception as exc:
             log(f"{platform} worker cycle failed: {exc}")
@@ -379,6 +449,12 @@ def build_parser():
     parser.add_argument("--platforms", default=os.environ.get("GEO_WORKER_PLATFORMS", "all"))
     parser.add_argument("--poll-interval", type=int, default=int(os.environ.get("GEO_WORKER_POLL_INTERVAL", "10")))
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("GEO_WORKER_CRAWL_TIMEOUT", "1800")))
+    parser.add_argument(
+        "--crawler-concurrency",
+        type=int,
+        default=positive_int(os.environ.get("GEO_WORKER_CRAWLER_CONCURRENCY"), DEFAULT_CRAWLER_CONCURRENCY),
+        help="Node crawler windows per platform job",
+    )
     parser.add_argument("--once", action="store_true", help="claim and run one job only")
     parser.add_argument("--check", action="store_true", help="run local worker preflight only")
     parser.add_argument(
@@ -397,6 +473,7 @@ def main(argv=None):
     output_root = Path("logs") / "local-worker"
     log(f"cloud base url: {args.base_url}")
     log(f"local worker: {args.worker_id}; platforms: {', '.join(platforms)}")
+    log(f"crawler concurrency per platform job: {args.crawler_concurrency}")
     if args.local_login_only:
         auth_result = run_node_auth_preflight(platforms, timeout_s=args.timeout, mode="manual")
         if not auth_result.get("ok"):
@@ -427,6 +504,7 @@ def main(argv=None):
             platforms=platforms,
             output_root=output_root,
             timeout_s=args.timeout,
+            crawler_concurrency=args.crawler_concurrency,
         )
         return 0 if worked else 2
     if len(platforms) > 1:
@@ -451,6 +529,7 @@ def main(argv=None):
             platforms=platforms,
             output_root=output_root,
             timeout_s=args.timeout,
+            crawler_concurrency=args.crawler_concurrency,
         )
         if args.once:
             return 0 if worked else 2

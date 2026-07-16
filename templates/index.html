@@ -402,7 +402,9 @@
         <button class="btn btn-p btn-sm" id="btnAnalyzeMaterials" onclick="analyzeMaterialPackage()">
           <span class="spin" id="spAnalyzeMaterials" style="display:none"></span>AI解析资料
         </button>
-        <button class="btn btn-o btn-sm" id="btnExpandMaterials" onclick="expandMaterialPackage()">AI联网扩展资料</button>
+        <button class="btn btn-o btn-sm" id="btnExpandMaterials" onclick="expandMaterialPackage()">
+          <span class="spin" id="spExpandMaterials" style="display:none"></span>AI联网扩展资料
+        </button>
         <label class="btn btn-o btn-sm" style="cursor:pointer">
           上传资料
           <input type="file" id="materialUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="uploadMaterial(this)">
@@ -411,6 +413,7 @@
     </div>
     <div id="materialList"><div style="font-size:11px;color:var(--text3)">暂无资料，支持 txt / md / pdf / doc / docx / xlsx</div></div>
     <div id="materialPackageResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
+    <div id="materialWebSupplementResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
   </div>
 </div>
 
@@ -518,6 +521,9 @@
     </div>
     <div class="form-row">
       <div class="fld"><label>Base URL（接口地址）</label><input id="set-url" placeholder="如：https://api.deepseek.com"></div>
+    </div>
+    <div class="form-row">
+      <div class="fld"><label>Tavily API Key（联网搜索）</label><input type="password" id="set-tavily-key" placeholder="填入 Tavily API Key"></div>
     </div>
     <div style="font-size:11px;color:var(--text3);margin-bottom:14px">API Key 保存在本地服务器 data/settings.json</div>
     <div class="acts">

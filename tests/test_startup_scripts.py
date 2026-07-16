@@ -53,6 +53,7 @@ class StartupScriptTests(unittest.TestCase):
 
         self.assertIn("*.bat text eol=crlf", attrs)
         self.assertIn("*.cmd text eol=crlf", attrs)
+        self.assertIn("*.command text eol=lf", attrs)
 
     def test_windows_operator_setup_checks_and_installs_prerequisites(self):
         script = read_text("setup_operator_windows.bat")
@@ -134,7 +135,11 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("取消", manual)
         self.assertIn("补爬", manual)
         self.assertIn("Mac", manual)
-        self.assertIn("只访问云端网页", manual)
+        self.assertIn("GEO-operator-worker-macos-arm64", manual)
+        self.assertIn("setup_operator_mac.command", manual)
+        self.assertIn("start_local_crawl_worker.command", manual)
+        self.assertIn("stop_local_crawl_worker.command", manual)
+        self.assertNotIn("Mac 暂时不要跑本地 worker", manual)
 
     def test_run_dev_is_the_single_foreground_start_entry(self):
         script = read_text("run_dev.bat")
@@ -195,6 +200,7 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("scripts\\resolve_node_crawler_root.ps1", script)
         self.assertIn("scripts\\local_crawl_worker.py", script)
         self.assertIn("--check", script)
+        self.assertIn("--auth-mode none", script)
         self.assertIn("--platforms \"%GEO_WORKER_PLATFORMS%\"", script)
         self.assertIn('set "GEO_WORKER_PLATFORMS=all"', script)
         self.assertNotIn("GEO_NODE_CRAWLER_ROOT is not set", script)
@@ -203,6 +209,7 @@ class StartupScriptTests(unittest.TestCase):
         self.assertEqual(raw_script.count(b"\n"), raw_script.count(b"\r\n"))
         self.assertIn("start_local_crawl_worker.bat", chinese_launcher)
         self.assertNotIn("--auth-mode manual", script)
+        self.assertNotIn("--auth-mode soft", script)
 
     def test_setup_uses_internal_first_login_without_operator_launcher(self):
         script = read_text(os.path.join("scripts", "first_login_all_platforms.bat"))
@@ -229,6 +236,71 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("System.Windows.Forms", panel)
         self.assertIn("Stop local crawler", panel)
         self.assertIn("stop_local_crawl_worker.ps1", panel)
+
+    def test_mac_operator_launchers_use_shell_and_python_worker(self):
+        setup = read_text("setup_operator_mac.command")
+        worker = read_text("start_local_crawl_worker.command")
+        stopper = read_text("stop_local_crawl_worker.command")
+        first_login = read_text(os.path.join("scripts", "first_login_all_platforms_mac.command"))
+        logger = read_text(os.path.join("scripts", "operator_log.sh"))
+
+        for script, name in [
+            (setup, "setup"),
+            (worker, "worker"),
+            (stopper, "stopper"),
+            (first_login, "first-login"),
+        ]:
+            with self.subTest(name=name):
+                self.assertTrue(script.startswith("#!/usr/bin/env bash\n"))
+                self.assertIn("set -euo pipefail", script)
+                self.assertNotIn("powershell", script.lower())
+                self.assertNotIn(".ps1", script)
+
+        self.assertIn("uname -m", setup)
+        self.assertIn("arm64", setup)
+        self.assertIn("node_modules/playwright/package.json", setup)
+        self.assertIn("ms-playwright", setup)
+        self.assertIn("chrome-mac/Chromium.app", setup)
+        self.assertIn("scripts/first_login_all_platforms_mac.command", setup)
+        self.assertIn("GEO_WORKER_BASE_URL", worker)
+        self.assertIn("Cloud username:", worker)
+        self.assertIn("Cloud password:", worker)
+        self.assertIn("scripts/resolve_node_crawler_root.py", worker)
+        self.assertIn("scripts/local_crawl_worker.py", worker)
+        self.assertIn("--check", worker)
+        self.assertIn("--auth-mode none", worker)
+        self.assertNotIn("--auth-mode soft", worker)
+        self.assertIn("--local-login-only", first_login)
+        self.assertIn("pkill", stopper)
+        self.assertIn("local_crawl_worker.py", stopper)
+        self.assertIn("node_auth_preflight.mjs", stopper)
+        self.assertIn("scripts/operator_log.sh", setup)
+        self.assertIn("scripts/operator_log.sh", worker)
+        self.assertIn("operator_logs", logger)
+        self.assertIn("tee -a", logger)
+        self.assertIn('find "$log_dir"', logger)
+
+    def test_mac_operator_package_script_builds_complete_arm64_zip(self):
+        script = read_text(os.path.join("scripts", "package_operator_mac.sh"))
+
+        self.assertTrue(script.startswith("#!/usr/bin/env bash\n"))
+        self.assertIn("set -euo pipefail", script)
+        self.assertIn("uname -m", script)
+        self.assertIn("arm64", script)
+        self.assertIn("scripts/resolve_node_crawler_root.py", script)
+        self.assertIn("npm install", script)
+        self.assertIn("PLAYWRIGHT_BROWSERS_PATH", script)
+        self.assertIn("npx playwright install chromium", script)
+        self.assertIn("GEO-operator-worker-macos-arm64", script)
+        self.assertIn("rsync", script)
+        self.assertIn("--exclude .git", script)
+        self.assertIn("--exclude data", script)
+        self.assertIn("--exclude .venv", script)
+        self.assertIn("chmod +x", script)
+        self.assertIn("setup_operator_mac.command", script)
+        self.assertIn("start_local_crawl_worker.command", script)
+        self.assertIn("stop_local_crawl_worker.command", script)
+        self.assertIn("zip -qry", script)
 
     def test_local_worker_launcher_always_prompts_credentials(self):
         script = read_text("start_local_crawl_worker.bat")
@@ -289,6 +361,38 @@ class StartupScriptTests(unittest.TestCase):
                     "Bypass",
                     "-File",
                     os.path.join(scripts_dir, "resolve_node_crawler_root.ps1"),
+                ],
+                text=True,
+                env=env,
+            ).strip()
+
+            self.assertEqual(os.path.normcase(output), os.path.normcase(packaged_crawler))
+
+    def test_python_crawler_resolver_prefers_packaged_sibling_over_stale_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_root = os.path.join(tmp, "operator-package")
+            project_root = os.path.join(package_root, "geo_v2-pro")
+            scripts_dir = os.path.join(project_root, "scripts")
+            packaged_crawler = os.path.join(package_root, "ai-search-crawler")
+            stale_crawler = os.path.join(tmp, "old", "ai-search-crawler")
+
+            os.makedirs(scripts_dir)
+            for crawler_root in (packaged_crawler, stale_crawler):
+                os.makedirs(os.path.join(crawler_root, "src", "adapters"))
+                with open(os.path.join(crawler_root, "src", "adapters", "index.js"), "w", encoding="utf-8") as f:
+                    f.write("export function getAdapter() {}\n")
+
+            shutil.copyfile(
+                os.path.join(ROOT, "scripts", "resolve_node_crawler_root.py"),
+                os.path.join(scripts_dir, "resolve_node_crawler_root.py"),
+            )
+
+            env = os.environ.copy()
+            env["GEO_NODE_CRAWLER_ROOT"] = stale_crawler
+            output = subprocess.check_output(
+                [
+                    os.sys.executable,
+                    os.path.join(scripts_dir, "resolve_node_crawler_root.py"),
                 ],
                 text=True,
                 env=env,

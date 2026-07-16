@@ -896,6 +896,148 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(payload["base_url"], "https://api.example.com")
             self.assertEqual(payload["model"], "test-model")
 
+    def test_settings_save_hides_tavily_api_key_on_read(self):
+        with isolated_app_data():
+            response = self.client.post(
+                "/api/settings",
+                json={
+                    "api_key": "secret-key",
+                    "base_url": "https://api.example.com",
+                    "model": "test-model",
+                    "preset": "custom",
+                    "tavily_api_key": "tvly-secret",
+                },
+            )
+            self.assertEqual(response.status_code, 200)
+            saved = geo_app.load(geo_app.F_SETTINGS, {})
+            self.assertEqual(saved["tavily_api_key"], "tvly-secret")
+
+            read_response = self.client.get("/api/settings")
+            payload = read_response.get_json()
+            self.assertTrue(payload["has_tavily_key"])
+            self.assertNotIn("api_key", payload)
+            self.assertNotIn("tavily_api_key", payload)
+
+    def test_material_web_expand_requires_existing_injection(self):
+        with isolated_app_data():
+            response = self.client.post("/api/materials/client-1/expand-web", json={})
+
+            self.assertEqual(response.status_code, 404)
+            self.assertEqual(response.get_json()["error"], "material_injection_not_found")
+
+    def test_material_web_expand_requires_tavily_key(self):
+        with isolated_app_data():
+            cid = "client-1"
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": cid,
+                "name": "翼升学（河北省）科技有限公司",
+                "brand": "翼升学",
+                "industry": "成人学历提升",
+                "goal": "GEO宣传",
+            }])
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_injection.md").write_text("# 客户资料注入包\n翼升学资料", encoding="utf-8")
+
+            with patch.dict(os.environ, {"TAVILY_API_KEY": ""}):
+                response = self.client.post(f"/api/materials/{cid}/expand-web", json={})
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["error"], "missing_tavily_api_key")
+
+    def test_material_web_expand_saves_markdown(self):
+        with isolated_app_data():
+            cid = "client-1"
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": cid,
+                "name": "翼升学（河北省）科技有限公司",
+                "brand": "翼升学",
+                "industry": "成人学历提升",
+                "goal": "GEO宣传",
+            }])
+            geo_app.save(geo_app.F_SETTINGS, {
+                "api_key": "llm-key",
+                "base_url": "https://api.example.com",
+                "model": "test-model",
+            })
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_injection.md").write_text("# 客户资料注入包\n翼升学资料", encoding="utf-8")
+
+            fake_result = {
+                "ok": True,
+                "queries": ["翼升学 成人学历提升"],
+                "source_count": 1,
+                "sources": [{"title": "来源", "url": "https://example.com", "content": "正文"}],
+                "markdown": "# 联网扩展资料包\n\n## 来源列表\n- https://example.com",
+                "path": str(output_dir / "latest_web_supplement.md"),
+            }
+            with patch.dict(os.environ, {"TAVILY_API_KEY": "tvly-test"}), \
+                    patch.object(geo_app, "expand_material_web_package", return_value=fake_result, create=True) as expand:
+                response = self.client.post(f"/api/materials/{cid}/expand-web", json={})
+
+            self.assertEqual(response.status_code, 200)
+            payload = response.get_json()
+            self.assertTrue(payload["ok"])
+            self.assertEqual(payload["markdown"], fake_result["markdown"])
+            expand.assert_called_once()
+            self.assertEqual(expand.call_args.kwargs["client"]["brand"], "翼升学")
+            self.assertIn("翼升学资料", expand.call_args.kwargs["injection_markdown"])
+
+    def test_material_web_expand_uses_saved_tavily_key_when_env_missing(self):
+        with isolated_app_data():
+            cid = "client-1"
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": cid,
+                "name": "Client",
+                "brand": "Brand",
+                "industry": "Industry",
+                "goal": "GEO",
+            }])
+            geo_app.save(geo_app.F_SETTINGS, {
+                "api_key": "llm-key",
+                "base_url": "https://api.example.com",
+                "model": "test-model",
+                "tavily_api_key": "tvly-from-settings",
+            })
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_injection.md").write_text("# Injection\nBrand material", encoding="utf-8")
+            tavily_keys = []
+
+            def fake_ai(_prompt, _max_tokens, _settings=None):
+                return "Brand useful proof" if not tavily_keys else "# Web supplement\n- https://example.com/a"
+
+            def fake_tavily(_query, api_key):
+                tavily_keys.append(api_key)
+                return [{
+                    "title": "Useful source",
+                    "url": "https://example.com/a",
+                    "content": "Brand has a useful public source with enough body text for filtering.",
+                }]
+
+            with patch.dict(os.environ, {"TAVILY_API_KEY": ""}), \
+                    patch.object(geo_app, "ai_with_settings", side_effect=fake_ai), \
+                    patch.object(geo_app, "tavily_search", side_effect=fake_tavily):
+                response = self.client.post(f"/api/materials/{cid}/expand-web", json={})
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(tavily_keys, ["tvly-from-settings"])
+            self.assertIn("Web supplement", response.get_json()["markdown"])
+
+    def test_download_material_web_supplement(self):
+        with isolated_app_data():
+            cid = "client-1"
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_web_supplement.md").write_text("# 联网扩展资料包\n", encoding="utf-8")
+
+            response = self.client.get(f"/api/materials/{cid}/web-supplement.md")
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn("联网扩展资料包", response.get_data(as_text=True))
+            response.close()
+
     def test_client_contract_platforms_can_be_created_and_updated(self):
         with isolated_app_data():
             response = self.client.post(

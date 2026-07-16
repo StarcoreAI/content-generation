@@ -39,8 +39,9 @@ class DeployConfigTests(unittest.TestCase):
 
         self.assertIn("GEO_SECRET_KEY=replace-with-a-long-random-secret", env_example)
         self.assertIn("GEO_PORT=5000", env_example)
+        self.assertIn("TAVILY_API_KEY=", env_example)
         self.assertNotIn("sk-", env_example)
-        self.assertNotIn("api_key", env_example.lower())
+        self.assertNotIn("tvly-", env_example)
 
         self.assertIn("docker compose up -d --build", readme)
         self.assertIn("gunicorn --bind 0.0.0.0:5000 --workers 1", readme)

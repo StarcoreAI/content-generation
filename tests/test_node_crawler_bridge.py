@@ -22,6 +22,12 @@ def make_packaged_chromium(crawler_root):
     (browser_dir / "chrome.exe").write_text("", encoding="utf-8")
 
 
+def make_packaged_macos_chromium(crawler_root):
+    browser_dir = crawler_root / "ms-playwright" / "chromium-1217" / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS"
+    browser_dir.mkdir(parents=True)
+    (browser_dir / "Chromium").write_text("", encoding="utf-8")
+
+
 class NodeCrawlerBridgeTests(unittest.TestCase):
     def test_default_node_crawler_root_points_to_real_sibling_project(self):
         root = default_node_crawler_root(Path(__file__).resolve().parents[1])
@@ -217,6 +223,33 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertNotIn("PLAYWRIGHT_BROWSERS_PATH", captured["kwargs"]["env"])
 
+    def test_run_node_auth_preflight_uses_packaged_macos_chromium(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src" / "adapters").mkdir(parents=True)
+            (crawler_root / "src" / "adapters" / "index.js").write_text("// test entry", encoding="utf-8")
+            make_packaged_macos_chromium(crawler_root)
+            storage_state = root / "storage" / "state.json"
+            captured = {}
+
+            def fake_runner(cmd, **kwargs):
+                captured["kwargs"] = kwargs
+                return CompletedProcess(cmd, 0)
+
+            result = run_node_auth_preflight(
+                ["deepseek"],
+                crawler_root=crawler_root,
+                storage_state_path=storage_state,
+                runner=fake_runner,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(
+            captured["kwargs"]["env"]["PLAYWRIGHT_BROWSERS_PATH"],
+            str(crawler_root / "ms-playwright"),
+        )
+
     def test_run_node_auth_preflight_can_request_manual_or_soft_mode(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -263,6 +296,8 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
         self.assertIn("authMode === \"soft\" && !needsLogin", script)
         self.assertIn("soft login check did not confirm readiness; continuing", script)
         self.assertIn("await waitForPlatformReady(adapter, page, timeoutMs, platform)", script)
+        self.assertIn("chrome-mac", script)
+        self.assertIn("Chromium.app", script)
 
     def test_node_auth_preflight_requires_qwen_login_not_just_input(self):
         script = (Path(__file__).resolve().parents[1] / "scripts" / "node_auth_preflight.mjs").read_text(encoding="utf-8")
@@ -362,6 +397,49 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             self.assertTrue((output_dir / "qwen-test.md").exists())
             self.assertEqual((output_dir / "node-stdout.log").read_text(encoding="utf-8"), "node stdout")
             self.assertEqual((output_dir / "node-stderr.log").read_text(encoding="utf-8"), "node stderr")
+
+    def test_run_node_crawler_does_not_overwrite_existing_node_logs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            output_dir.mkdir()
+            (output_dir / "node-stdout.log").write_text("old stdout", encoding="utf-8")
+            (output_dir / "node-stderr.log").write_text("old stderr", encoding="utf-8")
+
+            def fake_run_node_process(cmd, **kwargs):
+                Path(kwargs["stdout_path"]).write_text("new stdout", encoding="utf-8")
+                Path(kwargs["stderr_path"]).write_text("new stderr", encoding="utf-8")
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                (out / "qwen-test.md").write_text(
+                    """# Crawl Result - qwen
+
+- Platform: `qwen`
+
+## 1. test
+
+### 主问题回答
+ok
+""",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0)
+
+            with patch("services.node_crawler_bridge._run_node_process", side_effect=fake_run_node_process):
+                result = run_node_crawler(
+                    "qwen",
+                    ["test"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                )
+
+            self.assertEqual(result["success"], 1)
+            self.assertEqual((output_dir / "node-stdout.log").read_text(encoding="utf-8"), "old stdout")
+            self.assertEqual((output_dir / "node-stderr.log").read_text(encoding="utf-8"), "old stderr")
+            self.assertEqual((output_dir / "node-stdout-2.log").read_text(encoding="utf-8"), "new stdout")
+            self.assertEqual((output_dir / "node-stderr-2.log").read_text(encoding="utf-8"), "new stderr")
 
     def test_run_node_crawler_uses_default_browser_cache_without_packaged_chromium(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -500,6 +578,198 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             self.assertEqual(result["total"], 2)
             self.assertEqual(result["success"], 2)
             self.assertEqual([item["question"] for item in result["results"]], ["问题A", "问题B"])
+
+    def test_run_node_crawler_passes_parallel_accounts_for_concurrency(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            storage_state = root / "storage" / "state.json"
+            storage_state.parent.mkdir()
+            expected_state_payload = '{"cookies":[{"name":"session","value":"abc"}],"origins":[]}'
+            storage_state.write_text(expected_state_payload, encoding="utf-8")
+            captured = {}
+
+            def fake_run_node_process(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs["env"]
+                accounts_file = Path(cmd[cmd.index("--accounts-file") + 1])
+                account_paths = accounts_file.read_text(encoding="utf-8").splitlines()
+                captured["account_paths"] = account_paths
+                captured["account_payloads"] = [
+                    Path(account_path).read_text(encoding="utf-8")
+                    for account_path in account_paths
+                ]
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "qwen-test.md").write_text(
+                    """# Crawl Result - qwen
+
+- Platform: `qwen`
+
+## 1. 问题A
+
+### 主问题回答
+回答 A
+
+### 参考来源
+(empty)
+
+## 2. 问题B
+
+### 主问题回答
+回答 B
+
+### 参考来源
+(empty)
+""",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0)
+
+            with patch("services.node_crawler_bridge.prepare_storage_state_for_node", return_value=str(storage_state)), \
+                    patch("services.node_crawler_bridge._run_node_process", side_effect=fake_run_node_process):
+                result = run_node_crawler(
+                    "qwen",
+                    ["问题A", "问题B"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                    concurrency=2,
+                )
+
+        self.assertEqual(result["success"], 2)
+        self.assertIn("--accounts-file", captured["cmd"])
+        self.assertIn("--concurrency", captured["cmd"])
+        self.assertEqual(captured["cmd"][captured["cmd"].index("--concurrency") + 1], "2")
+        self.assertEqual(captured["env"]["STORAGE_STATE_PATH"], str(storage_state))
+        self.assertEqual(len(captured["account_paths"]), 2)
+        self.assertEqual(captured["account_paths"][0], str(storage_state))
+        self.assertNotEqual(captured["account_paths"][1], str(storage_state))
+        self.assertEqual(captured["account_payloads"], [expected_state_payload] * 2)
+
+    def test_run_node_crawler_prefers_platform_state_over_parent_storage_env(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            platform_state = root / "data" / "doubao_state.json"
+            platform_state.parent.mkdir()
+            platform_payload = '{"cookies":[{"name":"platform","value":"fresh"}],"origins":[]}'
+            platform_state.write_text(platform_payload, encoding="utf-8")
+            stale_shared_state = root / "storage" / "state.json"
+            stale_shared_state.parent.mkdir()
+            stale_shared_state.write_text(
+                '{"cookies":[{"name":"shared","value":"stale"}],"origins":[]}',
+                encoding="utf-8",
+            )
+            captured = {}
+
+            def fake_run_node_process(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs["env"]
+                accounts_file = Path(cmd[cmd.index("--accounts-file") + 1])
+                account_paths = accounts_file.read_text(encoding="utf-8").splitlines()
+                captured["account_paths"] = account_paths
+                captured["account_payloads"] = [
+                    Path(account_path).read_text(encoding="utf-8")
+                    for account_path in account_paths
+                ]
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "doubao-test.md").write_text(
+                    """# Crawl Result - doubao
+
+- Platform: `doubao`
+
+## 1. 问题A
+
+### 主问题回答
+回答 A
+
+## 2. 问题B
+
+### 主问题回答
+回答 B
+""",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0)
+
+            with patch("services.node_crawler_bridge.prepare_storage_state_for_node", return_value=str(platform_state)), \
+                    patch.dict(os.environ, {"STORAGE_STATE_PATH": str(stale_shared_state)}, clear=False), \
+                    patch("services.node_crawler_bridge._run_node_process", side_effect=fake_run_node_process):
+                result = run_node_crawler(
+                    "doubao",
+                    ["问题A", "问题B"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                    concurrency=2,
+                )
+
+        self.assertEqual(result["success"], 2)
+        self.assertEqual(captured["env"]["STORAGE_STATE_PATH"], str(platform_state))
+        self.assertEqual(captured["account_paths"][0], str(platform_state))
+        self.assertNotEqual(captured["account_paths"][1], str(platform_state))
+        self.assertEqual(captured["account_payloads"], [platform_payload] * 2)
+
+    def test_run_node_crawler_does_not_use_parent_storage_env_without_platform_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            stale_shared_state = root / "storage" / "state.json"
+            stale_shared_state.parent.mkdir()
+            stale_shared_state.write_text(
+                '{"cookies":[{"name":"shared","value":"stale"}],"origins":[]}',
+                encoding="utf-8",
+            )
+            captured = {}
+
+            def fake_run_node_process(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs["env"]
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "doubao-test.md").write_text(
+                    """# Crawl Result - doubao
+
+- Platform: `doubao`
+
+## 1. 问题A
+
+### 主问题回答
+回答 A
+
+## 2. 问题B
+
+### 主问题回答
+回答 B
+""",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0)
+
+            with patch("services.node_crawler_bridge.prepare_storage_state_for_node", return_value=""), \
+                    patch.dict(os.environ, {"STORAGE_STATE_PATH": str(stale_shared_state)}, clear=False), \
+                    patch("services.node_crawler_bridge._run_node_process", side_effect=fake_run_node_process):
+                result = run_node_crawler(
+                    "doubao",
+                    ["问题A", "问题B"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                    concurrency=2,
+                )
+
+        self.assertEqual(result["success"], 2)
+        self.assertNotIn("STORAGE_STATE_PATH", captured["env"])
+        self.assertNotIn("--accounts-file", captured["cmd"])
+        self.assertNotIn("--concurrency", captured["cmd"])
 
     def test_run_node_crawler_returns_when_markdown_is_final_but_process_keeps_running(self):
         with tempfile.TemporaryDirectory() as tmp:
