@@ -293,7 +293,34 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             code = local_crawl_worker.main(["--local-login-only", "--platforms", "qwen"])
 
         self.assertEqual(code, 0)
-        run_auth.assert_called_once_with(["qwen"], timeout_s=1800, mode="manual")
+        run_auth.assert_called_once_with(
+            ["qwen"],
+            timeout_s=1800,
+            mode="manual",
+            storage_state_path=str(local_crawl_worker.ROOT / "data" / "qwen_state.json"),
+        )
+
+    def test_main_local_login_only_saves_each_platform_state_used_by_crawler(self):
+        with mock.patch.object(local_crawl_worker, "build_cloud_client") as build_cloud_client, \
+                mock.patch.object(local_crawl_worker, "run_node_auth_preflight") as run_auth:
+            build_cloud_client.side_effect = AssertionError("cloud should not be used for local login setup")
+            run_auth.return_value = {"ok": True, "message": "ready"}
+
+            code = local_crawl_worker.main(["--local-login-only", "--platforms", "deepseek,yuanbao"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(run_auth.call_count, 2)
+        self.assertEqual(
+            [call.args[0] for call in run_auth.call_args_list],
+            [["deepseek"], ["yuanbao"]],
+        )
+        self.assertEqual(
+            [call.kwargs["storage_state_path"] for call in run_auth.call_args_list],
+            [
+                str(local_crawl_worker.ROOT / "data" / "deepseek_state.json"),
+                str(local_crawl_worker.ROOT / "data" / "yuanbao_state.json"),
+            ],
+        )
 
     def test_main_check_does_not_start_auth_preflight_when_basic_check_fails(self):
         with mock.patch.object(local_crawl_worker, "build_cloud_client", return_value=FakeCloudClient([])), \

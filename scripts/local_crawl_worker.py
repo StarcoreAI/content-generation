@@ -201,6 +201,10 @@ def is_account_verification_recovery_error(error):
     return any(marker in message for marker in ACCOUNT_VERIFICATION_RECOVERY_MARKERS)
 
 
+def platform_storage_state_path(platform):
+    return ROOT / "data" / f"{platform}_state.json"
+
+
 def run_job(
     job,
     run_crawler=run_node_crawler,
@@ -275,7 +279,7 @@ def run_job(
 def run_login_job(job, timeout_s=1800):
     platform = job.get("platform", "")
     try:
-        storage_state_path = ROOT / "data" / f"{platform}_state.json"
+        storage_state_path = platform_storage_state_path(platform)
         result = run_node_auth_preflight(
             [platform],
             timeout_s=timeout_s,
@@ -475,10 +479,18 @@ def main(argv=None):
     log(f"local worker: {args.worker_id}; platforms: {', '.join(platforms)}")
     log(f"crawler concurrency per platform job: {args.crawler_concurrency}")
     if args.local_login_only:
-        auth_result = run_node_auth_preflight(platforms, timeout_s=args.timeout, mode="manual")
-        if not auth_result.get("ok"):
-            log(f"local login setup failed: {auth_result.get('message', '')}")
-            return 1
+        for platform in platforms:
+            storage_state_path = platform_storage_state_path(platform)
+            log(f"opening local login setup: {platform} -> {storage_state_path}")
+            auth_result = run_node_auth_preflight(
+                [platform],
+                timeout_s=args.timeout,
+                mode="manual",
+                storage_state_path=str(storage_state_path),
+            )
+            if not auth_result.get("ok"):
+                log(f"local login setup failed: {platform}: {auth_result.get('message', '')}")
+                return 1
         log("local login setup passed")
         return 0
     if args.check:

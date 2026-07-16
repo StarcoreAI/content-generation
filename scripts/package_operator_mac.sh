@@ -86,7 +86,18 @@ rsync -a \
 echo "[GEO] copying ai-search-crawler..."
 rsync -a \
   --exclude .git \
+  --exclude .agents \
+  --exclude .DS_Store \
+  --exclude .env \
+  --exclude storage \
+  --exclude logs \
+  --exclude output \
+  --exclude interviews \
+  --exclude brands \
+  --exclude test \
   --exclude __pycache__ \
+  --exclude 'tmp-*' \
+  --exclude '*.txt' \
   "$crawler_root/" "$stage/ai-search-crawler/"
 
 chmod +x \
