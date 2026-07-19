@@ -75,6 +75,10 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertEqual(len(prompts), 1)
         self.assertIn("竞品名称必须使用资料中出现的真实品牌名", prompts[0])
         self.assertIn("无法确定是否同一主体时，直接分开整理，不要猜测关系", prompts[0])
+        self.assertIn("只客观整理其定位、业务侧重、适合人群、服务特点、限制和来源依据", prompts[0])
+        self.assertIn("每个竞品的第一行用一句话概括定位与业务侧重", prompts[0])
+        self.assertIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0])
+        self.assertIn("内部观点备注（仅内部参考，不入内容）", prompts[0])
         self.assertNotIn("疑似同主体", prompts[0])
 
     def test_expand_web_package_uses_fixed_queries_and_two_sources_per_competitor(self):
@@ -112,6 +116,11 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertEqual(result["source_count"], 4)
         self.assertEqual([item["source_count"] for item in result["competitors"]], [2, 2])
         self.assertIn("每个竞品必须使用真实竞品名称", prompts[0])
+        self.assertIn("其他机构简评", prompts[0])
+        self.assertIn("来源性质：竞品官网 / 媒体 / 行业站 / UGC / 疑似投放", prompts[0])
+        self.assertIn("疑似投放来源的内容不作为该竞品的事实", prompts[0])
+        self.assertIn("官网介绍/页面自述", prompts[0])
+        self.assertIn("同一竞品的多个来源信息矛盾时", prompts[0])
         self.assertNotIn("生成检索词", prompts[0])
 
 
