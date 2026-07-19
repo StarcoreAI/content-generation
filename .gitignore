@@ -10,6 +10,7 @@ operator_logs/
 reports/
 pdf/
 deploy_artifacts/
+.tmp/
 
 # Local runtime data: clients, settings, cookies, browser state, uploads.
 data/

@@ -377,33 +377,33 @@ class RecordInsightsTests(unittest.TestCase):
         records = [
             {
                 "id": "r1",
-                "brand": "西安兔博士口腔",
+                "brand": "河北翼升学",
                 "source_platform": "doubao",
                 "brand_mentioned": False,
-                "answer": "兔博士口腔适合学生党，复诊方便。竞品A也被提到。",
+                "answer": "翼升学适合学生党，复诊方便。竞品A也被提到。",
                 "refs": [],
                 "mentioned_entities": [
-                    {"name": "兔博士口腔", "type": "口腔机构", "evidence": "兔博士口腔适合学生党"},
-                    {"name": "竞品A", "type": "口腔机构", "evidence": "竞品A也被提到"},
+                    {"name": "翼升学", "type": "教育机构", "evidence": "翼升学适合学生党"},
+                    {"name": "竞品A", "type": "教育机构", "evidence": "竞品A也被提到"},
                 ],
             },
             {
                 "id": "r2",
-                "brand": "西安兔博士口腔",
+                "brand": "河北翼升学",
                 "source_platform": "doubao",
                 "brand_mentioned": False,
                 "answer": "这里只提到其他机构。",
                 "refs": [],
                 "mentioned_entities": [
-                    {"name": "其他机构", "type": "口腔机构", "evidence": "其他机构"}
+                    {"name": "其他机构", "type": "教育机构", "evidence": "其他机构"}
                 ],
             },
         ]
 
         insights = build_record_insights(
             records,
-            own_brand="兔博士",
-            own_client_name="西安兔博士口腔",
+            own_brand="翼升学",
+            own_client_name="河北翼升学",
         )
 
         self.assertEqual(insights["brand_mentions"], 1)

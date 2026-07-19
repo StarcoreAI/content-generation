@@ -7,6 +7,17 @@ Default to keeping original lines. Delete only obvious duplication, boilerplate,
 Keep customer-specific facts: identity, brand, official channels, locations, coverage, audience, products or services, service process, delivery boundaries, conditions, compliance limits, prohibitions, and supported concrete claims.
 For original brand, person, case, service, or technical material, preserve concrete details and representative original expressions that may be useful for later content generation.
 Also keep target audiences, use cases, suitable scenarios, service or refund boundaries, and conflicting facts that should be marked pending verification when they describe the customer's own offering.
+Keep lines that can support the final eight-direction material package:
+- brand basics: legal or public identity, regularity, founding/background, location, coverage, business scope.
+- products and services: what is provided, how it is delivered, process depth, after-sales or long-term service.
+- core advantages: differentiated claims and the facts, process, resources, or mechanisms that support them.
+- target audiences: user groups, needs, pain points, decision concerns, scenarios, and clearly marked inferred-but-unconfirmed clues.
+- price and fee wording: original price ranges, fee composition, and fee wording only; do not calculate or complete missing prices.
+- trust credentials: qualifications, honors, cases, reviews, third-party endorsements, and whether the source is customer self-description or third-party checkable.
+- compliance risk wording: guarantees, rankings, absolute claims, success-rate numbers, or other risky wording; keep as risk lines or restricted-use clues.
+- industry public background: policy, timelines, public rules, official data, or public context that already appears in the material.
+When there are many cases, user examples, scenario examples, or similar service examples, keep up to 6 representative examples across different information dimensions instead of thinning them too aggressively.
+Keep explicit gaps and search hints, missing-evidence notes, and customer-to-confirm notes; do not invent missing facts.
 Do not expand third-party catalogs, item lists, schedules, or price lists just because they contain use cases, fees, locations, or options.
 Delete form instructions, placeholders, blank fields, template explanations, internal execution notes, handoff notes, unrelated examples, competitor notes, duplicated statements, generic praise without facts, unsupported strong claims, guarantees, rankings, absolute success statements, and third-party catalogs that add no customer-specific facts.
 For any unit that is only a third-party catalog, price list, item list, schedule, or low-level listing without customer-specific facts, delete all lines.

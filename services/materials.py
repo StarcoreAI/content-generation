@@ -12,6 +12,7 @@ from services.storage import save_json
 
 
 ALLOWED_MATERIAL_EXTENSIONS = {".txt", ".md", ".pdf", ".docx", ".doc", ".xlsx", ".xls"}
+LEGACY_MATERIAL_CARD_KEY = "fact_" + "card"
 UNPARSED = "未解析"
 PARSED_PENDING_CONFIRM = "等待人工确认"
 PARSE_FAILED = "解析失败"
@@ -156,7 +157,6 @@ class MaterialService:
         path = Path(material["path"])
         raw_text, diagnostics = self.extract_text_with_diagnostics(path)
         clean_text = clean_material_text(raw_text)
-        fact_card = build_fact_card(clean_text, material.get("original_name", ""))
         status = PARSED_PENDING_CONFIRM
         if diagnostics.get("dependency_error"):
             status = PARSE_FAILED
@@ -169,9 +169,6 @@ class MaterialService:
         cache.mkdir(parents=True, exist_ok=True)
         (cache / "raw_text.txt").write_text(raw_text, encoding="utf-8")
         (cache / "clean_text.txt").write_text(clean_text, encoding="utf-8")
-        (cache / "fact_card.json").write_text(
-            json.dumps(fact_card, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
         (cache / "diagnostics.json").write_text(
             json.dumps(diagnostics, ensure_ascii=False, indent=2), encoding="utf-8"
         )
@@ -185,13 +182,12 @@ class MaterialService:
         material["diagnostics"] = diagnostics
         material["cache_dir"] = self._normalize_path(cache)
         material["text_chars"] = len(clean_text)
-        material["fact_card"] = fact_card
+        material.pop(LEGACY_MATERIAL_CARD_KEY, None)
         self._save_index(data)
 
         result = dict(material)
         result["raw_text"] = raw_text
         result["clean_text"] = clean_text
-        result["fact_card"] = fact_card
         return result
 
     def confirm_material(self, client_id, material_id, confirmed=True):
@@ -217,9 +213,8 @@ class MaterialService:
         selected = confirmed
         sections = []
         for material in selected:
-            card = self._load_fact_card(material)
             clean_text = self._load_clean_text(material)
-            sections.append(format_fact_card_section(material, card, clean_text))
+            sections.append(format_material_section(material, clean_text))
         combined = "\n\n---\n\n".join(section for section in sections if section)
         return {
             "text": combined[:max_chars],
@@ -229,20 +224,6 @@ class MaterialService:
             "confirmed_count": len(confirmed),
             "used_unconfirmed_fallback": False,
         }
-
-    def _load_fact_card(self, material):
-        card = material.get("fact_card")
-        if isinstance(card, dict):
-            return card
-        cache_dir = material.get("cache_dir")
-        if cache_dir:
-            path = Path(cache_dir) / "fact_card.json"
-            if path.exists():
-                try:
-                    return json.loads(path.read_text(encoding="utf-8"))
-                except Exception:
-                    return empty_fact_card()
-        return empty_fact_card()
 
     def _load_clean_text(self, material):
         cache_dir = material.get("cache_dir")
@@ -418,134 +399,15 @@ def clean_material_text(text):
     return clean.strip()
 
 
-def empty_fact_card():
-    return {
-        "brand_names": [],
-        "organization_background": [],
-        "locations_and_regions": [],
-        "services": [],
-        "departments_or_specialties": [],
-        "doctors_or_team": [],
-        "credentials_and_honors": [],
-        "equipment_or_technology": [],
-        "service_process": [],
-        "brand_tone": [],
-        "usable_claims": [],
-        "uncertain_claims": [],
-        "risk_warnings": [],
-        "forbidden_claims": [],
-    }
 
 
-def build_fact_card(text, filename=""):
-    card = empty_fact_card()
-    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
-    full_text = "\n".join(lines)
-    for name in extract_brand_names(full_text, filename):
-        add_unique(card["brand_names"], name)
-    service_terms = [
-        "正畸",
-        "牙齿矫正",
-        "种植牙",
-        "根管治疗",
-        "洗牙",
-        "美白",
-        "补牙",
-        "拔牙",
-        "儿童口腔",
-        "牙周",
-        "修复",
-        "瓷贴面",
-        "隐形矫正",
-        "口腔检查",
-    ]
-    credential_terms = ["认证", "会员", "主任医师", "主治医师", "副主任医师", "博士", "硕士", "学会", "医保定点", "上市"]
-    equipment_terms = ["设备", "数字化", "CT", "显微镜", "一线品牌", "材料", "技术"]
-    process_terms = ["流程", "服务", "到院", "顾客", "标准化", "6S"]
-    risk_terms = ["医疗", "治疗", "病例", "患者", "儿童", "青少年", "成人"]
-    forbidden_terms = ["保证治愈", "全市第一", "最低价", "无风险", "根治", "包治", "保证效果"]
-    for line in lines:
-        if re.search(r"(成立于|创办|升级|品牌|集团|医院|门诊|分院|牙椅|员工|顾客|上市|使命|愿景)", line):
-            add_unique(card["organization_background"], line)
-        if re.search(r"(陕西|甘肃|新疆|河南|西安|安康|区域|城市|门诊|分院|总院)", line):
-            add_unique(card["locations_and_regions"], line)
-        if any(term in line for term in service_terms):
-            add_unique(card["services"], line)
-        if re.search(r"(学科|专业|牙体牙髓|种植|正畸|儿童口腔|修复|护理)", line):
-            add_unique(card["departments_or_specialties"], line)
-        if re.search(r"[\u4e00-\u9fa5]{2,4}(医生|院长|主任|教授|专家)", line):
-            add_unique(card["doctors_or_team"], line)
-        if any(term in line for term in credential_terms):
-            add_unique(card["credentials_and_honors"], line)
-        if any(term in line for term in equipment_terms):
-            add_unique(card["equipment_or_technology"], line)
-        if any(term in line for term in process_terms):
-            add_unique(card["service_process"], line)
-        if re.search(r"(使命|愿景|价值观|定位|口号|文化|没有看不了的牙)", line):
-            add_unique(card["brand_tone"], line)
-        if any(term in line for term in risk_terms):
-            add_unique(card["risk_warnings"], "医疗内容需避免效果承诺，资质、案例和治疗描述应保守表达。")
-        for term in forbidden_terms:
-            if term in line or term in full_text:
-                add_unique(card["forbidden_claims"], term)
-    for key in card:
-        card[key] = card[key][:12]
-    if not card["forbidden_claims"] and card["risk_warnings"]:
-        card["forbidden_claims"] = ["保证治愈", "绝对效果", "全市第一", "最低价", "无风险"]
-    return card
-
-
-def extract_brand_names(text, filename=""):
-    candidates = []
-    source = f"{filename}\n{text}"
-    patterns = [
-        r"([\u4e00-\u9fa5A-Za-z0-9]{2,24}(?:口腔医疗科技集团|口腔|医院|门诊|集团|品牌))",
-        r"(兔博士)",
-        r"(小白兔)",
-    ]
-    for pattern in patterns:
-        for match in re.findall(pattern, source):
-            value = match.strip(" ，。；:：")
-            if 2 <= len(value) <= 28:
-                candidates.append(value)
-    result = []
-    for item in candidates:
-        add_unique(result, item)
-    return result[:8]
-
-
-def add_unique(items, value):
-    value = str(value or "").strip()
-    if value and value not in items:
-        items.append(value)
-
-
-def format_fact_card_section(material, card, clean_text):
+def format_material_section(material, clean_text):
     lines = [
-        f"【客户事实卡】{material.get('original_name') or material.get('name')}",
-        f"资料状态：{'已确认' if material.get('confirmed') else '未确认'}",
+        f"[Customer material] {material.get('original_name') or material.get('name')}",
+        f"Status: {'confirmed' if material.get('confirmed') else 'unconfirmed'}",
     ]
-    labels = [
-        ("brand_names", "品牌/机构"),
-        ("organization_background", "机构背景"),
-        ("locations_and_regions", "区域/门店"),
-        ("services", "服务项目"),
-        ("departments_or_specialties", "学科/专业"),
-        ("doctors_or_team", "医生/团队"),
-        ("credentials_and_honors", "资质/认证/荣誉"),
-        ("equipment_or_technology", "设备/技术"),
-        ("service_process", "服务流程"),
-        ("brand_tone", "品牌调性"),
-        ("risk_warnings", "风险提示"),
-        ("forbidden_claims", "禁用表达"),
-    ]
-    for key, label in labels:
-        values = card.get(key) or []
-        if values:
-            lines.append(f"{label}：")
-            lines.extend(f"- {item}" for item in values[:8])
-    excerpt = clean_text[:1200].strip()
+    excerpt = (clean_text or '').strip()[:3000]
     if excerpt:
-        lines.append("原文摘要片段：")
+        lines.append("Excerpt:")
         lines.append(excerpt)
     return "\n".join(lines)

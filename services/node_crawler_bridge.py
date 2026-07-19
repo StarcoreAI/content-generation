@@ -243,6 +243,12 @@ def _positive_int(value, default=1):
     return max(1, parsed)
 
 
+def _effective_node_concurrency(platform, requested_concurrency, question_count):
+    if platform == "doubao":
+        return 1
+    return min(requested_concurrency, question_count)
+
+
 def _write_parallel_accounts_file(storage_state_path, work_dir, concurrency):
     if concurrency <= 1 or not storage_state_path:
         return ""
@@ -433,7 +439,7 @@ def run_node_crawler(
             concurrency if concurrency is not None else os.environ.get("GEO_NODE_CRAWLER_CONCURRENCY"),
             1,
         )
-        effective_concurrency = min(requested_concurrency, len(questions))
+        effective_concurrency = _effective_node_concurrency(platform, requested_concurrency, len(questions))
         accounts_file = _write_parallel_accounts_file(storage_state_path, tmp_path, effective_concurrency)
         cmd = [
             "node",

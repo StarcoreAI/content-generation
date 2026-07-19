@@ -9,15 +9,15 @@ class CompetitorMaterialsTests(unittest.TestCase):
 
         queries = build_competitor_search_queries(
             ["第一竞品", "第二竞品"],
-            {"industry": "口腔"},
-            qualifier="牙齿矫正",
+            {"industry": "教育"},
+            qualifier="成人学历提升",
         )
 
         self.assertEqual(
             queries,
             [
-                {"competitor": "第一竞品", "query": "第一竞品 牙齿矫正"},
-                {"competitor": "第二竞品", "query": "第二竞品 牙齿矫正"},
+                {"competitor": "第一竞品", "query": "第一竞品 成人学历提升"},
+                {"competitor": "第二竞品", "query": "第二竞品 成人学历提升"},
             ],
         )
 
@@ -33,11 +33,11 @@ class CompetitorMaterialsTests(unittest.TestCase):
 
         queries = build_competitor_search_queries(
             ["第一竞品"],
-            {"category": "牙齿矫正", "industry": "口腔"},
+            {"category": "成人学历提升", "industry": "教育"},
             qualifier="",
         )
 
-        self.assertEqual(queries, [{"competitor": "第一竞品", "query": "第一竞品 牙齿矫正"}])
+        self.assertEqual(queries, [{"competitor": "第一竞品", "query": "第一竞品 成人学历提升"}])
 
     def test_build_search_queries_uses_competitor_name_without_scope(self):
         from services.competitor_materials import build_competitor_search_queries
@@ -98,16 +98,16 @@ class CompetitorMaterialsTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             result = expand_competitor_web_package(
-                {"industry": "口腔"},
+                {"industry": "教育"},
                 ["第一竞品", "第二竞品"],
-                qualifier="牙齿矫正",
+                qualifier="成人学历提升",
                 output_dir=Path(tmp),
                 ask_text=ask_text,
                 search_fn=search_fn,
                 fetched_at="2026-07-16 12:00",
             )
 
-        self.assertEqual(calls, ["第一竞品 牙齿矫正", "第二竞品 牙齿矫正"])
+        self.assertEqual(calls, ["第一竞品 成人学历提升", "第二竞品 成人学历提升"])
         self.assertTrue(result["ok"])
         self.assertEqual(result["source_count"], 4)
         self.assertEqual([item["source_count"] for item in result["competitors"]], [2, 2])

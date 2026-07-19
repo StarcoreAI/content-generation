@@ -649,6 +649,57 @@ ok
         self.assertNotEqual(captured["account_paths"][1], str(storage_state))
         self.assertEqual(captured["account_payloads"], [expected_state_payload] * 2)
 
+    def test_run_node_crawler_forces_doubao_single_window_when_concurrency_requested(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            crawler_root = root / "crawler"
+            (crawler_root / "src").mkdir(parents=True)
+            (crawler_root / "src" / "index.js").write_text("// test entry", encoding="utf-8")
+            output_dir = root / "node-output"
+            storage_state = root / "storage" / "state.json"
+            storage_state.parent.mkdir()
+            storage_state.write_text('{"cookies":[{"name":"session","value":"abc"}],"origins":[]}', encoding="utf-8")
+            captured = {}
+
+            def fake_run_node_process(cmd, **kwargs):
+                captured["cmd"] = cmd
+                captured["env"] = kwargs["env"]
+                out = Path(kwargs["env"]["OUTPUT_DIR"])
+                out.mkdir(parents=True, exist_ok=True)
+                (out / "doubao-test.md").write_text(
+                    """# Crawl Result - doubao
+
+- Platform: `doubao`
+
+## 1. 闂A
+
+### 涓婚棶棰樺洖绛?
+鍥炵瓟 A
+
+## 2. 闂B
+
+### 涓婚棶棰樺洖绛?
+鍥炵瓟 B
+""",
+                    encoding="utf-8",
+                )
+                return CompletedProcess(cmd, 0)
+
+            with patch("services.node_crawler_bridge.prepare_storage_state_for_node", return_value=str(storage_state)), \
+                    patch("services.node_crawler_bridge._run_node_process", side_effect=fake_run_node_process):
+                result = run_node_crawler(
+                    "doubao",
+                    ["闂A", "闂B"],
+                    crawler_root=crawler_root,
+                    output_dir=output_dir,
+                    concurrency=2,
+                )
+
+        self.assertEqual(result["total"], 2)
+        self.assertEqual(captured["env"]["STORAGE_STATE_PATH"], str(storage_state))
+        self.assertNotIn("--accounts-file", captured["cmd"])
+        self.assertNotIn("--concurrency", captured["cmd"])
+
     def test_run_node_crawler_prefers_platform_state_over_parent_storage_env(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -671,13 +722,6 @@ ok
             def fake_run_node_process(cmd, **kwargs):
                 captured["cmd"] = cmd
                 captured["env"] = kwargs["env"]
-                accounts_file = Path(cmd[cmd.index("--accounts-file") + 1])
-                account_paths = accounts_file.read_text(encoding="utf-8").splitlines()
-                captured["account_paths"] = account_paths
-                captured["account_payloads"] = [
-                    Path(account_path).read_text(encoding="utf-8")
-                    for account_path in account_paths
-                ]
                 out = Path(kwargs["env"]["OUTPUT_DIR"])
                 out.mkdir(parents=True, exist_ok=True)
                 (out / "doubao-test.md").write_text(
@@ -712,9 +756,8 @@ ok
 
         self.assertEqual(result["success"], 2)
         self.assertEqual(captured["env"]["STORAGE_STATE_PATH"], str(platform_state))
-        self.assertEqual(captured["account_paths"][0], str(platform_state))
-        self.assertNotEqual(captured["account_paths"][1], str(platform_state))
-        self.assertEqual(captured["account_payloads"], [platform_payload] * 2)
+        self.assertNotIn("--accounts-file", captured["cmd"])
+        self.assertNotIn("--concurrency", captured["cmd"])
 
     def test_run_node_crawler_does_not_use_parent_storage_env_without_platform_state(self):
         with tempfile.TemporaryDirectory() as tmp:

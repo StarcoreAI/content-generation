@@ -1,4 +1,3 @@
-import json
 import tempfile
 import unittest
 import zipfile
@@ -75,7 +74,7 @@ def write_minimal_xlsx(path, rows):
 def test_save_uploaded_material_copies_file_and_records_metadata(tmp_path):
     service = make_service(tmp_path)
     source = tmp_path / "client_profile.txt"
-    source.write_text("Rabbit Dental was founded in 2003.", encoding="utf-8")
+    source.write_text("Yishengxue provides adult education enrollment planning.", encoding="utf-8")
 
     material = service.save_uploaded_material("client-1", source, "client_profile.txt")
 
@@ -84,7 +83,7 @@ def test_save_uploaded_material_copies_file_and_records_metadata(tmp_path):
     assert material["source"] == "upload"
     assert material["confirmed"] is False
     assert Path(material["path"]).exists()
-    assert Path(material["path"]).read_text(encoding="utf-8") == "Rabbit Dental was founded in 2003."
+    assert Path(material["path"]).read_text(encoding="utf-8") == "Yishengxue provides adult education enrollment planning."
 
 
 def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
@@ -94,9 +93,9 @@ def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
         "\n".join(
             [
                 "Common footer",
-                "Rabbit Dental was founded in 2003.",
+                "Yishengxue provides adult education enrollment planning.",
                 "Common footer",
-                "The profile mentions clinics, doctors, orthodontics, and implant services.",
+                "The profile mentions application timelines, policy checks, and consultation process.",
                 "Common footer",
             ]
         ),
@@ -108,21 +107,22 @@ def test_parse_material_cleans_repeated_lines_and_auto_confirms(tmp_path):
 
     assert parsed["confirmed"] is True
     assert "Common footer\nCommon footer" not in parsed["clean_text"]
-    assert "Rabbit Dental was founded in 2003." in parsed["clean_text"]
-    assert parsed["fact_card"]
+    assert "Yishengxue provides adult education enrollment planning." in parsed["clean_text"]
+    legacy_key = "fact_" + "card"
+    assert legacy_key not in parsed
 
     cache_dir = tmp_path / "material_cache" / "client-1" / material["id"]
     assert (cache_dir / "raw_text.txt").exists()
     assert (cache_dir / "clean_text.txt").exists()
-    assert json.loads((cache_dir / "fact_card.json").read_text(encoding="utf-8")) is not None
+    assert not (cache_dir / f"{legacy_key}.json").exists()
 
 
 def test_build_generation_bundle_uses_auto_confirmed_materials(tmp_path):
     service = make_service(tmp_path)
     first_source = tmp_path / "a.txt"
     second_source = tmp_path / "b.txt"
-    first_source.write_text("Rabbit Dental offers orthodontics and implant services.", encoding="utf-8")
-    second_source.write_text("Second profile includes doctors and clinic service process.", encoding="utf-8")
+    first_source.write_text("Yishengxue provides adult education enrollment planning.", encoding="utf-8")
+    second_source.write_text("Second profile includes policy checks and consultation process.", encoding="utf-8")
     first = service.save_uploaded_material("client-1", first_source, "a.txt")
     second = service.save_uploaded_material("client-1", second_source, "b.txt")
     service.parse_material("client-1", first["id"])
@@ -133,8 +133,8 @@ def test_build_generation_bundle_uses_auto_confirmed_materials(tmp_path):
     assert bundle["confirmed_count"] == 2
     assert bundle["material_count"] == 2
     assert bundle["used_unconfirmed_fallback"] is False
-    assert "Rabbit Dental offers orthodontics" in bundle["text"]
-    assert "Second profile includes doctors" in bundle["text"]
+    assert "Yishengxue provides adult education enrollment planning" in bundle["text"]
+    assert "Second profile includes policy checks" in bundle["text"]
 
 
 def test_build_generation_bundle_excludes_unusable_materials(tmp_path):
@@ -160,7 +160,7 @@ def test_parse_material_reuses_package_extractor_for_xlsx(tmp_path):
         source,
         [
             ["Brand", "Service", "Region"],
-            ["Rabbit Dental", "orthodontics", "Xi'an"],
+            ["Yishengxue", "adult education planning", "Hebei"],
         ],
     )
     material = service.save_uploaded_material("client-1", source, "catalog.xlsx")
@@ -169,8 +169,8 @@ def test_parse_material_reuses_package_extractor_for_xlsx(tmp_path):
 
     assert parsed["confirmed"] is True
     assert parsed["diagnostics"]["extractor"] == "material_package_extractor"
-    assert "Rabbit Dental" in parsed["clean_text"]
-    assert "orthodontics" in parsed["clean_text"]
+    assert "Yishengxue" in parsed["clean_text"]
+    assert "adult education planning" in parsed["clean_text"]
 
 
 def test_parse_legacy_doc_reports_missing_tool_instead_of_text_too_short(tmp_path):
@@ -196,7 +196,7 @@ def test_parse_legacy_doc_uses_antiword_when_available(tmp_path):
     material = service.save_uploaded_material("client-1", source, "legacy.doc")
 
     class Completed:
-        stdout = b"Rabbit Dental legacy DOC services and doctors"
+        stdout = b"Yishengxue legacy DOC services and policy checks"
         stderr = b""
         returncode = 0
 

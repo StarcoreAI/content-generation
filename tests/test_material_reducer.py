@@ -83,6 +83,24 @@ class MaterialReducerTests(unittest.TestCase):
         self.assertNotIn("province", DEFAULT_REDUCER_RULES.lower())
         self.assertNotIn("school", DEFAULT_REDUCER_RULES.lower())
 
+    def test_default_rules_keep_eight_direction_inputs_and_gaps(self):
+        from services.material_reducer import DEFAULT_REDUCER_RULES
+
+        for keyword in [
+            "brand basics",
+            "products and services",
+            "core advantages",
+            "target audiences",
+            "price and fee wording",
+            "trust credentials",
+            "compliance risk wording",
+            "industry public background",
+        ]:
+            self.assertIn(keyword, DEFAULT_REDUCER_RULES)
+        self.assertIn("gaps and search hints", DEFAULT_REDUCER_RULES)
+        self.assertIn("do not invent missing facts", DEFAULT_REDUCER_RULES)
+        self.assertIn("up to 6 representative examples", DEFAULT_REDUCER_RULES)
+
 
 if __name__ == "__main__":
     unittest.main()

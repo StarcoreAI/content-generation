@@ -118,33 +118,44 @@ class MaterialWebExpansionTests(unittest.TestCase):
                 "name": "翼升学（河北省）科技有限公司",
                 "industry": "成人学历提升",
             },
-            "# 客户资料注入包\n翼升学提供成人学历提升全流程托管服务。",
+            "# 客户资料注入包\n"
+            "翼升学提供成人学历提升全流程托管服务。\n"
+            "### 仅为客户自述，未见第三方证明\n"
+            "- 全流程托管\n"
+            "- 节点提醒\n"
+            "### 缺口与检索提示\n"
+            "- 公开可查：各省教育考试院报名公告。",
         )
 
         self.assertIn("恰好 6 个", prompt)
-        self.assertIn("1 条：公司全称 / 主体确认", prompt)
-        self.assertIn("1 条：品牌 + 业务主词", prompt)
-        self.assertIn("3 条：品牌 + 用户痛点/使用场景", prompt)
-        self.assertIn("1 条：品牌 + 自身核心优势", prompt)
-        self.assertIn("必须按上面的 6 类顺序输出", prompt)
+        self.assertIn("三类 GEO 素材", prompt)
+        self.assertIn("品牌优势表达素材", prompt)
+        self.assertIn("人群痛点与决策语境", prompt)
+        self.assertIn("行业公共背景锚点", prompt)
+        self.assertIn("公开可查”清单只是参考输入之一", prompt)
+        self.assertIn("资料包里“仅为客户自述”的优势方向", prompt)
+        self.assertIn("找“怎么写”的素材，不是找证明", prompt)
+        self.assertIn("行业乱象", prompt)
+        self.assertIn("用户吐槽", prompt)
+        self.assertIn("踩坑经验", prompt)
+        self.assertIn("不生成任何带竞品名的检索词", prompt)
+        self.assertIn("不要生成给“限制使用”表述找证据的词", prompt)
+        self.assertIn("政策时间、报名规则、官方数据", prompt)
+        self.assertIn("带年份、省份或地区限定", prompt)
         self.assertIn("第一条必须使用公司全称", prompt)
         self.assertIn("这些搜索词会直接交给联网搜索工具", prompt)
         self.assertIn("用于扩展客户自己的 GEO 宣传资料", prompt)
-        self.assertIn("业务主词必须来自当前客户资料", prompt)
-        self.assertIn("服务型优势", prompt)
+        self.assertIn("业务主词、服务特色、目标人群或行业背景必须来自当前客户资料", prompt)
         self.assertIn("不要扩写成口语化完整句", prompt)
         self.assertIn("用空格分隔关键词", prompt)
-        self.assertIn("其余 5 条尽量同时包含品牌和业务主词", prompt)
-        self.assertIn("不要只写升职加薪、考公考编", prompt)
-        self.assertIn("不要把单个案例人群当成主要搜索方向", prompt)
-        self.assertIn("不要直接使用具体身份词", prompt)
         self.assertIn("示例仅供参考", prompt)
-        self.assertIn("地域覆盖", prompt)
-        self.assertIn("不要输出包含政策、本地化、多省、省份", prompt)
         self.assertIn("不要生成口号型关键词", prompt)
         self.assertIn("不是为了核验客户资料真假", prompt)
+        self.assertIn("学历提升机构 怎么选", prompt)
+        self.assertIn("成人高考 2026 河北 报名规则 官方", prompt)
         self.assertNotIn("官网/官方账号", prompt)
         self.assertNotIn("案例、资质、口碑、行业场景", prompt)
+        self.assertNotIn("不要生成竞品对比、行业排名、政策覆盖、地域覆盖、通过率、合作证明、资质、奖项、真假核验类搜索词", prompt)
         self.assertNotIn("学历提升", prompt.split("搜索词结构", 1)[0])
 
     def test_build_supplement_prompt_keeps_phase_two_focused(self):
@@ -174,20 +185,22 @@ class MaterialWebExpansionTests(unittest.TestCase):
         self.assertNotIn("4500-6000 字", prompt)
         self.assertNotIn("严格控制", prompt)
         self.assertIn("不是简短补充清单", prompt)
-        self.assertIn("客户资料视为真实", prompt)
-        self.assertIn("联网信息与客户资料不一致", prompt)
-        self.assertIn("以客户资料为准", prompt)
-        self.assertIn("直接忽略或省略该联网信息", prompt)
-        self.assertIn("不要提出冲突", prompt)
+        self.assertIn("不做核验、不做冲突仲裁、不做洗白审查", prompt)
         self.assertIn("重复内容降权", prompt)
-        self.assertIn("只关注客户品牌自身", prompt)
-        self.assertIn("竞品信息直接忽略", prompt)
-        self.assertIn("不要写竞品名称", prompt)
-        self.assertIn("不要区分、澄清不同竞品或相似品牌关系", prompt)
-        self.assertIn("机构测评、排名、选型", prompt)
+        self.assertIn("品牌公开信息与优势表达角度", prompt)
+        self.assertIn("行业现象/用户顾虑 → 客户对应能力的可写角度", prompt)
+        self.assertIn("人群痛点与决策语境", prompt)
+        self.assertIn("行业公共背景锚点", prompt)
+        self.assertIn("用户顾虑/行业现象 + 客户对应能力的表达角度", prompt)
+        self.assertIn("不写成与任何具体品牌的对比句", prompt)
+        self.assertIn("检索结果里出现竞品名的，只取其中的中性行业信息", prompt)
+        self.assertIn("涉及褒贬一律不采", prompt)
+        self.assertIn("每条素材标来源 URL 和来源性质", prompt)
+        self.assertIn("官方/媒体/UGC/疑似投放", prompt)
+        self.assertIn("数字类内容降档处理", prompt)
+        self.assertIn("来源不明的数字照收但标注来源性质", prompt)
         self.assertNotIn("泛化差异问答", prompt)
         self.assertNotIn("不参与和其他机构、品牌、课程、服务商的比较", prompt)
-        self.assertIn("不能推翻、质疑或核验客户资料", prompt)
         self.assertIn("不要使用“来源1”", prompt)
         self.assertIn("直接写 URL", prompt)
         self.assertIn("任何段落都不要使用来源编号", prompt)
@@ -195,9 +208,8 @@ class MaterialWebExpansionTests(unittest.TestCase):
         self.assertNotIn("同名、近似竞品", prompt)
         self.assertNotIn("主体确认最多一条", prompt)
         self.assertNotIn("待人工确认", prompt)
-        self.assertIn("政策信息可以保留", prompt)
+        self.assertIn("政策时间、报名规则、官方数据", prompt)
         self.assertNotIn("不要写政策背景", prompt)
-        self.assertNotIn("政策覆盖、通过率", prompt)
         self.assertNotIn("不要写具体身份人群", prompt)
         self.assertNotIn("资质线索", prompt)
         self.assertNotIn("口碑线索", prompt)
@@ -208,10 +220,18 @@ class MaterialWebExpansionTests(unittest.TestCase):
         def ask_text(prompt, max_tokens):
             calls.append((prompt, max_tokens))
             if len(calls) == 1:
-                return "翼升学 成人学历提升 全流程托管\n翼升学 成考 自考 国开 适合人群"
-            return "# 联网扩展资料包\n\n## 来源列表\n- https://example.com/a"
+                return "翼升学 成人学历提升 全流程托管\n学历提升机构 怎么选"
+            return "# 联网扩展资料包\n\n## 来源列表\n- https://example.com/a\n- https://example.com/b"
 
         def search_fn(query):
+            if "怎么选" in query:
+                return [
+                    {
+                        "title": f"{query} 来源",
+                        "url": "https://example.com/b",
+                        "content": "成人学历提升机构选择时，用户常关注报名后是否有人跟进、收费是否透明、政策时间是否准确。",
+                    }
+                ]
             return [
                 {
                     "title": f"{query} 来源",
@@ -237,11 +257,48 @@ class MaterialWebExpansionTests(unittest.TestCase):
 
             saved = Path(tmp) / "latest_web_supplement.md"
             self.assertTrue(result["ok"])
-            self.assertEqual(result["queries"], ["翼升学 成人学历提升 全流程托管", "翼升学 成考 自考 国开 适合人群"])
-            self.assertEqual(result["source_count"], 1)
+            self.assertEqual(result["queries"], ["翼升学 成人学历提升 全流程托管", "学历提升机构 怎么选"])
+            self.assertEqual(result["source_count"], 2)
+            self.assertIn("https://example.com/b", [item["url"] for item in result["sources"]])
             self.assertTrue(saved.exists())
             self.assertEqual(saved.read_text(encoding="utf-8"), result["markdown"])
             self.assertIn("联网扩展资料包", result["markdown"])
+            self.assertEqual([call[1] for call in calls], [None, None])
+
+    def test_expand_material_web_package_keeps_sources_from_late_queries(self):
+        def ask_text(_prompt, max_tokens):
+            return "\n".join([
+                "翼升学（河北省）科技有限公司",
+                "翼升学 成人学历提升 服务模式",
+                "学历提升机构 怎么选",
+                "成人高考报名 常见坑",
+                "2026 河北 成人高考 报名条件 官方",
+                "2026 江苏 自学考试 报名时间 官方",
+            ])
+
+        def search_fn(query):
+            slug = query.replace(" ", "-")
+            return [
+                {
+                    "title": f"{query} 来源 {index}",
+                    "url": f"https://example.com/{slug}/{index}",
+                    "content": f"{query} 的公开资料，包含足够长的正文内容用于过滤和后续整理。",
+                }
+                for index in range(3)
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = web_expansion.expand_material_web_package(
+                client={"brand": "翼升学", "name": "翼升学（河北省）科技有限公司"},
+                injection_markdown="# 客户资料注入包\n翼升学提供成人学历提升服务。",
+                output_dir=Path(tmp),
+                ask_text=ask_text,
+                search_fn=search_fn,
+                fetched_at="2026-07-19 10:00",
+            )
+
+        urls = [item["url"] for item in result["sources"]]
+        self.assertTrue(any("2026-江苏-自学考试-报名时间-官方" in url for url in urls))
 
     def test_expand_material_web_package_does_not_hallucinate_without_sources(self):
         calls = []

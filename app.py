@@ -519,10 +519,13 @@ def ai_with_settings(prompt, max_tokens=2000, settings=None):
     if not s.get("api_key"):
         raise Exception("请先在系统设置中配置 API Key")
     client = OpenAI(api_key=s["api_key"], base_url=s["base_url"].rstrip("/"))
-    resp = client.chat.completions.create(
-        model=s["model"], max_tokens=max_tokens,
-        messages=[{"role": "user", "content": prompt}]
-    )
+    kwargs = {
+        "model": s["model"],
+        "messages": [{"role": "user", "content": prompt}],
+    }
+    if max_tokens is not None:
+        kwargs["max_tokens"] = max_tokens
+    resp = client.chat.completions.create(**kwargs)
     return resp.choices[0].message.content.strip()
 
 def ai_deepseek_pro(messages, max_tokens=6000):
@@ -1238,6 +1241,18 @@ def upload_content_material(cid):
         "materials": materials,
     })
 
+@app.route("/api/content/materials/<cid>/<material_id>/confirm", methods=["POST"])
+def confirm_content_material(cid, material_id):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    data = request.get_json(silent=True) or {}
+    confirmed = bool(data.get("confirmed", True))
+    try:
+        material = content_material_service().confirm_material(cid, material_id, confirmed)
+    except KeyError:
+        return jsonify({"error": "找不到资料"}), 404
+    return jsonify({"ok": True, "material": material})
+
 @app.route("/api/content/materials/<cid>/<material_id>", methods=["DELETE"])
 def delete_content_material(cid, material_id):
     if not require_client_access(cid):
@@ -1526,8 +1541,55 @@ def read_material_text(cid, max_chars=3000):
     """读取客户资料文本内容，用于内容生产参考"""
     return read_material_bundle(cid, max_chars=max_chars, per_file_chars=1000)["text"][:max_chars]
 
-def read_content_material_bundle(cid, max_chars=12000):
-    return content_material_service().build_generation_bundle(cid, max_chars=max_chars)
+def content_material_package_section(path, label):
+    if not path.exists():
+        return None
+    markdown = path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not markdown:
+        return None
+    stat = path.stat()
+    return {
+        "text": f"【{label}：{path.name}】\n{markdown}",
+        "file": {
+            "id": path.name,
+            "name": path.name,
+            "original_name": label,
+            "source": "material_package",
+            "size": stat.st_size,
+            "path": str(path),
+            "confirmed": True,
+            "uploaded": datetime.fromtimestamp(stat.st_mtime).strftime("%Y-%m-%d %H:%M"),
+        },
+    }
+
+def read_content_material_bundle(
+    cid,
+    max_chars=12000,
+    include_material_package=True,
+    include_material_web_supplement=True,
+):
+    bundle = content_material_service().build_generation_bundle(cid, max_chars=max_chars)
+    sections = [bundle.get("text", "").strip()] if bundle.get("text", "").strip() else []
+    files = list(bundle.get("files") or [])
+    output_dir = material_package_output_dir(cid)
+    package_sources = []
+    if include_material_package:
+        package_sources.append(content_material_package_section(output_dir / "latest_injection.md", "AI解析资料包"))
+    if include_material_web_supplement:
+        package_sources.append(content_material_package_section(output_dir / "latest_web_supplement.md", "AI联网扩展资料包"))
+    for source in package_sources:
+        if not source:
+            continue
+        sections.append(source["text"])
+        files.append(source["file"])
+    combined = "\n\n---\n\n".join(sections)
+    return {
+        **bundle,
+        "text": combined[:max_chars],
+        "files": files,
+        "material_count": len(files),
+        "confirmed_count": len(files),
+    }
 
 def get_client(cid):
     return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
@@ -1962,7 +2024,11 @@ def generate_content_article():
     if not client:
         return jsonify({"error": "客户不存在"}), 404
 
-    material_bundle = read_content_material_bundle(cid)
+    material_bundle = read_content_material_bundle(
+        cid,
+        include_material_package=bool(d.get("use_material_package", True)),
+        include_material_web_supplement=bool(d.get("use_material_web_supplement", True)),
+    )
     sample_links = normalize_sample_links(d.get("sample_links", []))
     selected_articles = normalize_selected_sample_articles(d.get("selected_articles", []))
     article_type = d.get("article_type") if d.get("article_type") in {"对比型", "介绍型"} else "对比型"

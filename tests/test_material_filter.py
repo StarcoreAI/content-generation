@@ -203,6 +203,23 @@ class MaterialFilterTests(unittest.TestCase):
             {"unit_id": "legacy.doc", "status": "needs_conversion"},
         )
 
+    def test_default_rules_preserve_eight_direction_material(self):
+        from services.material_filter import DEFAULT_FILTER_RULES
+
+        for keyword in [
+            "品牌基础",
+            "产品与服务",
+            "核心优势",
+            "目标人群",
+            "价格与费用",
+            "信任凭证",
+            "合规风险",
+            "行业公共背景",
+        ]:
+            self.assertIn(keyword, DEFAULT_FILTER_RULES)
+        self.assertIn("缺口与检索提示", DEFAULT_FILTER_RULES)
+        self.assertIn("资料没有的，不要编造", DEFAULT_FILTER_RULES)
+
     def test_rejects_missing_model_decisions(self):
         from services.material_filter import filter_material_units
 
@@ -245,7 +262,7 @@ class MaterialFilterTests(unittest.TestCase):
         from services.material_filter import DEFAULT_FILTER_RULES
 
         self.assertIn("整个资料包", DEFAULT_FILTER_RULES)
-        self.assertIn("最多保留 3 个", DEFAULT_FILTER_RULES)
+        self.assertIn("最多保留 6 个", DEFAULT_FILTER_RULES)
         self.assertIn("拿不准", DEFAULT_FILTER_RULES)
         self.assertNotIn("翼升学", DEFAULT_FILTER_RULES)
         self.assertNotIn("10 省", DEFAULT_FILTER_RULES)

@@ -233,7 +233,7 @@ class MaterialApiTests(unittest.TestCase):
                 captured["qualifier"] = qualifier
                 return {
                     "ok": True,
-                    "queries": [{"competitor": "第一竞品", "query": "第一竞品 牙齿矫正"}],
+                    "queries": [{"competitor": "第一竞品", "query": "第一竞品 成人学历提升"}],
                     "source_count": 1,
                     "competitors": [],
                     "markdown": "# 竞品联网资料补充包",
@@ -242,18 +242,18 @@ class MaterialApiTests(unittest.TestCase):
 
             geo_app.expand_competitor_web_package = fake_expand
             with isolated_material_app():
-                geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户", "industry": "口腔"}])
+                geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户", "industry": "教育"}])
                 geo_app.save(geo_app.F_SETTINGS, {"tavily_api_key": "tvly-test", "api_key": "model-key"})
 
                 response = geo_app.app.test_client().post(
                     "/api/competitors/client-1/expand-web",
-                    json={"competitors": ["第一竞品"], "qualifier": "牙齿矫正"},
+                    json={"competitors": ["第一竞品"], "qualifier": "成人学历提升"},
                 )
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(captured["competitors"], ["第一竞品"])
-            self.assertEqual(captured["qualifier"], "牙齿矫正")
-            self.assertEqual(captured["client"]["industry"], "口腔")
+            self.assertEqual(captured["qualifier"], "成人学历提升")
+            self.assertEqual(captured["client"]["industry"], "教育")
         finally:
             geo_app.expand_competitor_web_package = original
 

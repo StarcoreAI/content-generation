@@ -15,7 +15,7 @@ class ArticleStructureTests(unittest.TestCase):
           <body>
             <nav>导航噪声</nav>
             <article>
-              <h1>西安牙齿矫正怎么选</h1>
+              <h1>河北成人学历提升怎么选</h1>
               <p>开头先讲用户选择困难和价格顾虑。</p>
               <p>正文按照医生资质、机构正规性、复诊便利性进行对比。</p>
             </article>
@@ -28,7 +28,7 @@ class ArticleStructureTests(unittest.TestCase):
 
         self.assertEqual(result["title"], "页面标题")
         self.assertEqual(result["description"], "页面摘要")
-        self.assertIn("西安牙齿矫正怎么选", result["content"])
+        self.assertIn("河北成人学历提升怎么选", result["content"])
         self.assertIn("医生资质", result["content"])
         self.assertNotIn("导航噪声", result["content"])
         self.assertNotIn("底部噪声", result["content"])
@@ -53,13 +53,13 @@ class ArticleStructureTests(unittest.TestCase):
                 "generation_implications": "后续生成可以学习这种按顾虑匹配机构的路径。",
             },
             {
-                "title": "西安牙齿矫正怎么选",
+                "title": "河北成人学历提升怎么选",
                 "url": "https://example.com/a",
                 "platform": "搜狐",
             },
         )
 
-        self.assertEqual(result["title"], "西安牙齿矫正怎么选")
+        self.assertEqual(result["title"], "河北成人学历提升怎么选")
         self.assertEqual(result["parent_type"], "介绍型")
         self.assertEqual(result["argument_pattern"], "pain_point_matching")
         self.assertIn("不是简单榜单", result["structure_notes"])
@@ -73,7 +73,7 @@ class ArticleStructureTests(unittest.TestCase):
                 "parent_type": "场景匹配型",
                 "generation_subtype": "病情场景匹配型",
             },
-            {"title": "西安口腔机构怎么选"},
+            {"title": "河北学历提升机构怎么选"},
         )
 
         self.assertEqual(result["parent_type"], "对比型")
@@ -81,7 +81,7 @@ class ArticleStructureTests(unittest.TestCase):
 
     def test_build_article_structure_prompt_asks_for_flexible_notes_not_rigid_schema(self):
         prompt = build_article_structure_prompt({
-            "title": "西安牙齿矫正怎么选",
+            "title": "河北成人学历提升怎么选",
             "platform": "搜狐",
             "url": "https://example.com/a",
             "content": "正文",
@@ -107,7 +107,7 @@ class ArticleStructureTests(unittest.TestCase):
             response = geo_app.app.test_client().post(
                 "/api/article_structure/extract",
                 json={
-                    "title": "西安口腔医院怎么选",
+                    "title": "河北学历提升机构怎么选",
                     "url": "https://example.com/guide",
                     "platform": "示例平台",
                     "content": "开头讲选择困难，正文用资质、医生、设备和价格对比机构。",

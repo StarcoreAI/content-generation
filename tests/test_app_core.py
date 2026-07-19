@@ -84,6 +84,32 @@ def isolated_app_data():
 
 
 class CoreFunctionTests(unittest.TestCase):
+    def test_ai_with_settings_omits_max_tokens_when_none(self):
+        captured = {}
+
+        class FakeChoices:
+            message = type("Message", (), {"content": "ok"})
+
+        class FakeCompletions:
+            def create(self, **kwargs):
+                captured.update(kwargs)
+                return type("Response", (), {"choices": [FakeChoices()]})
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with patch.object(geo_app, "OpenAI", FakeOpenAI):
+            result = geo_app.ai_with_settings(
+                "prompt",
+                max_tokens=None,
+                settings={"api_key": "key", "base_url": "https://api.example.com", "model": "model-a"},
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertNotIn("max_tokens", captured)
+        self.assertEqual(captured["model"], "model-a")
+
     def test_uid_is_unique_when_clock_timestamp_repeats(self):
         class FixedDatetime:
             @staticmethod
@@ -249,7 +275,7 @@ class CoreFunctionTests(unittest.TestCase):
                 "base_url": "https://api.example.com",
                 "model": "deepseek-v4-pro",
             })
-            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Rabbit Dental"}])
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
 
             def fake_deepseek_pro(messages, max_tokens=6000):
                 return "Generated article"
@@ -263,10 +289,105 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["article"]["model"], "deepseek-v4-pro")
 
+    def test_content_generate_respects_content_material_use_toggle(self):
+        with isolated_app_data():
+            cid = "client-material-toggle"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
+            client = geo_app.app.test_client()
+            uploaded = client.post(
+                f"/api/content/materials/{cid}/upload",
+                data={
+                    "file": [
+                        (io.BytesIO(b"USED_CONTENT_MARKER should be visible to generation."), "used.txt"),
+                        (io.BytesIO(b"UNUSED_CONTENT_MARKER should not be visible to generation."), "unused.txt"),
+                    ]
+                },
+                content_type="multipart/form-data",
+            )
+            self.assertEqual(uploaded.status_code, 200)
+            materials = uploaded.get_json()["materials"]
+
+            toggled = client.post(
+                f"/api/content/materials/{cid}/{materials[1]['id']}/confirm",
+                json={"confirmed": False},
+            )
+            self.assertEqual(toggled.status_code, 200)
+
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "Generated article"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = client.post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "write a test article"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("USED_CONTENT_MARKER", payload)
+            self.assertNotIn("UNUSED_CONTENT_MARKER", payload)
+            self.assertEqual(response.get_json()["article"]["material_count"], 1)
+
+    def test_content_generate_uses_selected_customer_material_packages(self):
+        with isolated_app_data():
+            cid = "client-package-toggle"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_injection.md").write_text(
+                "# 客户资料注入包\nPACKAGE_INJECTION_MARKER",
+                encoding="utf-8",
+            )
+            (output_dir / "latest_web_supplement.md").write_text(
+                "# 联网扩展资料\nPACKAGE_WEB_MARKER",
+                encoding="utf-8",
+            )
+
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "Generated article"
+
+            client = geo_app.app.test_client()
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                included = client.post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "write with packages",
+                        "use_material_package": True,
+                        "use_material_web_supplement": True,
+                    },
+                )
+                skipped = client.post(
+                    "/api/content/generate",
+                    json={
+                        "client_id": cid,
+                        "opinion": "write without packages",
+                        "use_material_package": False,
+                        "use_material_web_supplement": False,
+                    },
+                )
+
+            self.assertEqual(included.status_code, 200)
+            self.assertEqual(skipped.status_code, 200)
+            included_payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            skipped_payload = json.dumps(captured_messages[1], ensure_ascii=False)
+            self.assertIn("PACKAGE_INJECTION_MARKER", included_payload)
+            self.assertIn("PACKAGE_WEB_MARKER", included_payload)
+            self.assertNotIn("PACKAGE_INJECTION_MARKER", skipped_payload)
+            self.assertNotIn("PACKAGE_WEB_MARKER", skipped_payload)
+            self.assertEqual(included.get_json()["article"]["material_count"], 2)
+            self.assertEqual(skipped.get_json()["article"]["material_count"], 0)
+
     def test_content_generate_persists_to_sqlite_history_store(self):
         with isolated_app_data():
             cid = "client-sqlite"
-            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Rabbit Dental"}])
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
 
             with patch.object(geo_app, "ai_deepseek_pro", return_value="SQLite article", create=True):
                 response = geo_app.app.test_client().post(
@@ -323,7 +444,7 @@ class CoreFunctionTests(unittest.TestCase):
     def test_content_generate_uses_explicit_article_type(self):
         with isolated_app_data():
             cid = "client-article-type"
-            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             captured_messages = []
 
             def fake_deepseek_pro(messages, max_tokens=6000):
@@ -335,7 +456,7 @@ class CoreFunctionTests(unittest.TestCase):
                     "/api/content/generate",
                     json={
                         "client_id": cid,
-                        "opinion": "写一篇牙齿矫正服务文章",
+                        "opinion": "写一篇成人学历提升服务文章",
                         "article_type": "介绍型",
                     },
                 )
@@ -343,12 +464,12 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             payload = json.dumps(captured_messages[0], ensure_ascii=False)
             self.assertIn("文章类型：介绍型", payload)
-            self.assertIn("标题必须包含品牌名：兔博士", payload)
+            self.assertIn("标题必须包含品牌名：翼升学", payload)
 
     def test_content_generate_history_is_isolated_by_article_type_but_listing_is_combined(self):
         with isolated_app_data():
             cid = "client-history-type"
-            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             captured_messages = []
 
             def fake_deepseek_pro(messages, max_tokens=6000):
@@ -389,7 +510,7 @@ class CoreFunctionTests(unittest.TestCase):
     def test_content_generate_history_is_isolated_by_selected_day(self):
         with isolated_app_data():
             cid = "client-history-day"
-            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "西安兔博士口腔", "brand": "兔博士"}])
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             geo_app.append_content_generation(
                 cid,
                 {
@@ -472,36 +593,33 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(data["articles"], [])
             self.assertEqual(geo_app.load_content_session(cid, history_date="2026-07-07")["messages"], [])
 
-    def test_content_generation_material_bundle_uses_confirmed_fact_cards(self):
+    def test_content_generation_material_bundle_uses_confirmed_material_text(self):
         with isolated_app_data():
             cid = "client-1"
-            source_file = os.path.join(geo_app.D, "doctor.txt")
+            source_file = os.path.join(geo_app.D, "profile.txt")
             with open(source_file, "w", encoding="utf-8") as f:
                 f.write(
-                    "兔博士口腔成立于2003年。\n"
-                    "李璞医生，隐适美认证医师，从事正畸专科13年。\n"
-                    "擅长儿童牙齿矫正、种植牙、根管治疗。\n"
-                    "禁止写保证治愈、全市第一、最低价。\n"
+                    "Yishengxue provides adult education enrollment planning.\n"
+                    "The service includes policy checks, application timeline reminders, and consultation process notes.\n"
                 )
             service = geo_app.material_service()
-            material = service.save_uploaded_material(cid, source_file, "doctor.txt")
+            material = service.save_uploaded_material(cid, source_file, "profile.txt")
             service.parse_material(cid, material["id"])
             service.confirm_material(cid, material["id"], True)
 
             bundle = geo_app.read_material_bundle(cid)
             messages = geo_app.build_content_generation_messages(
-                {"id": cid, "name": "兔博士口腔", "brand": "兔博士口腔"},
+                {"id": cid, "name": "Yishengxue", "brand": "Yishengxue"},
                 bundle,
                 [],
-                "写一篇正畸科普文章",
+                "Write an adult education planning article.",
             )
 
             payload = json.dumps(messages, ensure_ascii=False)
-            self.assertIn("【客户事实卡】", payload)
-            self.assertIn("李璞", payload)
-            self.assertIn("医疗内容需避免效果承诺", payload)
-            self.assertIn("保证治愈", payload)
-            self.assertIn("资料状态：已确认", payload)
+            self.assertIn("[Customer material] profile.txt", payload)
+            self.assertIn("Status: confirmed", payload)
+            self.assertIn("adult education enrollment planning", payload)
+            self.assertIn("policy checks", payload)
 
     def test_content_generation_system_prompt_starts_with_default_geo_rules(self):
         messages = geo_app.build_content_generation_messages(
@@ -526,13 +644,13 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_content_generation_defaults_to_comparison_type_prompt(self):
         messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
-            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
+            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
             [],
-            "请参考高频引用文章生成一篇西安牙齿矫正内容",
+            "请参考高频引用文章生成一篇西安成人学历提升内容",
             selected_articles=[
                 {
-                    "title": "西安牙齿矫正医院全攻略（2026最新）",
+                    "title": "河北成人学历提升机构全攻略（2026最新）",
                     "url": "https://m.sohu.com/a/1046143123_122828553/",
                     "platform": "搜狐",
                     "count": 8,
@@ -603,8 +721,8 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_content_generation_can_insert_reference_plugin_subtype(self):
         messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
-            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
+            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
             [],
             "请参考引用情报插件写一篇内容",
             article_type="对比型",
@@ -624,8 +742,8 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_content_generation_can_insert_reference_plugin_subtype_for_intro_type(self):
         messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
-            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
+            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
             [],
             "请参考引用情报插件写一篇品牌介绍",
             article_type="介绍型",
@@ -646,16 +764,16 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_content_generation_intro_type_requires_brand_title_and_brand_body(self):
         messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
-            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
+            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
             [],
-            "请写一篇兔博士口腔牙齿矫正服务介绍",
+            "请写一篇翼升学成人学历提升服务介绍",
             article_type="介绍型",
         )
 
         payload = json.dumps(messages, ensure_ascii=False)
         self.assertIn("文章类型：介绍型", payload)
-        self.assertIn("标题必须包含品牌名：兔博士", payload)
+        self.assertIn("标题必须包含品牌名：翼升学", payload)
         self.assertIn("少量攻略型开头 + 大量品牌结构化介绍", payload)
         self.assertIn("开头必须先写目标用户在该业务场景里的真实痛点和决策难点", payload)
         self.assertIn("用户痛点/顾虑 -> 品牌如何解决 -> 资料中的证据支撑", payload)
@@ -669,15 +787,15 @@ class CoreFunctionTests(unittest.TestCase):
 
     def test_content_generation_does_not_parse_article_type_from_opinion(self):
         messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
-            {"text": "客户资料PDF：兔博士口腔提供牙齿矫正服务。", "files": ["profile.pdf"]},
+            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
+            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
             [],
             "运营备注里写了介绍型三个字，但没有选择按钮参数",
         )
 
         payload = json.dumps(messages, ensure_ascii=False)
         self.assertIn("文章类型：对比型", payload)
-        self.assertNotIn("标题必须包含品牌名：兔博士", payload)
+        self.assertNotIn("标题必须包含品牌名：翼升学", payload)
 
     def test_retired_frontend_modules_do_not_expose_backend_routes(self):
         retired_routes = {
@@ -1826,7 +1944,7 @@ class FlaskApiTests(unittest.TestCase):
             geo_app.save(
                 geo_app.F_CLIENTS,
                 [
-                    {"id": "client-1", "name": "西安兔博士口腔", "brand": "兔博士"},
+                    {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
                 ],
             )
             geo_app.save(
@@ -1837,12 +1955,12 @@ class FlaskApiTests(unittest.TestCase):
                         "client_id": "client-1",
                         "today": date,
                         "source_platform": "qwen",
-                        "brand": "西安兔博士口腔",
+                        "brand": "河北翼升学",
                         "brand_mentioned": False,
-                        "answer": "兔博士口腔和竞品A被提到。",
+                        "answer": "翼升学和竞品A被提到。",
                         "refs": [],
                         "mentioned_entities": [
-                            {"name": "兔博士口腔", "type": "品牌", "evidence": "兔博士口腔"},
+                            {"name": "翼升学", "type": "品牌", "evidence": "翼升学"},
                             {"name": "竞品A", "type": "品牌", "evidence": "竞品A"},
                         ],
                     },
@@ -1851,12 +1969,12 @@ class FlaskApiTests(unittest.TestCase):
                         "client_id": "client-1",
                         "today": date,
                         "source_platform": "deepseek",
-                        "brand": "西安兔博士口腔",
+                        "brand": "河北翼升学",
                         "brand_mentioned": True,
-                        "answer": "西安兔博士口腔被提到。",
+                        "answer": "河北翼升学被提到。",
                         "refs": [],
                         "mentioned_entities": [
-                            {"name": "西安兔博士口腔", "type": "门店", "evidence": "西安兔博士口腔"},
+                            {"name": "河北翼升学", "type": "门店", "evidence": "河北翼升学"},
                         ],
                     },
                 ],
@@ -2813,9 +2931,9 @@ class FlaskApiTests(unittest.TestCase):
                     "client_id": "c1",
                     "today": "2026-07-08",
                     "source_platform": "deepseek",
-                    "question": "口腔门店怎么选？",
+                    "question": "学历提升机构怎么选？",
                     "refs": [
-                        {"title": "西安口腔门店选择攻略", "url": "https://example.com/a", "platform": "媒体", "position": 1}
+                        {"title": "河北学历提升机构选择攻略", "url": "https://example.com/a", "platform": "媒体", "position": 1}
                     ],
                 }
             ])
@@ -2856,7 +2974,7 @@ class FlaskApiTests(unittest.TestCase):
             def fake_fetch(url, **kwargs):
                 return {
                     "ok": True,
-                    "title": "西安口腔门店选择攻略",
+                    "title": "河北学历提升机构选择攻略",
                     "description": "",
                     "content": "这是一篇足够长的文章正文。" * 30,
                     "fetch_method": "test",
@@ -2882,7 +3000,7 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(loaded["plugins"][0]["parent_type"], "对比型")
             self.assertEqual(loaded["plugins"][0]["prompt_text"], "先按机构类型和适合人群拆解。")
             self.assertEqual(loaded["plugins"][0]["source_articles"], [
-                {"title": "西安口腔门店选择攻略", "url": "https://example.com/a"}
+                {"title": "河北学历提升机构选择攻略", "url": "https://example.com/a"}
             ])
 
             stage_dir = os.path.join(geo_app.F_REFERENCE_INTELLIGENCE, "c1", "2026-07-08")

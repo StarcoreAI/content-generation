@@ -383,7 +383,7 @@
       </div>
       <div class="fld">
         <label>联网搜索限定词（可选）</label>
-        <input id="competitorQualifier" placeholder="如：口腔、汽车音响改装、成人学历提升；不填则使用客户行业/品类">
+        <input id="competitorQualifier" placeholder="如：成人学历提升、汽车音响改装、黄金回收；不填则使用客户行业/品类">
       </div>
     </div>
     <div id="competitorMaterialResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
@@ -400,11 +400,19 @@
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">生成参考资料</span><div class="card-sub">仅供内容生产使用，上传后会自动解析并参与文章生成</div></div>
+      <div><span class="card-title">生成参考资料</span><div class="card-sub">仅供内容生产使用，上传后默认参与文章生成，可逐份关闭</div></div>
       <button class="btn btn-o btn-sm" onclick="document.getElementById('contentMaterialUpload').click()">
         上传资料
         <input type="file" id="contentMaterialUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="uploadContentMaterial(this)">
       </button>
+    </div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
+        <input type="checkbox" id="useMaterialPackage" checked style="width:auto;accent-color:var(--pri)">使用 AI解析资料包
+      </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
+        <input type="checkbox" id="useMaterialWebSupplement" checked style="width:auto;accent-color:var(--pri)">使用 AI联网扩展资料
+      </label>
     </div>
     <div id="contentMaterialList"><div style="font-size:11px;color:var(--text3)">暂无内容生产资料</div></div>
   </div>
@@ -423,7 +431,7 @@
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">运营意见</span><div class="card-sub">系统会自动使用上方内容生产资料，并只带上所选日期的历史生成内容</div></div>
+      <div><span class="card-title">运营意见</span><div class="card-sub">系统会使用上方已选择资料，并只带上所选日期的历史生成内容</div></div>
     </div>
     <div class="form-row">
       <div class="fld">

@@ -347,7 +347,10 @@ async function loadContentMaterials() {
           ${materialIssueText(f) ? `<span class="badge badge-r" style="font-size:9px">${escHtml(materialIssueText(f))}</span>` : ''}
         </div>
       </div>
-      <button class="btn btn-danger btn-sm" onclick="delContentMaterial('${encodeURIComponent(f.id || f.name)}')">删除</button>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end">
+        ${materialUsageButton(f, 'toggleContentMaterialUsage')}
+        <button class="btn btn-danger btn-sm" onclick="delContentMaterial('${encodeURIComponent(f.id || f.name)}')">删除</button>
+      </div>
     </div>`).join('');
 }
 
@@ -375,6 +378,13 @@ async function delContentMaterial(id) {
   if (!confirm('确认删除该内容生产资料？')) return;
   await api(`/api/content/materials/${currentClientId}/${id}`, 'DELETE');
   toast('已删除');
+  loadContentMaterials();
+}
+
+async function toggleContentMaterialUsage(id, confirmed) {
+  const r = await api(`/api/content/materials/${currentClientId}/${id}/confirm`, 'POST', {confirmed});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast(confirmed ? '已设为使用' : '已设为不使用');
   loadContentMaterials();
 }
 
@@ -522,7 +532,9 @@ async function generateContentArticle() {
       article_subtype: selectedContentArticleSubtype,
       article_subtype_plugin: getSelectedContentSubtypePlugin(),
       sample_links: getContentSampleLinks(),
-      selected_articles: getSelectedContentTopArticles()
+      selected_articles: getSelectedContentTopArticles(),
+      use_material_package: document.getElementById('useMaterialPackage')?.checked !== false,
+      use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false
     });
     if (r.error) { toast(r.error, 'err'); return; }
     opinionEl.value = '';
@@ -1255,6 +1267,15 @@ async function delMaterial(filename) {
   await api(`/api/materials/${currentClientId}/${filename}`, 'DELETE');
   toast('已删除');
   loadMaterials();
+}
+
+function materialUsageButton(file, handlerName) {
+  const canUse = !!file?.cache_dir && !materialIssueText(file);
+  const next = !file?.confirmed;
+  const label = file?.confirmed ? '不使用' : '使用';
+  const cls = file?.confirmed ? 'btn btn-o btn-sm' : 'btn btn-p btn-sm';
+  const disabled = canUse ? '' : ' disabled title="该资料暂不可用"';
+  return `<button class="${cls}"${disabled} onclick="${handlerName}('${encodeURIComponent(file?.id || file?.name)}', ${next})">${label}</button>`;
 }
 
 function materialDisplayStatus(file) {
