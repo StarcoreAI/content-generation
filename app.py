@@ -44,6 +44,7 @@ from services.record_stats import (
 from services.reference_stage1 import analyze_stage1_article
 from services.reference_stage2 import analyze_stage2_clusters
 from services.reference_stage3 import analyze_stage3_plugins
+from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
 from scripts.run_material_output import choose_material_output_model
@@ -1564,11 +1565,10 @@ def content_material_package_section(path, label):
 
 def read_content_material_bundle(
     cid,
-    max_chars=12000,
     include_material_package=True,
     include_material_web_supplement=True,
 ):
-    bundle = content_material_service().build_generation_bundle(cid, max_chars=max_chars)
+    bundle = content_material_service().build_generation_bundle(cid)
     sections = [bundle.get("text", "").strip()] if bundle.get("text", "").strip() else []
     files = list(bundle.get("files") or [])
     output_dir = material_package_output_dir(cid)
@@ -1585,7 +1585,7 @@ def read_content_material_bundle(
     combined = "\n\n---\n\n".join(sections)
     return {
         **bundle,
-        "text": combined[:max_chars],
+        "text": combined,
         "files": files,
         "material_count": len(files),
         "confirmed_count": len(files),
@@ -1821,6 +1821,91 @@ def build_reference_plugin_prompt(clusters):
 
 def build_reference_intelligence_prompt(articles):
     return reference_intel.build_reference_intelligence_prompt(articles)
+
+
+def pattern_library_service():
+    return PatternLibrary(Path(D) / "pattern_library")
+
+
+def list_pattern_library_scopes():
+    root = Path(D) / "pattern_library"
+    if not root.exists():
+        return []
+    scopes = []
+    for path in root.glob("*.json"):
+        if not re.fullmatch(r"(?:global|(?:industry|client)_[^.]+)\.json", path.name):
+            continue
+        body = load(str(path), {})
+        scope = str(body.get("scope") or "").strip()
+        try:
+            PatternLibrary._split_scope(scope)
+        except ValueError:
+            continue
+        entries = body.get("entries")
+        scopes.append({"scope": scope, "entry_count": len(entries) if isinstance(entries, list) else 0})
+    return sorted(scopes, key=lambda item: item["scope"])
+
+
+def latest_pattern_library_ingest_summary():
+    root = Path(F_REFERENCE_INTELLIGENCE)
+    if not root.exists():
+        return None
+    reports = list(root.glob("*/*/stage2_ingest_report.json"))
+    if not reports:
+        return None
+    try:
+        latest = max(reports, key=lambda path: path.stat().st_mtime)
+    except OSError:
+        return None
+    report = load(str(latest), {})
+    if not isinstance(report, dict):
+        return None
+    items = report.get("items") if isinstance(report.get("items"), list) else []
+    errors = report.get("errors") if isinstance(report.get("errors"), list) else []
+    return {
+        "client_id": str(report.get("client_id") or ""),
+        "date": str(report.get("date") or ""),
+        "cards": int(report.get("total_cards") or 0),
+        "created": sum(1 for item in items if isinstance(item, dict) and item.get("action") == "created"),
+        "matched": sum(1 for item in items if isinstance(item, dict) and item.get("action") == "matched"),
+        "errors": len(errors),
+    }
+
+
+@app.route("/api/pattern-library/scopes", methods=["GET"])
+def get_pattern_library_scopes():
+    return jsonify({"scopes": list_pattern_library_scopes()})
+
+
+@app.route("/api/pattern-library/entries", methods=["GET"])
+def get_pattern_library_entries():
+    scope = request.args.get("scope", "").strip()
+    if not scope:
+        return jsonify({"error": "scope required"}), 400
+    try:
+        entries = pattern_library_service().list_entries(scope)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({
+        "scope": scope,
+        "entries": entries,
+        "recent_ingest": latest_pattern_library_ingest_summary(),
+    })
+
+
+@app.route("/api/pattern-library/status", methods=["POST"])
+def update_pattern_library_status():
+    payload = request.json or {}
+    scope = str(payload.get("scope") or "").strip()
+    entry_id = str(payload.get("entry_id") or "").strip()
+    status = str(payload.get("status") or "").strip()
+    if not scope or not entry_id or status not in {"candidate", "active", "retired"}:
+        return jsonify({"error": "invalid_pattern_status_request"}), 400
+    try:
+        entry = pattern_library_service().set_status(scope, entry_id, status)
+    except (ValueError, KeyError) as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "entry": entry})
 
 
 def latest_entity_report_status(client_id, date_str, task_id=""):

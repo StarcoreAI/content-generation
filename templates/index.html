@@ -25,6 +25,7 @@
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
     <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
+    <div class="t-ni" onclick="navTo('pattern-library',this)">写法库</div>
     <div class="t-ni" onclick="navTo('materials',this)">客户资料解析</div>
     <div class="t-ni" onclick="navTo('competitors',this)">竞品资料解析</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
@@ -54,6 +55,7 @@
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
   <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
+  <div class="s-nav" onclick="navTo('pattern-library',this)"><i class="ti ti-books"></i>写法库</div>
   <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
   <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
@@ -332,6 +334,35 @@
 </div>
 
 <!-- ═══ 客户资料解析 ═══ -->
+<div class="page" id="page-pattern-library">
+  <div class="pg-hd">
+    <div>
+      <div class="pg-title"><em>写法库</em></div>
+      <div class="pg-sub">审核跨文章积累的可复用写作结构，人工决定哪些候选条目可供生产侧使用。</div>
+    </div>
+    <div class="acts">
+      <select id="patternLibraryScope" onchange="loadPatternLibraryEntries()" aria-label="写法库范围"></select>
+      <button class="btn btn-o btn-sm" onclick="loadPatternLibrary()" title="刷新写法库"><i class="ti ti-refresh"></i></button>
+    </div>
+  </div>
+  <div id="patternLibraryIngest" class="info-banner">正在读取最近入库动态…</div>
+  <div id="patternLibrarySummary" class="pattern-library-summary"></div>
+  <div id="patternLibraryContent">
+    <section class="pattern-library-group">
+      <div class="pattern-library-group-hd"><h2>骨架</h2><span id="patternLibrarySkeletonCount"></span></div>
+      <div id="patternLibrarySkeletons"></div>
+    </section>
+    <section class="pattern-library-group">
+      <div class="pattern-library-group-hd"><h2>段落模式</h2><span id="patternLibraryModuleCount"></span></div>
+      <div id="patternLibraryModules"></div>
+    </section>
+    <section class="pattern-library-group">
+      <div class="pattern-library-group-hd"><h2>引用友好清单</h2><span id="patternLibraryChecklistCount"></span></div>
+      <div id="patternLibraryChecklists"></div>
+    </section>
+  </div>
+</div>
+
 <div class="page" id="page-materials">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>客户资料解析</em></div><div class="pg-sub">上传客户资料，生成适合注入给大模型的 Markdown 资料包</div></div>

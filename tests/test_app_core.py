@@ -384,6 +384,34 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(included.get_json()["article"]["material_count"], 2)
             self.assertEqual(skipped.get_json()["article"]["material_count"], 0)
 
+    def test_content_generate_keeps_full_selected_material_packages(self):
+        with isolated_app_data():
+            cid = "client-full-material-packages"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
+            output_dir = geo_app.material_package_output_dir(cid)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "latest_injection.md").write_text("A" * 7000, encoding="utf-8")
+            (output_dir / "latest_web_supplement.md").write_text(
+                "B" * 7000 + "WEB_PACKAGE_TAIL_MARKER",
+                encoding="utf-8",
+            )
+
+            captured_messages = []
+
+            def fake_deepseek_pro(messages, max_tokens=6000):
+                captured_messages.append(messages)
+                return "Generated article"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate",
+                    json={"client_id": cid, "opinion": "write a test article"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            payload = json.dumps(captured_messages[0], ensure_ascii=False)
+            self.assertIn("WEB_PACKAGE_TAIL_MARKER", payload)
+
     def test_content_generate_persists_to_sqlite_history_store(self):
         with isolated_app_data():
             cid = "client-sqlite"
@@ -2868,6 +2896,89 @@ class FlaskApiTests(unittest.TestCase):
             ])
             self.assertNotIn("platform", data["plugins"][0]["source_articles"][0])
             self.assertNotIn("citation_count", data["plugins"][0]["source_articles"][0])
+
+    def test_pattern_library_scopes_and_entries_include_latest_ingest_summary(self):
+        with isolated_app_data() as tmp:
+            library = geo_app.PatternLibrary(os.path.join(tmp, "pattern_library"))
+            entry = library.create_candidate(
+                "industry:成人教育",
+                "skeleton",
+                "观察分类型",
+                {"sections": ["先按服务类型分组"], "signature": "中性比较", "risk_notes": ""},
+                {
+                    "url": "https://example.com/article",
+                    "title": "示例文章",
+                    "citation_count": 3,
+                    "risk_marks": ["AI 生成痕迹明显"],
+                },
+            )
+            report_path = os.path.join(
+                geo_app.F_REFERENCE_INTELLIGENCE,
+                "c1",
+                "2026-07-17",
+                "stage2_ingest_report.json",
+            )
+            geo_app.save(report_path, {
+                "client_id": "c1",
+                "date": "2026-07-17",
+                "total_cards": 8,
+                "items": [{"action": "created"}, {"action": "matched"}],
+                "errors": [],
+            })
+
+            scopes_response = self.client.get("/api/pattern-library/scopes")
+            self.assertEqual(scopes_response.status_code, 200)
+            self.assertEqual(scopes_response.get_json()["scopes"], [
+                {"scope": "industry:成人教育", "entry_count": 1}
+            ])
+
+            entries_response = self.client.get("/api/pattern-library/entries?scope=industry:成人教育")
+            self.assertEqual(entries_response.status_code, 200)
+            payload = entries_response.get_json()
+            self.assertEqual(payload["scope"], "industry:成人教育")
+            self.assertEqual(payload["entries"][0]["id"], entry["id"])
+            self.assertEqual(payload["recent_ingest"], {
+                "client_id": "c1",
+                "date": "2026-07-17",
+                "cards": 8,
+                "created": 1,
+                "matched": 1,
+                "errors": 0,
+            })
+
+    def test_pattern_library_status_update_rejects_invalid_and_missing_entries(self):
+        with isolated_app_data() as tmp:
+            library = geo_app.PatternLibrary(os.path.join(tmp, "pattern_library"))
+            entry = library.create_candidate(
+                "industry:成人教育",
+                "module",
+                "痛点连问型",
+                {"type": "开头", "pattern": "用问题进入主题", "excerpt": "示例摘录"},
+                {"url": "https://example.com/article", "title": "示例文章"},
+            )
+
+            updated = self.client.post("/api/pattern-library/status", json={
+                "scope": "industry:成人教育",
+                "entry_id": entry["id"],
+                "status": "active",
+            })
+            self.assertEqual(updated.status_code, 200)
+            self.assertTrue(updated.get_json()["ok"])
+            self.assertEqual(updated.get_json()["entry"]["status"], "active")
+
+            invalid_status = self.client.post("/api/pattern-library/status", json={
+                "scope": "industry:成人教育",
+                "entry_id": entry["id"],
+                "status": "invalid",
+            })
+            self.assertEqual(invalid_status.status_code, 400)
+
+            missing_entry = self.client.post("/api/pattern-library/status", json={
+                "scope": "industry:成人教育",
+                "entry_id": "missing",
+                "status": "retired",
+            })
+            self.assertEqual(missing_entry.status_code, 400)
 
     def test_reference_intelligence_analyze_starts_background_stage_job(self):
         with isolated_app_data():

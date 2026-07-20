@@ -206,7 +206,7 @@ class MaterialService:
         self._save_index(data)
         return material
 
-    def build_generation_bundle(self, client_id, max_chars=12000):
+    def build_generation_bundle(self, client_id, max_chars=None):
         data = self._load_index()
         materials = self._client_materials(data, client_id)
         confirmed = [m for m in materials if m.get("cache_dir") and m.get("confirmed")]
@@ -217,7 +217,7 @@ class MaterialService:
             sections.append(format_material_section(material, clean_text))
         combined = "\n\n---\n\n".join(section for section in sections if section)
         return {
-            "text": combined[:max_chars],
+            "text": combined if max_chars is None else combined[:max_chars],
             "files": selected,
             "all_files": materials,
             "material_count": len(selected),
@@ -406,7 +406,7 @@ def format_material_section(material, clean_text):
         f"[Customer material] {material.get('original_name') or material.get('name')}",
         f"Status: {'confirmed' if material.get('confirmed') else 'unconfirmed'}",
     ]
-    excerpt = (clean_text or '').strip()[:3000]
+    excerpt = (clean_text or '').strip()
     if excerpt:
         lines.append("Excerpt:")
         lines.append(excerpt)

@@ -137,6 +137,18 @@ def test_build_generation_bundle_uses_auto_confirmed_materials(tmp_path):
     assert "Second profile includes policy checks" in bundle["text"]
 
 
+def test_build_generation_bundle_keeps_full_text_by_default(tmp_path):
+    service = make_service(tmp_path)
+    source = tmp_path / "full.txt"
+    source.write_text("A" * 13000 + "FULL_MATERIAL_TAIL_MARKER", encoding="utf-8")
+    material = service.save_uploaded_material("client-1", source, "full.txt")
+    service.parse_material("client-1", material["id"])
+
+    bundle = service.build_generation_bundle("client-1")
+
+    assert "FULL_MATERIAL_TAIL_MARKER" in bundle["text"]
+
+
 def test_build_generation_bundle_excludes_unusable_materials(tmp_path):
     service = make_service(tmp_path)
     source = tmp_path / "short.txt"
@@ -222,6 +234,10 @@ class MaterialServiceTests(unittest.TestCase):
     def test_build_generation_bundle_uses_auto_confirmed_materials(self):
         with tempfile.TemporaryDirectory() as tmp:
             test_build_generation_bundle_uses_auto_confirmed_materials(Path(tmp))
+
+    def test_build_generation_bundle_keeps_full_text_by_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            test_build_generation_bundle_keeps_full_text_by_default(Path(tmp))
 
     def test_build_generation_bundle_excludes_unusable_materials(self):
         with tempfile.TemporaryDirectory() as tmp:

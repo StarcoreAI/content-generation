@@ -8,6 +8,7 @@ function navTo(page, el) {
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
+  if (page === 'pattern-library') loadPatternLibrary();
   if (page === 'materials') loadMaterialAnalysis();
   if (page === 'competitors') loadCompetitorAnalysis();
   if (page === 'clients') loadClients();
@@ -2039,6 +2040,199 @@ async function cancelReferenceAnalysis() {
 // ══════════════════════════════════════════════════════
 // 当日数据整理模块
 // ══════════════════════════════════════════════════════
+function patternLibraryStatusLabel(status) {
+  return ({candidate: '候选', active: '已转正', retired: '已退役'})[status] || status || '未知';
+}
+
+function patternLibraryDomainCount(sources) {
+  const domains = new Set();
+  (sources || []).forEach(source => {
+    try {
+      const hostname = new URL(source.url || '').hostname;
+      if (hostname) domains.add(hostname);
+    } catch (_) {}
+  });
+  return domains.size;
+}
+
+function patternLibraryRiskMarks(entry) {
+  return [...new Set((entry.sources || []).flatMap(source => source.risk_marks || []).filter(Boolean))];
+}
+
+function patternLibrarySafeUrl(url) {
+  try {
+    const parsed = new URL(String(url || ''));
+    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function patternLibraryEmpty(message) {
+  return `<div class="empty"><i class="ti ti-books"></i><p>${escHtml(message)}</p></div>`;
+}
+
+function renderPatternLibraryDetail(entry) {
+  const payload = entry.payload || {};
+  if (entry.kind === 'skeleton') {
+    const sections = Array.isArray(payload.sections) ? payload.sections : [];
+    return `
+      ${sections.length ? `<div class="pattern-detail-block"><strong>章节序列</strong><ol>${sections.map(section => `<li>${escHtml(section)}</li>`).join('')}</ol></div>` : ''}
+      ${payload.signature ? `<div class="pattern-detail-block"><strong>识别特征</strong><p>${escHtml(payload.signature)}</p></div>` : ''}
+      ${payload.risk_notes ? `<div class="pattern-detail-block pattern-risk-note"><strong>风险提示</strong><p>${escHtml(payload.risk_notes)}</p></div>` : ''}`;
+  }
+  if (entry.kind === 'module') {
+    const storedExamples = Array.isArray(payload.excerpts) ? payload.excerpts : [];
+    const examples = storedExamples.length ? storedExamples : (payload.excerpt ? [{excerpt: payload.excerpt, excerpt_verified: payload.excerpt_verified}] : []);
+    return `
+      ${payload.pattern ? `<div class="pattern-detail-block"><strong>套路描述</strong><p>${escHtml(payload.pattern)}</p></div>` : ''}
+      ${examples.length ? `<div class="pattern-detail-block"><strong>摘录例句</strong>${examples.map(example => `<blockquote>${escHtml(example.excerpt || '')}${example.excerpt_verified ? '<span class="pattern-verified">原文已核验</span>' : ''}</blockquote>`).join('')}</div>` : ''}
+      ${payload.risk_notes ? `<div class="pattern-detail-block pattern-risk-note"><strong>风险提示</strong><p>${escHtml(payload.risk_notes)}</p></div>` : ''}`;
+  }
+  const labels = Array.isArray(payload.raw_labels) ? payload.raw_labels : [payload.feature || entry.name].filter(Boolean);
+  return `<div class="pattern-detail-block"><strong>归并前原始措辞</strong><div class="pattern-label-list">${labels.map(label => `<span>${escHtml(label)}</span>`).join('')}</div></div>`;
+}
+
+function renderPatternLibrarySources(sources) {
+  if (!sources.length) return '';
+  return `<div class="pattern-sources"><strong>来源</strong>${sources.map(source => {
+    const url = patternLibrarySafeUrl(source.url);
+    const title = escHtml(source.title || source.url || '未命名文章');
+    const risks = Array.isArray(source.risk_marks) ? source.risk_marks : [];
+    const aliases = Array.isArray(source.alias_urls) ? source.alias_urls : [];
+    return `<div class="pattern-source">
+      <div>${url ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}</div>
+      <div class="pattern-source-meta">引用 ${Number(source.citation_count || 0)} 次${risks.length ? ` · ${escHtml(risks.join('、'))}` : ''}${aliases.length ? ` · 同稿 ${aliases.length} 个 URL` : ''}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderPatternLibraryEntry(entry) {
+  const sources = Array.isArray(entry.sources) ? entry.sources : [];
+  const risks = patternLibraryRiskMarks(entry);
+  const allSourcesRisky = sources.length > 0 && sources.every(source => (source.risk_marks || []).length > 0);
+  const action = entry.status === 'candidate'
+    ? {status: 'active', label: '转正', className: 'btn btn-p btn-sm'}
+    : entry.status === 'active'
+      ? {status: 'retired', label: '退役', className: 'btn btn-danger btn-sm'}
+      : {status: 'candidate', label: '恢复为候选', className: 'btn btn-o btn-sm'};
+  const moduleType = entry.kind === 'module' && entry.payload?.type ? `<span class="badge badge-p">${escHtml(entry.payload.type)}</span>` : '';
+  return `<article class="pattern-entry ${entry.status === 'retired' ? 'is-retired' : ''}">
+    <div class="pattern-entry-top">
+      <div class="pattern-entry-title"><span>${escHtml(entry.name || '未命名条目')}</span>${moduleType}</div>
+      <div class="pattern-entry-actions">
+        <span class="pattern-status status-${escHtml(entry.status)}">${escHtml(patternLibraryStatusLabel(entry.status))}</span>
+        <button class="${action.className}" data-pattern-entry="${escHtml(entry.id)}" data-pattern-status="${action.status}">${action.label}</button>
+      </div>
+    </div>
+    <div class="pattern-entry-meta">
+      <span>证据 ${Number(entry.evidence_count || 0)}</span>
+      <span>来源域名 ${patternLibraryDomainCount(sources)}</span>
+      ${risks.length ? risks.map(risk => `<span class="pattern-risk-chip">${escHtml(risk)}</span>`).join('') : '<span>无风险标记</span>'}
+    </div>
+    ${entry.status === 'candidate' && allSourcesRisky ? '<p class="pattern-risk-warning">全部来源带风险标记，请确认结构可复用后再转正。</p>' : ''}
+    <details class="pattern-entry-details">
+      <summary>查看详情与来源</summary>
+      ${renderPatternLibraryDetail(entry)}
+      ${renderPatternLibrarySources(sources)}
+    </details>
+  </article>`;
+}
+
+function renderPatternLibraryEntries(data) {
+  const entries = Array.isArray(data?.entries) ? data.entries : [];
+  const byKind = {
+    skeleton: entries.filter(entry => entry.kind === 'skeleton'),
+    module: entries.filter(entry => entry.kind === 'module'),
+    checklist: entries.filter(entry => entry.kind === 'checklist'),
+  };
+  const counts = entries.reduce((total, entry) => {
+    total[entry.status] = (total[entry.status] || 0) + 1;
+    return total;
+  }, {candidate: 0, active: 0, retired: 0});
+  const summary = document.getElementById('patternLibrarySummary');
+  if (summary) {
+    summary.innerHTML = [
+      ['条目总数', entries.length, 'total'], ['候选', counts.candidate, 'candidate'],
+      ['已转正', counts.active, 'active'], ['已退役', counts.retired, 'retired'],
+    ].map(([label, value, type]) => `<div class="pattern-library-stat stat-${type}"><span>${label}</span><strong>${value}</strong></div>`).join('');
+  }
+  const recent = data?.recent_ingest;
+  const ingest = document.getElementById('patternLibraryIngest');
+  if (ingest) {
+    ingest.textContent = recent
+      ? `最近入库：${recent.cards} 张卡，新建 ${recent.created} / 归并 ${recent.matched}，错误 ${recent.errors}${recent.date ? `（${recent.date}）` : ''}`
+      : '暂无 stage2 入库报告。';
+  }
+  const groups = [
+    ['Skeletons', 'SkeletonCount', byKind.skeleton, '暂无骨架条目'],
+    ['Modules', 'ModuleCount', byKind.module, '暂无段落模式条目'],
+    ['Checklists', 'ChecklistCount', byKind.checklist, '暂无引用友好清单条目'],
+  ];
+  groups.forEach(([listSuffix, countSuffix, group, empty]) => {
+    const list = document.getElementById(`patternLibrary${listSuffix}`);
+    const count = document.getElementById(`patternLibrary${countSuffix}`);
+    if (count) count.textContent = `${group.length} 条`;
+    if (list) list.innerHTML = group.length ? group.map(renderPatternLibraryEntry).join('') : patternLibraryEmpty(empty);
+  });
+  document.querySelectorAll('[data-pattern-status]').forEach(button => {
+    button.addEventListener('click', () => updatePatternLibraryStatus(button.dataset.patternEntry, button.dataset.patternStatus));
+  });
+}
+
+function renderPatternLibraryUnavailable(message) {
+  const content = document.getElementById('patternLibraryContent');
+  const summary = document.getElementById('patternLibrarySummary');
+  if (summary) summary.innerHTML = '';
+  if (content) content.innerHTML = patternLibraryEmpty(message);
+}
+
+async function loadPatternLibrary() {
+  const scopeSelect = document.getElementById('patternLibraryScope');
+  if (!scopeSelect) return;
+  try {
+    const data = await api('/api/pattern-library/scopes');
+    if (data.error) throw new Error(data.error);
+    const scopes = Array.isArray(data.scopes) ? data.scopes : [];
+    const previous = scopeSelect.value;
+    scopeSelect.innerHTML = scopes.map(item => `<option value="${escHtml(item.scope)}">${escHtml(item.scope)}（${Number(item.entry_count || 0)} 条）</option>`).join('');
+    if (!scopes.length) {
+      renderPatternLibraryUnavailable('暂无写法库条目');
+      return;
+    }
+    scopeSelect.value = scopes.some(item => item.scope === previous) ? previous : scopes[0].scope;
+    await loadPatternLibraryEntries();
+  } catch (error) {
+    renderPatternLibraryUnavailable(`写法库加载失败：${error.message}`);
+  }
+}
+
+async function loadPatternLibraryEntries() {
+  const scopeSelect = document.getElementById('patternLibraryScope');
+  const scope = scopeSelect?.value;
+  if (!scope) return;
+  try {
+    const data = await api(`/api/pattern-library/entries?scope=${encodeURIComponent(scope)}`);
+    if (data.error) throw new Error(data.error);
+    renderPatternLibraryEntries(data);
+  } catch (error) {
+    renderPatternLibraryUnavailable(`写法库加载失败：${error.message}`);
+  }
+}
+
+async function updatePatternLibraryStatus(entryId, status) {
+  const scope = document.getElementById('patternLibraryScope')?.value;
+  if (!scope || !entryId) return;
+  try {
+    const data = await api('/api/pattern-library/status', 'POST', {scope, entry_id: entryId, status});
+    if (data.error) throw new Error(data.error);
+    toast(`已更新为${patternLibraryStatusLabel(status)}`);
+    await loadPatternLibraryEntries();
+  } catch (error) {
+    toast(`状态更新失败：${error.message}`, 'err');
+  }
+}
+
 let dailySelectedIds = new Set();
 
 
