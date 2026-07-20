@@ -23,7 +23,6 @@ from services.content_prompts import (
     build_content_article_subtype_prompt,
     build_content_article_type_prompt,
     build_content_generation_messages,
-    build_reference_stage3_example_plugin,
     extract_generated_title,
     format_sample_article_context,
     normalize_sample_links,
@@ -41,9 +40,6 @@ from services.competitor_materials import (
 from services.record_stats import (
     build_raw_platform_stats,
 )
-from services.reference_stage1 import analyze_stage1_article
-from services.reference_stage2 import analyze_stage2_clusters
-from services.reference_stage3 import analyze_stage3_plugins
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1441,7 +1437,7 @@ def download_competitor_web_markdown(cid):
 
 @app.route("/api/materials/<cid>/<material_id>/parse", methods=["POST"])
 def parse_material(cid, material_id):
-    """解析资料并生成清洗文本与事实卡。"""
+    """解析资料并生成清洗文本与诊断信息。"""
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     try:
@@ -1474,73 +1470,6 @@ def del_material(cid, filename):
         if os.path.exists(fpath):
             os.remove(fpath)
     return jsonify({"ok": True})
-
-def extract_material_file_text(fpath, max_chars=4000):
-    ext = fpath.rsplit('.', 1)[-1].lower()
-    if ext in ('txt', 'md'):
-        with open(fpath, 'r', encoding='utf-8', errors='ignore') as fp:
-            return fp.read()[:max_chars]
-    if ext == 'docx':
-        try:
-            import zipfile
-            import xml.etree.ElementTree as ET
-            with zipfile.ZipFile(fpath) as zf:
-                xml = zf.read("word/document.xml")
-            root = ET.fromstring(xml)
-            texts = [node.text for node in root.iter() if node.text]
-            return "\n".join(texts)[:max_chars]
-        except Exception:
-            return ""
-    if ext == 'pdf':
-        try:
-            import pdfplumber
-            with pdfplumber.open(fpath) as pdf:
-                text = "\n".join(page.extract_text() or "" for page in pdf.pages[:8])
-            return text[:max_chars]
-        except Exception:
-            try:
-                from pypdf import PdfReader
-                reader = PdfReader(fpath)
-                text = "\n".join(page.extract_text() or "" for page in reader.pages[:8])
-                return text[:max_chars]
-            except Exception:
-                return ""
-    return ""
-
-def read_material_bundle(cid, max_chars=12000, per_file_chars=4000):
-    """读取当前客户上传目录中的全部资料，返回带文件名的合并文本。"""
-    indexed_bundle = material_service().build_generation_bundle(cid, max_chars=max_chars)
-    if indexed_bundle.get("text") or indexed_bundle.get("files"):
-        return indexed_bundle
-
-    client_dir = os.path.join(UPLOAD_FOLDER, cid)
-    if not os.path.exists(client_dir):
-        return {"text": "", "files": []}
-    sections = []
-    files = []
-    for filename in sorted(os.listdir(client_dir)):
-        fpath = os.path.join(client_dir, filename)
-        if not os.path.isfile(fpath) or not allowed_file(filename):
-            continue
-        try:
-            text = extract_material_file_text(fpath, per_file_chars).strip()
-        except Exception:
-            text = ""
-        files.append({
-            "name": filename,
-            "chars": len(text),
-            "has_text": bool(text),
-        })
-        if text:
-            sections.append(f"【资料：{filename}】\n{text}")
-        else:
-            sections.append(f"【资料：{filename}】\n（该文件暂未提取到可用正文，仅保留文件名作为上下文。）")
-    combined = "\n\n---\n\n".join(sections)
-    return {"text": combined[:max_chars], "files": files}
-
-def read_material_text(cid, max_chars=3000):
-    """读取客户资料文本内容，用于内容生产参考"""
-    return read_material_bundle(cid, max_chars=max_chars, per_file_chars=1000)["text"][:max_chars]
 
 def content_material_package_section(path, label):
     if not path.exists():
@@ -1663,19 +1592,9 @@ def normalize_reference_plugins(plugins):
     return reference_intel.normalize_reference_plugins(plugins)
 
 
-def normalize_reference_clusters(clusters):
-    return reference_intel.normalize_reference_clusters(clusters)
-
-
 def load_reference_intelligence(client_id, date_str, task_id=""):
     return reference_intel.load_reference_intelligence(
         F_REFERENCE_INTELLIGENCE, load, today_str, client_id, date_str, task_id
-    )
-
-
-def save_reference_intelligence(payload):
-    return reference_intel.save_reference_intelligence(
-        F_REFERENCE_INTELLIGENCE, save, today_str, now_str, payload
     )
 
 
@@ -1772,14 +1691,12 @@ def run_reference_analysis_job(
         today_fn=today_str,
         now_fn=now_str,
         load_client_records_fn=load_client_records,
+        load_client_fn=get_client,
         job_ai_json_fn=_job_ai_json,
         get_job_fn=get_reference_analysis_job,
         update_job_fn=update_reference_analysis_job,
         cancel_requested_fn=reference_analysis_cancel_requested,
         fetch_fn=fetch_fn,
-        analyze_stage1_article_fn=analyze_stage1_article,
-        analyze_stage2_clusters_fn=analyze_stage2_clusters,
-        analyze_stage3_plugins_fn=analyze_stage3_plugins,
         task_id=task_id,
         username=username,
         ai_json_fn=ai_json_fn,
@@ -1807,20 +1724,6 @@ def queue_reference_analysis_job(client_id, date_str, task_id="", username=""):
     )
     thread.start()
     return get_reference_analysis_job(job_id)
-
-
-def build_reference_cluster_prompt(articles):
-    return reference_intel.build_reference_cluster_prompt(articles)
-
-
-def build_reference_plugin_prompt(clusters):
-    return reference_intel.build_reference_plugin_prompt(
-        clusters, build_reference_stage3_example_plugin()
-    )
-
-
-def build_reference_intelligence_prompt(articles):
-    return reference_intel.build_reference_intelligence_prompt(articles)
 
 
 def pattern_library_service():
@@ -1953,15 +1856,6 @@ def get_reference_intelligence_plugins():
     task_id = request.args.get("task_id", "").strip()
     body = load_reference_intelligence(client_id, date_str, task_id)
     return jsonify({"ok": True, **body})
-
-
-@app.route("/api/reference_intelligence/plugins", methods=["POST"])
-def save_reference_intelligence_plugins():
-    try:
-        body = save_reference_intelligence(request.json or {})
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify(body)
 
 
 @app.route("/api/reference_intelligence/analyze", methods=["POST"])

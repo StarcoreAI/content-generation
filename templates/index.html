@@ -25,7 +25,6 @@
     <div class="t-ni" onclick="navTo('records',this)">记录库</div>
     <div class="t-ni" onclick="navTo('daily',this)">当日整理</div>
     <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
-    <div class="t-ni" onclick="navTo('pattern-library',this)">写法库</div>
     <div class="t-ni" onclick="navTo('materials',this)">客户资料解析</div>
     <div class="t-ni" onclick="navTo('competitors',this)">竞品资料解析</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
@@ -55,7 +54,6 @@
   <div class="s-nav" onclick="navTo('records',this)"><i class="ti ti-database"></i>爬取记录库</div>
   <div class="s-nav" onclick="navTo('daily',this)"><i class="ti ti-calendar-stats"></i>当日数据整理</div>
   <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
-  <div class="s-nav" onclick="navTo('pattern-library',this)"><i class="ti ti-books"></i>写法库</div>
   <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
   <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
@@ -301,7 +299,7 @@
   <div class="pg-hd">
     <div>
       <div class="pg-title">✦ <em>引用情报分析</em></div>
-      <div class="pg-sub">从高频引用文章提炼可复用的写作插件，按对比型/介绍型挂到内容生产子类型下</div>
+      <div class="pg-sub">从高频引用文章筛选可学写法、逐篇解剖并沉淀到待审核写法库；已生成插件仍供内容生产使用</div>
     </div>
     <div class="acts">
       <input type="date" id="referenceDate" onchange="loadReferenceIntelligence()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
@@ -314,7 +312,7 @@
   </div>
   <div id="referenceAnalyzeProgress" style="display:none;background:rgba(109,92,247,.06);border:1.5px solid rgba(109,92,247,.15);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px">
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
-      <span id="referenceAnalyzeProgressText" style="font-size:12px;font-weight:800;color:var(--pri)">生成中...</span>
+      <span id="referenceAnalyzeProgressText" style="font-size:12px;font-weight:800;color:var(--pri)">抓取文章...</span>
       <button type="button" class="btn btn-danger btn-sm" id="btnReferenceCancel" onclick="cancelReferenceAnalysis()">终止生成</button>
     </div>
     <div style="height:9px;background:rgba(109,92,247,.1);border-radius:20px;overflow:hidden">
@@ -322,7 +320,7 @@
     </div>
   </div>
   <div class="info-banner">
-    当前保存和展示 `parent_type`、`subtype_name`、`prompt_text`、`few_shot`。内容生产会按父类型展示已生成插件，供运营选择。
+    当前插件为历史已落盘数据，内容生产仍会按父类型展示并使用；新一轮分析会依次执行抓取、过滤定性、逐篇解剖和入库比对。
   </div>
   <div class="card">
     <div class="card-hd">
@@ -331,13 +329,10 @@
     </div>
     <div id="referencePluginList"><div class="empty"><i class="ti ti-bulb"></i><p>请选择客户后查看引用情报</p></div></div>
   </div>
-</div>
-
-<!-- ═══ 客户资料解析 ═══ -->
-<div class="page" id="page-pattern-library">
+  <section class="reference-pattern-library">
   <div class="pg-hd">
     <div>
-      <div class="pg-title"><em>写法库</em></div>
+      <div class="pg-title"><em>写法沉淀</em></div>
       <div class="pg-sub">审核跨文章积累的可复用写作结构，人工决定哪些候选条目可供生产侧使用。</div>
     </div>
     <div class="acts">
@@ -361,8 +356,10 @@
       <div id="patternLibraryChecklists"></div>
     </section>
   </div>
+  </section>
 </div>
 
+<!-- ═══ 客户资料解析 ═══ -->
 <div class="page" id="page-materials">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>客户资料解析</em></div><div class="pg-sub">上传客户资料，生成适合注入给大模型的 Markdown 资料包</div></div>

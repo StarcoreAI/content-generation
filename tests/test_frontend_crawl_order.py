@@ -244,6 +244,16 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn('id="referenceAnalyzeProgress"', html)
         self.assertIn("cancelReferenceAnalysis", html)
 
+    def test_pattern_library_is_embedded_in_reference_page_not_navigation(self):
+        html = read_frontend_source()
+
+        self.assertNotIn("navTo('pattern-library'", html)
+        reference_start = html.index('id="page-reference"')
+        reference_end = html.index('id="page-materials"')
+        library_start = html.index('id="patternLibraryContent"')
+        self.assertGreater(library_start, reference_start)
+        self.assertLess(library_start, reference_end)
+
     def test_retired_agent_precise_and_platform_compare_frontend_is_removed(self):
         html = read_frontend_source()
 

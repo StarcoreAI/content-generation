@@ -621,34 +621,6 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(data["articles"], [])
             self.assertEqual(geo_app.load_content_session(cid, history_date="2026-07-07")["messages"], [])
 
-    def test_content_generation_material_bundle_uses_confirmed_material_text(self):
-        with isolated_app_data():
-            cid = "client-1"
-            source_file = os.path.join(geo_app.D, "profile.txt")
-            with open(source_file, "w", encoding="utf-8") as f:
-                f.write(
-                    "Yishengxue provides adult education enrollment planning.\n"
-                    "The service includes policy checks, application timeline reminders, and consultation process notes.\n"
-                )
-            service = geo_app.material_service()
-            material = service.save_uploaded_material(cid, source_file, "profile.txt")
-            service.parse_material(cid, material["id"])
-            service.confirm_material(cid, material["id"], True)
-
-            bundle = geo_app.read_material_bundle(cid)
-            messages = geo_app.build_content_generation_messages(
-                {"id": cid, "name": "Yishengxue", "brand": "Yishengxue"},
-                bundle,
-                [],
-                "Write an adult education planning article.",
-            )
-
-            payload = json.dumps(messages, ensure_ascii=False)
-            self.assertIn("[Customer material] profile.txt", payload)
-            self.assertIn("Status: confirmed", payload)
-            self.assertIn("adult education enrollment planning", payload)
-            self.assertIn("policy checks", payload)
-
     def test_content_generation_system_prompt_starts_with_default_geo_rules(self):
         messages = geo_app.build_content_generation_messages(
             {"id": "client-1", "name": "客户", "brand": "测试品牌"},
@@ -2847,20 +2819,14 @@ class FlaskApiTests(unittest.TestCase):
             else:
                 os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
 
-    def test_reference_intelligence_plugins_can_be_saved_and_loaded(self):
+    def test_reference_intelligence_plugins_remain_readable_for_content_generation(self):
         with isolated_app_data():
             client = geo_app.app.test_client()
-            payload = {
+            geo_app.save(geo_app.reference_intelligence_path("c1", "2026-07-08", "task-1"), {
                 "client_id": "c1",
                 "date": "2026-07-08",
                 "task_id": "task-1",
-                "clusters": [
-                    {
-                        "cluster_name": "需求场景匹配型",
-                        "structure_actions": ["先按用户需求场景拆分"],
-                        "abstract_rules": ["具体机构名改写成机构类型"],
-                    }
-                ],
+                "clusters": [],
                 "plugins": [
                     {
                         "parent_type": "介绍型",
@@ -2871,22 +2837,16 @@ class FlaskApiTests(unittest.TestCase):
                             {
                                 "title": "来源文章",
                                 "url": "https://example.com/source",
-                                "platform": "不展示",
-                                "citation_count": 5,
                             }
                         ],
                     }
                 ],
-            }
-
-            response = client.post("/api/reference_intelligence/plugins", json=payload)
-            self.assertEqual(response.status_code, 200)
-            self.assertTrue(response.get_json()["ok"])
+            })
 
             response = client.get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08&task_id=task-1")
             self.assertEqual(response.status_code, 200)
             data = response.get_json()
-            self.assertEqual(data["clusters"][0]["cluster_name"], "需求场景匹配型")
+            self.assertEqual(data["clusters"], [])
             self.assertEqual(data["plugins"][0]["parent_type"], "介绍型")
             self.assertEqual(data["plugins"][0]["subtype_name"], "需求场景匹配型")
             self.assertEqual(data["plugins"][0]["prompt_text"], "先按用户需求场景拆分。")
@@ -2894,8 +2854,6 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(data["plugins"][0]["source_articles"], [
                 {"title": "来源文章", "url": "https://example.com/source"}
             ])
-            self.assertNotIn("platform", data["plugins"][0]["source_articles"][0])
-            self.assertNotIn("citation_count", data["plugins"][0]["source_articles"][0])
 
     def test_pattern_library_scopes_and_entries_include_latest_ingest_summary(self):
         with isolated_app_data() as tmp:
@@ -3034,8 +2992,72 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(result["progress"], 40)
             thread_cls.assert_not_called()
 
+    def test_reference_intelligence_job_writes_new_stage_artifacts_and_industry_scope(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": "c1", "name": "Client", "brand": "Brand", "industry": "Training",
+            }])
+            geo_app.save(geo_app.F_RAW_RECORDS, [{
+                "id": "r1", "client_id": "c1", "today": "2026-07-08", "refs": [
+                    {"title": "Article", "url": "https://example.com/a", "position": 1},
+                ],
+            }])
+            responses = [
+                {"learnable": True, "reason": "complete article"},
+                {"skeleton": None, "modules": [], "citability_features": []},
+            ]
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+            geo_app.run_reference_analysis_job(
+                job_id,
+                client_id="c1",
+                date_str="2026-07-08",
+                fetch_fn=lambda url, **kwargs: {
+                    "ok": True, "title": "Article", "content": "complete article body " * 30,
+                    "fetch_method": "test",
+                },
+                ai_json_fn=lambda prompt, max_tokens: responses.pop(0),
+            )
+
+            stage_dir = os.path.join(geo_app.F_REFERENCE_INTELLIGENCE, "c1", "2026-07-08")
+            self.assertEqual(geo_app.get_reference_analysis_job(job_id)["status"], "completed")
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage0_filter_groups.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage1_anatomy_cards.json")))
+            report = geo_app.load(os.path.join(stage_dir, "stage2_ingest_report.json"), {})
+            self.assertEqual(report["scope"], "industry:Training")
+            self.assertFalse(os.path.exists(os.path.join(stage_dir, "stage3_prompt_plugins.json")))
+
+    def test_reference_intelligence_job_cancels_between_new_stages(self):
+        with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "c1", "brand": "Brand", "industry": ""}])
+            geo_app.save(geo_app.F_RAW_RECORDS, [{
+                "id": "r1", "client_id": "c1", "today": "2026-07-08", "refs": [
+                    {"title": "Article", "url": "https://example.com/a", "position": 1},
+                ],
+            }])
+            job_id = geo_app.create_reference_analysis_job("c1", "2026-07-08", "")
+
+            def cancel_after_stage0(prompt, max_tokens):
+                geo_app.cancel_reference_analysis_job(job_id)
+                return {"learnable": True}
+
+            geo_app.run_reference_analysis_job(
+                job_id,
+                client_id="c1",
+                date_str="2026-07-08",
+                fetch_fn=lambda url, **kwargs: {
+                    "ok": True, "title": "Article", "content": "complete article body " * 30,
+                },
+                ai_json_fn=cancel_after_stage0,
+            )
+
+            stage_dir = os.path.join(geo_app.F_REFERENCE_INTELLIGENCE, "c1", "2026-07-08")
+            self.assertEqual(geo_app.get_reference_analysis_job(job_id)["status"], "canceled")
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage0_filter_groups.json")))
+            self.assertFalse(os.path.exists(os.path.join(stage_dir, "stage1_anatomy_cards.json")))
+
     def test_reference_intelligence_background_job_runs_new_stage_pipeline(self):
         with isolated_app_data():
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "c1", "brand": "", "industry": "成人教育"}])
             geo_app.save(geo_app.F_RAW_RECORDS, [
                 {
                     "id": "r1",
@@ -3050,35 +3072,16 @@ class FlaskApiTests(unittest.TestCase):
             ])
             ai_results = [
                 {
-                    "parent_type": "对比型",
-                    "opening": "先写用户选择困难。",
-                    "body": ["再按机构类型分层对比。"],
-                    "ending": "最后给选择建议。",
+                    "article_type": "对比型",
+                    "learnable": True,
+                    "reason": "文章结构完整。",
+                    "promoted_entity": "",
+                    "risk_marks": [],
                 },
                 {
-                    "clusters": [
-                        {
-                            "parent_type": "对比型",
-                            "subtype_name": "本地机构筛选标准型",
-                            "article_indexes": [1],
-                            "shared_structure": {
-                                "opening": "先写用户选择困难。",
-                                "body": ["再按机构类型分层对比。"],
-                                "ending": "最后给选择建议。",
-                            },
-                        }
-                    ]
-                },
-                {
-                    "plugins": [
-                        {
-                            "cluster_index": 1,
-                            "parent_type": "对比型",
-                            "subtype_name": "本地机构筛选标准型",
-                            "prompt_text": "先按机构类型和适合人群拆解。",
-                            "few_shot": "用户问题场景：某地用户不知道怎么选服务机构。",
-                        }
-                    ]
+                    "skeleton": None,
+                    "modules": [],
+                    "citability_features": [],
                 },
             ]
 
@@ -3106,19 +3109,12 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(status["status"], "completed")
             self.assertEqual(status["progress"], 100)
 
-            loaded = geo_app.app.test_client().get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08").get_json()
-            self.assertEqual(loaded["clusters"], [])
-            self.assertEqual(loaded["plugins"][0]["parent_type"], "对比型")
-            self.assertEqual(loaded["plugins"][0]["prompt_text"], "先按机构类型和适合人群拆解。")
-            self.assertEqual(loaded["plugins"][0]["source_articles"], [
-                {"title": "河北学历提升机构选择攻略", "url": "https://example.com/a"}
-            ])
-
             stage_dir = os.path.join(geo_app.F_REFERENCE_INTELLIGENCE, "c1", "2026-07-08")
             self.assertTrue(os.path.exists(os.path.join(stage_dir, "fetched_articles.json")))
-            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage1_article_structures.json")))
-            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage2_structure_clusters.json")))
-            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage3_prompt_plugins.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage0_filter_groups.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage1_anatomy_cards.json")))
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage2_ingest_report.json")))
+            self.assertFalse(os.path.exists(os.path.join(stage_dir, "stage3_prompt_plugins.json")))
 
     def test_reference_intelligence_fetch_reuses_cache_and_backfills_candidates(self):
         with isolated_app_data():
@@ -3222,13 +3218,9 @@ class FlaskApiTests(unittest.TestCase):
                 "https://example.com/c",
             ])
 
-            stage1 = geo_app.load(os.path.join(stage_dir, "stage1_article_structures.json"), {})
-            self.assertEqual(stage1["total_analyzed"], 2)
-            loaded = geo_app.app.test_client().get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08").get_json()
-            self.assertEqual(loaded["plugins"][0]["source_articles"], [
-                {"title": "缓存成功文章", "url": "https://example.com/a"},
-                {"title": "补抓成功文章", "url": "https://example.com/c"},
-            ])
+            stage1 = geo_app.load(os.path.join(stage_dir, "stage1_anatomy_cards.json"), {})
+            self.assertIn("cards", stage1)
+            self.assertTrue(os.path.exists(os.path.join(stage_dir, "stage2_ingest_report.json")))
 
     def test_reference_intelligence_fetches_uncached_candidates_in_parallel(self):
         with isolated_app_data():
@@ -3386,40 +3378,9 @@ class FlaskApiTests(unittest.TestCase):
 
             self.assertIn(30, progresses)
             self.assertIn(80, progresses)
-            self.assertIn(88, progresses)
+            self.assertIn(78, progresses)
+            self.assertIn(98, progresses)
             self.assertNotIn(76, progresses)
-
-    def test_reference_intelligence_prompt_requires_detailed_few_shot_like_comparison_prompt(self):
-        prompt = geo_app.build_reference_plugin_prompt([
-            {
-                "cluster_name": "本地机构筛选标准型",
-                "article_pattern": "按机构类型和适合人群拆解。",
-                "structure_actions": ["先写选择困难", "再按机构类型分层"],
-                "abstract_rules": ["具体机构名改写成机构类型"],
-            }
-        ])
-
-        self.assertIn("few_shot", prompt)
-        self.assertIn("parent_type", prompt)
-        self.assertIn("对比型", prompt)
-        self.assertIn("介绍型", prompt)
-        self.assertIn("参考对比型展开 few-shot 示例的详细程度", prompt)
-        self.assertIn("【示例插件：攻略对比型】", prompt)
-        self.assertIn("仅作为示例", prompt)
-        self.assertIn("不要把示例插件作为输出结果", prompt)
-        self.assertIn("多个服务方", prompt)
-        self.assertIn("必须归为“对比型”", prompt)
-        self.assertIn("正文采用", prompt)
-        self.assertIn("3-5", prompt)
-        self.assertIn("500-900字", prompt)
-        self.assertIn("用户问题场景", prompt)
-        self.assertIn("可直接模仿的正文片段", prompt)
-        self.assertIn("不能只写一句方法说明", prompt)
-        self.assertIn("权威背书强，适合复杂需求", prompt)
-        self.assertIn("把A类/B类/C类和A1/A2/A3替换成当前行业里的真实机构类型", prompt)
-        self.assertIn("禁止出现具体机构名", prompt)
-        self.assertIn("具体文章名", prompt)
-        self.assertIn("本地老牌机构", prompt)
 
     def test_daily_entity_status_reads_latest_task_report(self):
         with isolated_app_data() as tmp:

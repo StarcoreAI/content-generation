@@ -8,7 +8,6 @@ function navTo(page, el) {
   if (page === 'content') loadContent();
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
-  if (page === 'pattern-library') loadPatternLibrary();
   if (page === 'materials') loadMaterialAnalysis();
   if (page === 'competitors') loadCompetitorAnalysis();
   if (page === 'clients') loadClients();
@@ -1868,6 +1867,18 @@ let referenceAnalyzePollTimer = null;
 let referenceAnalyzeSmoothTimer = null;
 let referenceBackendProgress = 0;
 let referenceDisplayProgress = 0;
+let referenceBackendStage = 'fetch';
+const referenceStageLabels = {
+  fetch: '抓取文章',
+  filter: '过滤定性',
+  anatomy: '逐篇解剖',
+  ingest: '入库比对',
+  completed: '已完成'
+};
+
+function referenceStageText() {
+  return referenceStageLabels[referenceBackendStage] || '生成中';
+}
 
 function setReferenceProgressVisible(visible) {
   const wrap = document.getElementById('referenceAnalyzeProgress');
@@ -1894,7 +1905,7 @@ function startReferenceSmoothProgress() {
     const cap = Math.min(99, referenceBackendProgress + 4);
     if (referenceDisplayProgress < cap) {
       referenceDisplayProgress += Math.min(0.8, cap - referenceDisplayProgress);
-      renderReferenceProgress('生成中...');
+      renderReferenceProgress(referenceStageText() + '...');
     }
   }, 200);
 }
@@ -1936,6 +1947,7 @@ function renderReferencePlugins(data) {
 
 async function loadReferenceIntelligence() {
   getReferenceDate();
+  loadPatternLibrary();
   if (!currentClientId) {
     renderReferencePlugins({plugins: []});
     return;
@@ -1955,9 +1967,10 @@ async function analyzeReferenceIntelligence() {
   stopReferenceAnalyzeTimers();
   referenceAnalyzeJobId = '';
   referenceBackendProgress = 3;
+  referenceBackendStage = 'fetch';
   referenceDisplayProgress = 0;
   setReferenceProgressVisible(true);
-  renderReferenceProgress('生成中...');
+  renderReferenceProgress('抓取文章...');
   startReferenceSmoothProgress();
   spin('spReferenceAnalyze', true);
   disableBtn('btnReferenceAnalyze', true);
@@ -1976,6 +1989,7 @@ async function analyzeReferenceIntelligence() {
     }
     referenceAnalyzeJobId = data.job_id || '';
     referenceBackendProgress = Number(data.progress || 3);
+    referenceBackendStage = data.stage || 'fetch';
     pollReferenceAnalysisStatus();
     referenceAnalyzePollTimer = setInterval(pollReferenceAnalysisStatus, 1500);
   } catch(e) {
@@ -1992,6 +2006,7 @@ async function pollReferenceAnalysisStatus() {
   try {
     const data = await api(`/api/reference_intelligence/analyze_status?job_id=${referenceAnalyzeJobId}`);
     referenceBackendProgress = Number(data.progress || referenceBackendProgress || 0);
+    referenceBackendStage = data.stage || referenceBackendStage;
     if (data.status === 'completed') {
       referenceBackendProgress = 100;
       referenceDisplayProgress = 100;
@@ -2014,6 +2029,8 @@ async function pollReferenceAnalysisStatus() {
       spin('spReferenceAnalyze', false);
       disableBtn('btnReferenceAnalyze', false);
       toast('已终止生成');
+    } else {
+      renderReferenceProgress(referenceStageText() + '...');
     }
   } catch(e) {
     stopReferenceAnalyzeTimers();
