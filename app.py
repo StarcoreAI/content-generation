@@ -1814,6 +1814,7 @@ def _run_content_generation(payload, audience_angles=None, created_by="", batch_
         sample,
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
+        industry=client.get("industry", ""),
         competitor_markdown=selected_competitor_markdown,
         ai_json_fn=ai_json,
     )
@@ -1855,6 +1856,7 @@ def _run_content_generation(payload, audience_angles=None, created_by="", batch_
         ai_json_fn=ai_json,
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
+        industry=client.get("industry", ""),
     )
     article = {
         "id": uid(),
@@ -1966,6 +1968,7 @@ def content_article_gate_report(cid, article, ai_json_fn=None):
         ai_json_fn=ai_json_fn or ai_json,
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
+        industry=client.get("industry", ""),
     )
 
 

@@ -7,9 +7,19 @@ from pathlib import Path
 BANNED_WORDS_PATH = Path(__file__).resolve().parents[1] / "data" / "quality_gate" / "banned_words.json"
 SHINGLE_SIMILARITY_THRESHOLD = 0.80
 DEFAULT_BANNED_WORDS = {
-    "overpromise": ["100%", "包过", "保录取", "保过", "治愈", "根治", "保证通过"],
-    "absolute": ["全国第一", "最大规模", "最好的机构", "顶级", "首选", "最推荐", "第一梯队", "第二梯队", "第三梯队", "谨慎考察"],
-    "marketing": ["逆龄", "冻龄", "秒杀", "立省", "限时抢"],
+    "overpromise": ["包过", "保录取", "保过", "治愈", "根治", "保证通过"],
+    "absolute": ["全国第一", "全国领先", "最大规模", "最好的机构", "顶级", "唯一", "首选", "最推荐", "第一梯队", "第二梯队", "第三梯队", "谨慎考察"],
+    "marketing": ["逆龄", "冻龄", "秒变", "神器", "秒杀", "立省", "限时抢"],
+}
+INDUSTRY_BANNED_WORDS = {
+    "medical": ["100%", "零风险", "永久", "根治", "逆龄", "年轻十岁", "无副作用"],
+    "education": ["保证录取", "100%上岸", "必中", "内部渠道", "保送", "第一名", "最强师资", "王牌老师", "全国第一"],
+    "finance": ["稳赚", "无风险", "保本", "高收益", "稳赚不赔", "内幕消息", "保证盈利"],
+}
+INDUSTRY_ALIASES = {
+    "medical": ("医疗", "医美", "医院", "medical", "healthcare"),
+    "education": ("教育", "升学", "培训", "education"),
+    "finance": ("金融", "理财", "投资", "finance", "financial"),
 }
 
 
@@ -72,9 +82,20 @@ def _check(check_id, layer, passed, severity, evidence=None, **extra):
     }
 
 
-def check_banned_words(article_content, banned_words=None):
+def _industry_banned_words(industry):
+    value = str(industry or "").strip().lower()
+    for key, aliases in INDUSTRY_ALIASES.items():
+        if any(alias.lower() in value for alias in aliases):
+            return INDUSTRY_BANNED_WORDS[key]
+    return []
+
+
+def check_banned_words(article_content, banned_words=None, industry=""):
     text = str(article_content or "")
-    banned_words = banned_words or BANNED_WORDS
+    banned_words = dict(banned_words or BANNED_WORDS)
+    industry_words = _industry_banned_words(industry)
+    if industry_words:
+        banned_words["industry"] = industry_words
     hits = []
     cautionary_hits = []
     for values in banned_words.values():
@@ -226,11 +247,11 @@ def _failed_llm_check(exc):
 
 
 def run_quality_gate(article_title, article_content, brief, provenance, *, client_brand, competitor_names,
-                     competitor_markdown, recent_articles, ai_json_fn, customer_material_text="", content_upload_text=""):
+                     competitor_markdown, recent_articles, ai_json_fn, customer_material_text="", content_upload_text="", industry=""):
     """Run deterministic checks first, then a non-blocking injected LLM review."""
     try:
         code_layer = [
-            check_banned_words(article_content),
+            check_banned_words(article_content, industry=industry),
             check_title_brand(article_title, client_brand, competitor_names),
             check_comparison_presence(article_content, brief, provenance, competitor_names),
             check_meta_discourse(article_content),

@@ -45,6 +45,13 @@ class QualityGateTests(unittest.TestCase):
                 self.assertEqual("block", check["severity"])
                 self.assertFalse(check.get("cautionary_context"))
 
+    def test_industry_banned_words_are_limited_to_the_matching_industry(self):
+        self.assertFalse(check_banned_words("治疗后100%有效", industry="医疗")["passed"])
+        self.assertTrue(check_banned_words("治疗后100%有效", industry="教育")["passed"])
+        self.assertFalse(check_banned_words("保证录取", industry="education")["passed"])
+        self.assertFalse(check_banned_words("稳赚不赔", industry="金融")["passed"])
+        self.assertTrue(check_banned_words("第一步是核验，最好的方式是比较", industry="医疗")["passed"])
+
     def test_llm_prompt_includes_customer_and_uploaded_material_as_traceable_sources(self):
         prompts = []
         run_quality_gate(
