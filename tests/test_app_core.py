@@ -556,6 +556,21 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(article["provenance"]["audience_angle"], "异地在职者")
             self.assertEqual(set(article["provenance"]["faq_questions"]), {"问题一", "问题二", "问题三"})
 
+    def test_content_generation_passes_only_supported_arguments_to_brief_builder(self):
+        with isolated_content_app_data():
+            cid = "client-brief-signature"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "education"}])
+
+            def strict_brief(sample, *, customer_material_text, content_upload_text, competitor_markdown, ai_json_fn):
+                return valid_brief()
+
+            with patch.object(geo_app, "generate_planning_brief", side_effect=strict_brief), \
+                    patch.object(geo_app, "run_quality_gate", return_value={"verdict": "pass"}), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="生成文章"):
+                article = geo_app.run_content_generation({"client_id": cid, "article_type": "对比型"})
+
+            self.assertEqual("生成文章", article["content"])
+
     def test_content_generation_shared_entry_reads_configured_faq_questions(self):
         with isolated_content_app_data():
             cid = "client-shared-entry"
@@ -701,8 +716,10 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(len(geo_app.load_content_session(cid)["articles"]), 1)
 
     def test_quality_gate_competitor_names_skips_generic_markdown_header(self):
-        names = geo_app.quality_gate_competitor_names("# 竞品公开资料整理包\n## 翼程教育\n")
-        self.assertEqual(names, ["翼程教育"])
+        names = geo_app.quality_gate_competitor_names(
+            "# 竞品公开资料整理包\n## 翼程教育\n### 基本信息\n### 业务范围\n## 河北尚学教育\n### 服务规模与覆盖\n"
+        )
+        self.assertEqual(names, ["翼程教育", "河北尚学教育"])
 
     def test_content_generation_manual_edit_and_ai_revision_keep_version_chain(self):
         with isolated_content_app_data():

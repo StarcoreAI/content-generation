@@ -21,6 +21,11 @@ INDUSTRY_ALIASES = {
     "education": ("教育", "升学", "培训", "education"),
     "finance": ("金融", "理财", "投资", "finance", "financial"),
 }
+NON_COMPETITOR_MARKDOWN_HEADERS = {
+    "基本信息", "业务范围", "服务规模与覆盖", "发展历程", "服务模式与特色", "主要产品", "服务规模",
+    "机构定位与介绍", "团队与规模", "领导与规模", "网络与平台", "财务数据", "规模与学生",
+    "学科与专业", "教育学院", "业务线索", "规模与市场覆盖", "品牌与荣誉",
+}
 
 
 def load_banned_words(path=BANNED_WORDS_PATH):
@@ -61,7 +66,7 @@ def quality_gate_competitor_names(markdown, provided_names=None):
             continue
         name = re.sub(r"^(?:竞品(?:名称)?\s*[:：]\s*)", "", match.group(1)).strip()
         name = re.split(r"[（(]", name, maxsplit=1)[0].strip(" *#:-：")
-        if name and "竞品资料" not in name and name not in {"竞品", "竞品信息", "竞品公开资料整理包"}:
+        if name and "竞品资料" not in name and name not in {"竞品", "竞品信息", "竞品公开资料整理包"} | NON_COMPETITOR_MARKDOWN_HEADERS:
             candidates.append(name)
     result = []
     for candidate in candidates:

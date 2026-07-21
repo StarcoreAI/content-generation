@@ -27,12 +27,16 @@ def read_frontend_source():
 
 
 class FrontendCrawlOrderTests(unittest.TestCase):
-    def test_content_choices_live_on_client_page_not_content_generation_page(self):
+    def test_content_choices_live_on_content_generation_page(self):
         html = read_frontend_source()
 
-        self.assertNotIn('id="contentAudienceAngles"', html)
+        content_page = html.split('id="page-content"', 1)[1].split('id="page-clients"', 1)[0]
+        clients_page = html.split('id="page-clients"', 1)[1]
+        self.assertIn('id="content-choice-options"', content_page)
+        self.assertIn("document.querySelectorAll('[id^=\"client-content-options-\"]').forEach(el => el.remove())", html)
         self.assertIn("loadClientContentOptions", html)
         self.assertIn("toggleClientChoice", html)
+        self.assertIn("item.enabled ? '停用' : '启用'", html)
         self.assertIn("setClientCompetitorRule", html)
         self.assertIn("/content-options", html)
     def test_frontend_css_and_js_are_static_assets(self):

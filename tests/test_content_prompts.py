@@ -39,6 +39,41 @@ class ContentPromptTests(unittest.TestCase):
         self.assertNotIn("A1代表对象", prompt)
         self.assertNotIn("运营意见", prompt)
 
+    def test_writer_prompt_renders_material_pool_with_balance_rules(self):
+        brief = {
+            "title_candidates": ["标题一", "标题二"],
+            "angle_statement": "面向异地在职者的选择主线",
+            "sections": [{"id": 1, "功能": "品牌服务", "要点": "展开服务", "引用": [], "字数": 300}],
+            "bans": [], "dedup_hints": "避免重复",
+            "素材池": {
+                "翼升学": [{"表述": "翼升学公开页面介绍了异地服务流程", "来源": "服务流程"}],
+                "翼程教育": [{"表述": "翼程教育公开页面介绍了咨询方式", "来源": "服务介绍"}],
+                "行业公共": [{"表述": "公开政策页面列明了报名时间", "来源": "政策通知"}],
+            },
+        }
+
+        prompt = build_content_generation_messages(
+            client={"name": "翼升学", "brand": "翼升学"}, brief=brief,
+        )[1]["content"]
+
+        self.assertIn("【简报素材池】", prompt)
+        self.assertIn("翼升学公开页面介绍了异地服务流程", prompt)
+        self.assertIn("每节施工时从素材池中选取相关素材展开", prompt)
+        self.assertIn("本次品牌的素材鼓励充分选用", prompt)
+        self.assertIn("其他机构的介绍完整性不受客户篇幅影响", prompt)
+        self.assertIn("不得以“信息更多”暗示品牌更优", prompt)
+
+    def test_writer_prompt_accepts_legacy_brief_without_material_pool(self):
+        brief = {
+            "title_candidates": ["标题一", "标题二"], "angle_statement": "主线",
+            "sections": [{"id": 1, "功能": "开头", "要点": "施工", "引用": [], "字数": 200}],
+            "bans": [], "dedup_hints": "避让",
+        }
+
+        prompt = build_content_generation_messages(client={"name": "客户"}, brief=brief)[1]["content"]
+
+        self.assertNotIn("【简报素材池】", prompt)
+
 
 if __name__ == "__main__":
     unittest.main()

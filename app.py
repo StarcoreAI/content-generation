@@ -1814,7 +1814,6 @@ def _run_content_generation(payload, audience_angles=None, created_by="", batch_
         sample,
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
-        industry=client.get("industry", ""),
         competitor_markdown=selected_competitor_markdown,
         ai_json_fn=ai_json,
     )

@@ -223,9 +223,14 @@ async function loadClients() {
       <span class="badge badge-p">${c.created}</span>
       <button class="btn btn-danger" onclick="delClient('${c.id}')">删除</button>
     </div>`).join('');
-  clients.forEach(c => loadClientContentOptions(c.id));
+  document.querySelectorAll('[id^="client-content-options-"]').forEach(el => el.remove());
 }
 async function loadClientContentOptions(id) {
+  const el = document.getElementById('content-choice-options');
+  if (!id) {
+    if (el) el.textContent = '请选择客户后配置人群角度、FAQ 与竞品规则';
+    return;
+  }
   const data = await api('/api/clients/' + encodeURIComponent(id) + '/content-options');
   if (data.error) return;
   clientContentOptions[id] = data;
@@ -233,11 +238,11 @@ async function loadClientContentOptions(id) {
 }
 function renderClientContentOptions(id) {
   const data = clientContentOptions[id];
-  const el = document.getElementById('client-content-options-' + id);
+  const el = document.getElementById('content-choice-options');
   if (!data || !el) return;
   const choices = (field, label) => {
     const items = data[field] || [];
-    const rows = items.map((item, index) => `<div style="display:flex;align-items:center;gap:6px;margin:4px 0"><button class="btn btn-o btn-sm" onclick="toggleClientChoice('${id}','${field}',${index})">${item.enabled ? '启用' : '停用'}</button><span style="flex:1;${item.enabled ? '' : 'opacity:.45;text-decoration:line-through'}">${escHtml(item.text)}</span>${item.source === 'ai' ? '<span class="badge badge-p">AI</span>' : ''}<button class="btn btn-danger btn-sm" onclick="deleteClientChoice('${id}','${field}',${index})">删除</button></div>`).join('') || '<span style="color:var(--text3)">暂无，首次生成会自动补齐</span>';
+    const rows = items.map((item, index) => `<div style="display:flex;align-items:center;gap:6px;margin:4px 0"><button class="btn btn-o btn-sm" onclick="toggleClientChoice('${id}','${field}',${index})">${item.enabled ? '停用' : '启用'}</button><span style="flex:1;${item.enabled ? '' : 'opacity:.45;text-decoration:line-through'}">${escHtml(item.text)}</span>${item.source === 'ai' ? '<span class="badge badge-p">AI</span>' : ''}<button class="btn btn-danger btn-sm" onclick="deleteClientChoice('${id}','${field}',${index})">删除</button></div>`).join('') || '<span style="color:var(--text3)">暂无，首次生成会自动补齐</span>';
     return `<div style="margin-top:8px"><b>${label}</b>${rows}<div style="display:flex;gap:6px;margin-top:4px"><input id="choice-new-${id}-${field}" placeholder="手动新增" style="max-width:240px;padding:5px 7px"><button class="btn btn-o btn-sm" onclick="addClientChoice('${id}','${field}')">添加</button></div></div>`;
   };
   const rules = data.competitor_rules || {must_use:[], banned:[]};
@@ -345,6 +350,7 @@ function doubaoLogin() { platformLogin('doubao'); }
 async function loadContent() {
   ensureContentHistoryDate();
   loadContentMaterials();
+  loadClientContentOptions(currentClientId);
   loadContentGenerations();
 }
 

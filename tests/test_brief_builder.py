@@ -124,6 +124,20 @@ class BriefBuilderTests(unittest.TestCase):
 
         self.assertIn("必选竞品也不得置于本次品牌之前", prompt)
 
+    def test_planning_prompt_defines_reader_facing_material_pool(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library, _ = make_library(Path(tmp))
+            prompt = build_planning_brief_prompt(self.sample(library))
+
+        self.assertIn('"素材池"', prompt)
+        self.assertIn('"表述": "读者视角的一句可用事实"', prompt)
+        self.assertIn('"来源": "资料小节名"', prompt)
+        self.assertIn("目标 8-15 条", prompt)
+        self.assertIn("行业公共", prompt)
+        self.assertIn("不得出现“客户/竞品/资料包”等内部称谓", prompt)
+        self.assertIn("来源写为“其官网介绍 > 资料小节名”或“公开页面显示 > 资料小节名”", prompt)
+        self.assertIn("每条必须可定位到输入资料", prompt)
+
     def test_recent_ending_is_avoided_once_when_alternative_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
             library, entries = make_library(Path(tmp))
