@@ -4,10 +4,12 @@ import sys
 import tempfile
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import app as geo_app
 from services.auth import authenticate_user, create_user, load_users
+from services.pattern_library import PatternLibrary
 
 
 @contextmanager
@@ -320,13 +322,26 @@ class ContentOwnershipTests(unittest.TestCase):
             self.assertEqual(denied.status_code, 404)
 
     def test_content_generation_records_created_by(self):
-        with isolated_auth_app():
+        with isolated_auth_app() as tmp:
             create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
             client = geo_app.app.test_client()
             login_as(client, "alice")
             owned_client = create_client(client, "Alice 客户")
+            library = PatternLibrary(Path(tmp) / "pattern_library")
+            skeleton = library.create_candidate("global", "skeleton", "测试骨架", {"parent_type": "对比型", "sections": ["开头", "正文"]}, {"url": "seed://s"})
+            library.set_status("global", skeleton["id"], "active")
+            for name, kind in [("开头", "开头"), ("结尾", "结尾")]:
+                entry = library.create_candidate("global", "module", name, {"type": kind, "pattern": name}, {"url": f"seed://{name}"})
+                library.set_status("global", entry["id"], "active")
+            brief = {
+                "title_candidates": ["标题一", "标题二"], "angle_statement": "中性主线",
+                "sections": [{"id": 1, "功能": "开头", "要点": "资料", "引用": [], "字数": 100}, {"id": 2, "功能": "正文", "要点": "资料", "引用": [], "字数": 300}],
+                "bans": [], "dedup_hints": "",
+            }
 
-            with patch("app.ai_deepseek_pro", return_value="测试标题\n测试正文"):
+            with patch("app.pattern_library_service", return_value=library), \
+                    patch("app.generate_planning_brief", return_value=brief), \
+                    patch("app.ai_deepseek_pro", return_value="测试标题\n测试正文"):
                 response = client.post(
                     "/api/content/generate",
                     json={"client_id": owned_client["id"], "opinion": "写一篇介绍"},
@@ -334,6 +349,86 @@ class ContentOwnershipTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.get_json()["article"]["created_by"], "alice")
+
+    def test_operator_gets_404_for_other_customer_content_configuration_materials_and_batch_job(self):
+        with isolated_auth_app():
+            for username, role in [("alice", "operator"), ("bob", "operator"), ("admin", "admin")]:
+                create_user(geo_app.F_USERS, username, "secret-pass", role=role)
+            bob = geo_app.app.test_client()
+            login_as(bob, "bob")
+            bob_client = create_client(bob, "Bob 客户")
+            job = {"job_id": "bob-batch", "client_id": bob_client["id"], "status": "queued"}
+
+            alice = geo_app.app.test_client()
+            login_as(alice, "alice")
+            with patch.object(geo_app, "get_content_batch_generation_job", return_value=job):
+                responses = [
+                    alice.post("/api/content/generate", json={"client_id": bob_client["id"]}),
+                    alice.post("/api/content/generate_batch", json={"client_id": bob_client["id"], "count": 3}),
+                    alice.get(f"/api/content/generate_batch/bob-batch"),
+                    alice.post(f"/api/content/generate_batch/bob-batch/cancel"),
+                    alice.get(f"/api/content/generations?client_id={bob_client['id']}"),
+                    alice.get(f"/api/clients/{bob_client['id']}/content-options"),
+                    alice.get(f"/api/groups/{bob_client['id']}"),
+                    alice.get(f"/api/materials/{bob_client['id']}/package-result"),
+                    alice.get(f"/api/raw_records?client_id={bob_client['id']}"),
+                ]
+            self.assertTrue(all(response.status_code == 404 for response in responses))
+
+            admin = geo_app.app.test_client()
+            login_as(admin, "admin")
+            self.assertEqual(200, admin.get(f"/api/clients/{bob_client['id']}/content-options").status_code)
+            with patch.object(geo_app, "get_content_batch_generation_job", return_value=job):
+                self.assertEqual(200, admin.get("/api/content/generate_batch/bob-batch").status_code)
+
+    def test_identifier_only_record_and_reference_jobs_enforce_customer_ownership(self):
+        with isolated_auth_app():
+            for username, role in [("alice", "operator"), ("bob", "operator"), ("admin", "admin")]:
+                create_user(geo_app.F_USERS, username, "secret-pass", role=role)
+            bob = geo_app.app.test_client()
+            login_as(bob, "bob")
+            bob_client = create_client(bob, "Bob 客户")
+            geo_app.save(geo_app.F_RAW_RECORDS, [{"id": "bob-record", "client_id": bob_client["id"], "crawl_time": "2026-07-21 10:00"}])
+            with geo_app.reference_analysis_jobs_guard:
+                geo_app.reference_analysis_jobs.clear()
+            status_job_id = geo_app.create_reference_analysis_job(bob_client["id"], "2026-07-21", username="bob")
+            cancel_job_id = geo_app.create_reference_analysis_job(bob_client["id"], "2026-07-20", username="bob")
+
+            alice = geo_app.app.test_client()
+            login_as(alice, "alice")
+            self.assertEqual(404, alice.delete("/api/daily/records/bob-record").status_code)
+            self.assertEqual(404, alice.post("/api/daily/records/batch_delete", json={"ids": ["bob-record"]}).status_code)
+            self.assertEqual(404, alice.get(f"/api/reference_intelligence/analyze_status?job_id={status_job_id}").status_code)
+            self.assertEqual(404, alice.post("/api/reference_intelligence/analyze_cancel", json={"job_id": cancel_job_id}).status_code)
+
+            admin = geo_app.app.test_client()
+            login_as(admin, "admin")
+            self.assertEqual(200, admin.get(f"/api/reference_intelligence/analyze_status?job_id={status_job_id}").status_code)
+            self.assertEqual(200, admin.post("/api/reference_intelligence/analyze_cancel", json={"job_id": cancel_job_id}).status_code)
+
+    def test_pattern_library_scopes_follow_client_ownership_and_shared_writes_require_admin(self):
+        with isolated_auth_app() as tmp:
+            for username, role in [("alice", "operator"), ("bob", "operator"), ("admin", "admin")]:
+                create_user(geo_app.F_USERS, username, "secret-pass", role=role)
+            bob = geo_app.app.test_client()
+            login_as(bob, "bob")
+            bob_client = create_client(bob, "Bob 客户")
+            library = PatternLibrary(Path(tmp) / "pattern_library")
+            client_entry = library.create_candidate(f"client:{bob_client['id']}", "module", "客户写法", {}, {"url": "https://example.com/client"})
+            shared_entry = library.create_candidate("industry:education", "module", "行业写法", {}, {"url": "https://example.com/industry"})
+
+            alice = geo_app.app.test_client()
+            login_as(alice, "alice")
+            with patch.object(geo_app, "pattern_library_service", return_value=library):
+                self.assertEqual(404, alice.get(f"/api/pattern-library/entries?scope=client:{bob_client['id']}").status_code)
+                self.assertEqual(200, alice.get("/api/pattern-library/entries?scope=industry:education").status_code)
+                self.assertEqual(404, alice.post("/api/pattern-library/status", json={"scope": "industry:education", "entry_id": shared_entry["id"], "status": "active"}).status_code)
+
+            admin = geo_app.app.test_client()
+            login_as(admin, "admin")
+            with patch.object(geo_app, "pattern_library_service", return_value=library):
+                self.assertEqual(200, admin.get(f"/api/pattern-library/entries?scope=client:{bob_client['id']}").status_code)
+                self.assertEqual(200, admin.post("/api/pattern-library/status", json={"scope": "industry:education", "entry_id": shared_entry["id"], "status": "active"}).status_code)
 
 
 class UserSettingsTests(unittest.TestCase):

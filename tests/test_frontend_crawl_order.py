@@ -27,6 +27,14 @@ def read_frontend_source():
 
 
 class FrontendCrawlOrderTests(unittest.TestCase):
+    def test_content_choices_live_on_client_page_not_content_generation_page(self):
+        html = read_frontend_source()
+
+        self.assertNotIn('id="contentAudienceAngles"', html)
+        self.assertIn("loadClientContentOptions", html)
+        self.assertIn("toggleClientChoice", html)
+        self.assertIn("setClientCompetitorRule", html)
+        self.assertIn("/content-options", html)
     def test_frontend_css_and_js_are_static_assets(self):
         html = read_index_html()
 
@@ -228,19 +236,14 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("引用情报分析", html)
         self.assertIn("navTo('reference'", html)
         self.assertIn('id="page-reference"', html)
-        self.assertIn('id="referencePluginList"', html)
+        self.assertNotIn('id="referencePluginList"', html)
         self.assertIn("async function loadReferenceIntelligence(", html)
         self.assertIn("async function analyzeReferenceIntelligence(", html)
-        self.assertIn("/api/reference_intelligence/plugins", html)
+        self.assertNotIn("/api/reference_intelligence/plugins", html)
         self.assertIn("/api/reference_intelligence/analyze", html)
         self.assertIn("/api/reference_intelligence/analyze_status", html)
         self.assertIn("/api/reference_intelligence/analyze_cancel", html)
-        self.assertIn("subtype_name", html)
-        self.assertIn("prompt_text", html)
-        self.assertIn("few_shot", html)
-        self.assertIn("source_articles", html)
-        self.assertIn("基于", html)
-        self.assertIn("篇文章合并", html)
+        self.assertNotIn("renderReferencePlugins", html)
         self.assertIn('id="referenceAnalyzeProgress"', html)
         self.assertIn("cancelReferenceAnalysis", html)
 
@@ -329,9 +332,9 @@ class FrontendCrawlOrderTests(unittest.TestCase):
     def test_content_page_uses_simplified_ops_opinion_generation_flow(self):
         html = read_frontend_source()
 
-        self.assertIn('id="contentOpinion"', html)
-        self.assertIn('id="contentSampleLinks"', html)
-        self.assertIn('id="contentTop20Samples"', html)
+        self.assertNotIn('id="contentOpinion"', html)
+        self.assertNotIn('id="contentSampleLinks"', html)
+        self.assertNotIn('id="contentTop20Samples"', html)
         self.assertIn('id="contentMaterialUpload"', html)
         self.assertIn('id="contentMaterialList"', html)
         self.assertIn("loadContentMaterials()", html)
@@ -340,39 +343,34 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("/api/content/materials/", html)
         self.assertIn('id="contentArticleTypeCompare"', html)
         self.assertIn('id="contentArticleTypeIntro"', html)
-        self.assertIn('id="contentArticleSubtypeWrap"', html)
-        self.assertIn('id="contentArticleSubtypes"', html)
-        self.assertIn("文章子类型", html)
-        self.assertIn("parent_type", html)
-        self.assertIn("filter(p => (p.parent_type || '对比型') === selectedContentArticleType)", html)
-        self.assertIn("攻略对比型", html)
+        self.assertNotIn('id="contentArticleSubtypeWrap"', html)
+        self.assertNotIn('id="contentArticleSubtypes"', html)
         self.assertIn('id="contentHistoryDate"', html)
         self.assertIn("selectContentArticleType('对比型')", html)
         self.assertIn("selectContentArticleType('介绍型')", html)
-        self.assertIn("loadContentSubtypePlugins()", html)
-        self.assertIn("/api/reference_intelligence/plugins", html)
+        self.assertNotIn("loadContentSubtypePlugins()", html)
         self.assertIn("getContentHistoryDate()", html)
         self.assertIn("history_date: getContentHistoryDate()", html)
         self.assertIn("article_type: selectedContentArticleType", html)
-        self.assertIn("article_subtype: selectedContentArticleSubtype", html)
-        self.assertIn("article_subtype_plugin: getSelectedContentSubtypePlugin()", html)
+        self.assertNotIn("article_subtype: selectedContentArticleSubtype", html)
+        self.assertNotIn("article_subtype_plugin: getSelectedContentSubtypePlugin()", html)
         self.assertIn('id="useMaterialPackage"', html)
         self.assertIn('id="useMaterialWebSupplement"', html)
         self.assertIn("use_material_package: document.getElementById('useMaterialPackage')?.checked !== false", html)
         self.assertIn("use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false", html)
         self.assertNotIn("selectedContentArticleType !== '对比型'", html)
         self.assertNotIn("<label>对比型子类型</label>", html)
-        self.assertIn("loadContentTop20Samples()", html)
-        self.assertIn("getSelectedContentTopArticles()", html)
+        self.assertNotIn("loadContentTop20Samples()", html)
+        self.assertNotIn("getSelectedContentTopArticles()", html)
         self.assertIn("generateContentArticle()", html)
         self.assertIn('id="contentArticleList"', html)
         self.assertIn("const model = escHtml(a.model || '未知模型')", html)
         self.assertIn("调用模型：${model}", html)
         self.assertIn("const articleType = escHtml(a.article_type || '未标记类型')", html)
         self.assertIn("${articleType}", html)
-        self.assertIn("function contentGenerationSubtypeLabel(a)", html)
-        self.assertIn("子类型：${escHtml(subtypeLabel)}", html)
-        self.assertIn("文章子类型：${escHtml(subtypeLabel)}", html)
+        self.assertNotIn("contentGenerationSubtypeLabel", html)
+        self.assertNotIn("子类型：", html)
+        self.assertNotIn("文章子类型：", html)
         self.assertIn("deleteContentGeneration('${a.id}')", html)
         self.assertIn("async function deleteContentGeneration(id)", html)
         self.assertIn("'/api/content/generations/' + encodeURIComponent(id)", html)
@@ -419,6 +417,34 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("fallbackCopyText", html)
         self.assertIn("copyTextToClipboard(a.content || '', '文章已复制", copy_match.group("body"))
         self.assertNotIn("navigator.clipboard.writeText(a.content || '').then", html)
+
+    def test_quality_gate_cards_support_copy_and_use_shared_article_cache(self):
+        html = read_frontend_source()
+        quality_match = re.search(
+            r"function renderQualityGateArticles\(articles\) \{(?P<body>.*?)\n\}\nfunction findContentGeneration",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(quality_match)
+        self.assertIn("copyContentGeneration('${a.id}')", quality_match.group("body"))
+        self.assertIn("人工已编辑", html)
+
+        view_match = re.search(r"function viewContentGeneration\(id\) \{(?P<body>.*?)\n\}\nfunction copyContentGeneration", html, re.S)
+        copy_match = re.search(r"function copyContentGeneration\(id\) \{(?P<body>.*?)\n\}\nasync function deleteContentGeneration", html, re.S)
+        self.assertIn("findContentGeneration(id)", view_match.group("body"))
+        self.assertIn("findContentGeneration(id)", copy_match.group("body"))
+        self.assertIn("AI 修改中，含门禁重检（约 1-3 分钟）…", html)
+        self.assertIn("确认关闭", html)
+
+    def test_quality_gate_explains_checks_and_verdict_actions(self):
+        html = read_frontend_source()
+
+        self.assertIn("banned_words: '禁用词命中'", html)
+        self.assertIn("comparison_presence: '对比型竞品在场'", html)
+        self.assertIn("fact_traceability: '数字与主张可溯源'", html)
+        self.assertIn("建议修改后再用", html)
+        self.assertIn("人工判断", html)
+        self.assertIn("可发布", html)
 
     def test_material_analysis_is_its_own_module_between_reference_and_content(self):
         html = read_frontend_source()

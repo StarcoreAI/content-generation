@@ -22,42 +22,12 @@ def reference_intelligence_path(root_dir, client_id, date_str, today_fn, task_id
     return os.path.join(root_dir, safe_client, f"{safe_date}_{safe_task}.json")
 
 
-def normalize_reference_plugins(plugins):
-    normalized = []
-    for item in plugins or []:
-        if not isinstance(item, dict):
-            continue
-        parent_type = str(item.get("parent_type") or "").strip()
-        if parent_type not in {"对比型", "介绍型"}:
-            parent_type = "对比型"
-        plugin = {
-            "parent_type": parent_type,
-            "subtype_name": str(item.get("subtype_name") or "").strip(),
-            "prompt_text": str(item.get("prompt_text") or "").strip(),
-            "few_shot": str(item.get("few_shot") or "").strip(),
-        }
-        source_articles = []
-        for source in item.get("source_articles") or []:
-            if not isinstance(source, dict):
-                continue
-            title = str(source.get("title") or "").strip()
-            url = str(source.get("url") or "").strip()
-            if title or url:
-                source_articles.append({"title": title, "url": url})
-        if source_articles:
-            plugin["source_articles"] = source_articles
-        if plugin["subtype_name"] or plugin["prompt_text"] or plugin["few_shot"]:
-            normalized.append(plugin)
-    return normalized
-
-
 def load_reference_intelligence(root_dir, load_fn, today_fn, client_id, date_str, task_id=""):
     return load_fn(reference_intelligence_path(root_dir, client_id, date_str, today_fn, task_id), {
         "client_id": client_id,
         "date": date_str,
         "task_id": task_id,
         "clusters": [],
-        "plugins": [],
     })
 
 

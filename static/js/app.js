@@ -6,6 +6,7 @@ function navTo(page, el) {
   if (el) el.classList.add('on');
   // page-specific load
   if (page === 'content') loadContent();
+  if (page === 'quality') loadQualityGateArticles();
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
   if (page === 'materials') loadMaterialAnalysis();
@@ -96,7 +97,8 @@ async function api(url, method='GET', body=null) {
   const opts = {method, headers:{'Content-Type':'application/json'}};
   if (body) opts.body = JSON.stringify(body);
   const res = await fetch(url, opts);
-  return res.json();
+  try { return await res.json(); }
+  catch { return {error: '服务器错误'}; }
 }
 function spin(id, on) {
   const el = document.getElementById(id);
@@ -198,6 +200,7 @@ function onClientChange() {
   loadTemplatesForContent();
   loadMaterials();
 }
+const clientContentOptions = {};
 async function loadClients() {
   const clients = await api('/api/clients');
   const el = document.getElementById('clientList');
@@ -215,10 +218,73 @@ async function loadClients() {
           ${CRAWL_PLATFORM_ORDER.map(id => platformCheckboxHtml(id, (c.contract_platforms || []).includes(id), `client-${c.id}`)).join('')}
           <button class="btn btn-o btn-sm" onclick="saveClientPlatforms('${c.id}')">保存平台</button>
         </div>
+        <div id="client-content-options-${c.id}" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);font-size:11px;color:var(--text3)">加载内容选择项…</div>
       </div>
       <span class="badge badge-p">${c.created}</span>
       <button class="btn btn-danger" onclick="delClient('${c.id}')">删除</button>
     </div>`).join('');
+  clients.forEach(c => loadClientContentOptions(c.id));
+}
+async function loadClientContentOptions(id) {
+  const data = await api('/api/clients/' + encodeURIComponent(id) + '/content-options');
+  if (data.error) return;
+  clientContentOptions[id] = data;
+  renderClientContentOptions(id);
+}
+function renderClientContentOptions(id) {
+  const data = clientContentOptions[id];
+  const el = document.getElementById('client-content-options-' + id);
+  if (!data || !el) return;
+  const choices = (field, label) => {
+    const items = data[field] || [];
+    const rows = items.map((item, index) => `<div style="display:flex;align-items:center;gap:6px;margin:4px 0"><button class="btn btn-o btn-sm" onclick="toggleClientChoice('${id}','${field}',${index})">${item.enabled ? '启用' : '停用'}</button><span style="flex:1;${item.enabled ? '' : 'opacity:.45;text-decoration:line-through'}">${escHtml(item.text)}</span>${item.source === 'ai' ? '<span class="badge badge-p">AI</span>' : ''}<button class="btn btn-danger btn-sm" onclick="deleteClientChoice('${id}','${field}',${index})">删除</button></div>`).join('') || '<span style="color:var(--text3)">暂无，首次生成会自动补齐</span>';
+    return `<div style="margin-top:8px"><b>${label}</b>${rows}<div style="display:flex;gap:6px;margin-top:4px"><input id="choice-new-${id}-${field}" placeholder="手动新增" style="max-width:240px;padding:5px 7px"><button class="btn btn-o btn-sm" onclick="addClientChoice('${id}','${field}')">添加</button></div></div>`;
+  };
+  const rules = data.competitor_rules || {must_use:[], banned:[]};
+  const candidateRows = (data.competitor_candidates || []).map(name => {
+    const state = rules.must_use.includes(name) ? 'must' : rules.banned.includes(name) ? 'banned' : 'random';
+    return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><span style="flex:1">${escHtml(name)}</span><select onchange="setClientCompetitorRule('${id}',decodeURIComponent('${encodeURIComponent(name)}'),this.value)" style="width:auto;padding:4px"><option value="random" ${state === 'random' ? 'selected' : ''}>随机池</option><option value="must" ${state === 'must' ? 'selected' : ''}>必须用</option><option value="banned" ${state === 'banned' ? 'selected' : ''}>禁止用</option></select></div>`;
+  }).join('') || '<span style="color:var(--text3)">暂无竞品 Markdown 标题</span>';
+  el.innerHTML = `<div style="font-weight:800;color:var(--text2)">内容生产选择项</div>${choices('audience_angles','人群角度')}${choices('faq_questions','FAQ 问题')}<div style="margin-top:8px"><b>竞品规则</b>${candidateRows}</div>`;
+}
+async function saveClientContentOptionField(id, field) {
+  const data = clientContentOptions[id];
+  const result = await api('/api/clients/' + encodeURIComponent(id), 'PUT', {[field]: data[field]});
+  if (result.error) { toast(result.error, 'err'); return; }
+  clientContentOptions[id][field] = result.client[field] || [];
+  renderClientContentOptions(id);
+}
+async function toggleClientChoice(id, field, index) {
+  const item = clientContentOptions[id]?.[field]?.[index];
+  if (!item) return;
+  item.enabled = !item.enabled;
+  await saveClientContentOptionField(id, field);
+}
+async function deleteClientChoice(id, field, index) {
+  if (!clientContentOptions[id]) return;
+  clientContentOptions[id][field].splice(index, 1);
+  await saveClientContentOptionField(id, field);
+}
+async function addClientChoice(id, field) {
+  const input = document.getElementById(`choice-new-${id}-${field}`);
+  const text = input?.value.trim();
+  if (!text) return;
+  const items = clientContentOptions[id][field];
+  if (!items.some(item => item.text === text)) items.push({text, enabled:true, source:'manual'});
+  await saveClientContentOptionField(id, field);
+}
+async function setClientCompetitorRule(id, name, state) {
+  const data = clientContentOptions[id];
+  if (!data) return;
+  const rules = data.competitor_rules || {must_use:[], banned:[]};
+  rules.must_use = rules.must_use.filter(item => item !== name);
+  rules.banned = rules.banned.filter(item => item !== name);
+  if (state === 'must') rules.must_use.push(name);
+  if (state === 'banned') rules.banned.push(name);
+  const result = await api('/api/clients/' + encodeURIComponent(id), 'PUT', {competitor_rules:rules});
+  if (result.error) { toast(result.error, 'err'); return; }
+  data.competitor_rules = result.client.competitor_rules || rules;
+  renderClientContentOptions(id);
 }
 async function addClient() {
   const name = document.getElementById('cl-name').value.trim();
@@ -276,16 +342,9 @@ async function platformLogin(platform) {
 function doubaoLogin() { platformLogin('doubao'); }
 
 // ── Content ───────────────────────────────────────────
-let contentTop20Articles = [];
-let contentReferencePlugins = [];
-let selectedContentArticleSubtype = '攻略对比型';
-let selectedContentReferencePluginIndex = -1;
-
 async function loadContent() {
   ensureContentHistoryDate();
   loadContentMaterials();
-  loadContentTop20Samples();
-  loadContentSubtypePlugins();
   loadContentGenerations();
 }
 
@@ -297,23 +356,6 @@ function ensureContentHistoryDate() {
 function getContentHistoryDate() {
   ensureContentHistoryDate();
   return document.getElementById('contentHistoryDate')?.value || getLocalDateString();
-}
-
-function getContentSampleLinks() {
-  const raw = document.getElementById('contentSampleLinks')?.value || '';
-  return raw.split(/\n|,|，|\s+/).map(x => x.trim()).filter(Boolean);
-}
-
-function getSelectedContentTopArticles() {
-  return Array.from(document.querySelectorAll('#contentTop20Samples input[type="checkbox"]:checked'))
-    .map(cb => contentTop20Articles[parseInt(cb.value, 10)])
-    .filter(Boolean)
-    .map(a => ({
-      title: a.title || '',
-      url: a.url || '',
-      platform: a.platform || '',
-      count: a.count || 0
-    }));
 }
 
 function getLocalDateString() {
@@ -388,156 +430,31 @@ async function toggleContentMaterialUsage(id, confirmed) {
   loadContentMaterials();
 }
 
-async function loadContentTop20Samples() {
-  const el = document.getElementById('contentTop20Samples');
-  if (!el) return;
-  contentTop20Articles = [];
-  if (!currentClientId) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--text3)">请先选择客户</div>';
-    return;
-  }
-  el.innerHTML = '<div style="font-size:11px;color:var(--text3)">加载中...</div>';
-  try {
-    const date = document.getElementById('dailyDate')?.value || getLocalDateString();
-    const stats = await api(`/api/daily/ref_stats?client_id=${currentClientId}&date=${date}&platform=all`);
-    contentTop20Articles = (stats.top_articles || []).slice(0, 20);
-    if (!contentTop20Articles.length) {
-      el.innerHTML = '<div style="font-size:11px;color:var(--text3)">当天暂无高频引用文章</div>';
-      return;
-    }
-    el.innerHTML = contentTop20Articles.map((a, i) => `
-      <label style="display:grid;grid-template-columns:20px 24px 1fr auto;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid var(--border2);cursor:pointer">
-        <input type="checkbox" value="${i}" style="width:auto;accent-color:var(--pri)">
-        <span style="width:22px;height:22px;border-radius:7px;background:var(--pri-ll);color:var(--pri);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center">${i+1}</span>
-        <span style="min-width:0">
-          <span style="font-size:11px;font-weight:700;color:#312e81;display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(a.title || '')}">${escHtml(a.title || '未命名文章')}</span>
-          <span style="font-size:10px;color:var(--text3)">${escHtml(a.platform || '未知平台')}${a.url ? ` · ${escHtml(a.url)}` : ''}</span>
-        </span>
-        <span style="font-size:11px;font-weight:800;color:var(--pri)">×${escHtml(a.count || 0)}</span>
-      </label>`).join('');
-  } catch(e) {
-    el.innerHTML = '<div style="font-size:11px;color:var(--red)">Top20 加载失败</div>';
-  }
-}
-
 let selectedContentArticleType = '对比型';
+let activeContentBatchJobId = '';
+let contentBatchPollTimer = null;
 function selectContentArticleType(type) {
   selectedContentArticleType = type === '介绍型' ? '介绍型' : '对比型';
-  if (selectedContentArticleType === '对比型' && !selectedContentArticleSubtype) {
-    selectedContentArticleSubtype = '攻略对比型';
-    selectedContentReferencePluginIndex = -1;
-  }
   const compareBtn = document.getElementById('contentArticleTypeCompare');
   const introBtn = document.getElementById('contentArticleTypeIntro');
   if (compareBtn && introBtn) {
     compareBtn.className = selectedContentArticleType === '对比型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
     introBtn.className = selectedContentArticleType === '介绍型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
   }
-  renderContentArticleSubtypes();
-}
-
-function selectContentArticleSubtype(name, pluginIndex = -1) {
-  selectedContentArticleSubtype = name || '攻略对比型';
-  selectedContentReferencePluginIndex = pluginIndex;
-  renderContentArticleSubtypes();
-}
-
-function selectContentArticleSubtypeByIndex(pluginIndex) {
-  if (pluginIndex < 0) {
-    selectContentArticleSubtype('攻略对比型', -1);
-    return;
-  }
-  const plugin = contentReferencePlugins[pluginIndex] || {};
-  selectContentArticleSubtype(plugin.subtype_name || `引用情报子类型 ${pluginIndex + 1}`, pluginIndex);
-}
-
-function renderContentArticleSubtypes() {
-  const wrap = document.getElementById('contentArticleSubtypeWrap');
-  const list = document.getElementById('contentArticleSubtypes');
-  const meta = document.getElementById('contentArticleSubtypeMeta');
-  if (!wrap || !list) return;
-  wrap.style.display = '';
-  if (!selectedContentArticleSubtype) {
-    selectedContentArticleSubtype = selectedContentArticleType === '对比型' ? '攻略对比型' : '';
-    selectedContentReferencePluginIndex = -1;
-  }
-  const currentPlugins = contentReferencePlugins.filter(p => (p.parent_type || '对比型') === selectedContentArticleType);
-  const buttons = [
-    ...(selectedContentArticleType === '对比型' ? [{name: '攻略对比型', pluginIndex: -1}] : []),
-    ...currentPlugins.map((p) => {
-      const i = contentReferencePlugins.indexOf(p);
-      return {name: p.subtype_name || `引用情报子类型 ${i + 1}`, pluginIndex: i};
-    })
-  ];
-  if (!buttons.some(b => b.name === selectedContentArticleSubtype && b.pluginIndex === selectedContentReferencePluginIndex)) {
-    selectedContentArticleSubtype = buttons[0]?.name || '';
-    selectedContentReferencePluginIndex = -1;
-  }
-  if (!buttons.length) {
-    list.innerHTML = `<span style="font-size:11px;color:var(--text3)">暂无${escHtml(selectedContentArticleType)}引用情报子类型</span>`;
-    if (meta) meta.textContent = '可先到引用情报分析生成插件';
-    return;
-  }
-  list.innerHTML = buttons.map(b => {
-    const active = b.name === selectedContentArticleSubtype && b.pluginIndex === selectedContentReferencePluginIndex;
-    return `<button type="button" class="${active ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm'}" onclick="selectContentArticleSubtypeByIndex(${b.pluginIndex})">${escHtml(b.name)}</button>`;
-  }).join('');
-  if (meta) meta.textContent = currentPlugins.length
-    ? `已加载 ${currentPlugins.length} 个${selectedContentArticleType}引用情报子类型`
-    : '对比型默认使用攻略对比型；引用情报插件会按父类型显示在这里';
-}
-
-async function loadContentSubtypePlugins() {
-  contentReferencePlugins = [];
-  if (!currentClientId) {
-    renderContentArticleSubtypes();
-    return;
-  }
-  try {
-    const data = await api(`/api/reference_intelligence/plugins?client_id=${currentClientId}&date=${getContentHistoryDate()}`);
-    contentReferencePlugins = (data.plugins || []).filter(p => (p.subtype_name || p.prompt_text || p.few_shot));
-  } catch(e) {
-    contentReferencePlugins = [];
-  }
-  renderContentArticleSubtypes();
-}
-
-function getSelectedContentSubtypePlugin() {
-  if (selectedContentReferencePluginIndex < 0) return null;
-  const p = contentReferencePlugins[selectedContentReferencePluginIndex];
-  if (!p) return null;
-  return {
-    parent_type: p.parent_type || '对比型',
-    subtype_name: p.subtype_name || '',
-    prompt_text: p.prompt_text || '',
-    few_shot: p.few_shot || ''
-  };
 }
 
 async function generateContentArticle() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
-  const opinionEl = document.getElementById('contentOpinion');
-  const opinion = opinionEl.value.trim();
-  if (!opinion) { toast('请先填写运营意见','err'); return; }
+  if (Number(document.getElementById('contentGenerationCount')?.value || 1) > 1) {
+    return generateContentBatch();
+  }
   spin('spContentGenerate', true);
   disableBtn('btnContentGenerate', true);
   const statusEl = document.getElementById('contentGenerateStatus');
   statusEl.textContent = '当前模型生成中，请稍候...';
   try {
-    const r = await api('/api/content/generate', 'POST', {
-      client_id: currentClientId,
-      opinion,
-      history_date: getContentHistoryDate(),
-      article_type: selectedContentArticleType,
-      article_subtype: selectedContentArticleSubtype,
-      article_subtype_plugin: getSelectedContentSubtypePlugin(),
-      sample_links: getContentSampleLinks(),
-      selected_articles: getSelectedContentTopArticles(),
-      use_material_package: document.getElementById('useMaterialPackage')?.checked !== false,
-      use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false
-    });
+    const r = await api('/api/content/generate', 'POST', contentGenerationPayload());
     if (r.error) { toast(r.error, 'err'); return; }
-    opinionEl.value = '';
     renderContentGenerations(r.articles || []);
     statusEl.textContent = `已生成：${r.article?.title || '新文章'}`;
     toast('文章生成成功 ✦');
@@ -545,6 +462,76 @@ async function generateContentArticle() {
     spin('spContentGenerate', false);
     disableBtn('btnContentGenerate', false);
   }
+}
+function contentGenerationPayload() {
+  return {
+    client_id: currentClientId,
+    history_date: getContentHistoryDate(),
+    article_type: selectedContentArticleType,
+    use_material_package: document.getElementById('useMaterialPackage')?.checked !== false,
+    use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false,
+    use_competitors: document.getElementById('useCompetitorMaterials')?.checked !== false
+  };
+}
+function renderContentBatchProgress(job) {
+  const el = document.getElementById('contentBatchProgress');
+  if (!el || !job) return;
+  const items = job.items || [];
+  const running = items.find(item => item.status === '生成中');
+  const progress = running ? `第 ${running.index}/${job.count} 篇` : `已处理 ${items.filter(item => item.status !== '排队').length}/${job.count} 篇`;
+  const terminal = ['completed', 'cancelled'].includes(job.status);
+  el.style.display = 'block';
+  el.innerHTML = `<div style="font-size:12px;font-weight:800;color:var(--text2);margin-bottom:5px">${escHtml(progress)} · ${escHtml(job.status || '')}</div>
+    ${(items || []).map(item => `<span class="badge ${item.status === '失败' || item.status === '门禁拦截' ? 'badge-r' : item.status === '完成' ? 'badge-g' : 'badge-a'}" style="margin:0 5px 5px 0">${item.index}. ${escHtml(item.status)}${item.title ? `：${escHtml(item.title)}` : ''}${item.error ? `：${escHtml(item.error)}` : ''}</span>`).join('')}
+    ${terminal ? '' : '<button class="btn btn-o btn-sm" onclick="cancelContentBatchGeneration()">终止</button>'}`;
+}
+async function generateContentBatch() {
+  if (!currentClientId) { toast('请先选择客户','err'); return; }
+  const count = Number(document.getElementById('contentGenerationCount')?.value || 5);
+  spin('spContentGenerate', true);
+  disableBtn('btnContentGenerate', true);
+  const statusEl = document.getElementById('contentGenerateStatus');
+  statusEl.textContent = '批量任务创建中...';
+  const r = await api('/api/content/generate_batch', 'POST', {...contentGenerationPayload(), count});
+  if (r.error || !r.job) {
+    spin('spContentGenerate', false);
+    disableBtn('btnContentGenerate', false);
+    toast(r.error || '批量任务创建失败', 'err');
+    return;
+  }
+  activeContentBatchJobId = r.job.job_id;
+  renderContentBatchProgress(r.job);
+  pollContentBatchGeneration();
+}
+async function pollContentBatchGeneration() {
+  if (!activeContentBatchJobId) return;
+  const r = await api(`/api/content/generate_batch/${encodeURIComponent(activeContentBatchJobId)}`);
+  if (r.error || !r.job) {
+    finishContentBatchGeneration();
+    toast(r.error || '批量任务状态读取失败', 'err');
+    return;
+  }
+  renderContentBatchProgress(r.job);
+  if (['completed', 'cancelled'].includes(r.job.status)) {
+    finishContentBatchGeneration();
+    await Promise.all([loadContentGenerations(), loadQualityGateArticles()]);
+    toast(r.job.status === 'cancelled' ? '批量生成已终止' : '批量生成完成 ✦');
+    return;
+  }
+  contentBatchPollTimer = setTimeout(pollContentBatchGeneration, 1000);
+}
+async function cancelContentBatchGeneration() {
+  if (!activeContentBatchJobId) return;
+  const r = await api(`/api/content/generate_batch/${encodeURIComponent(activeContentBatchJobId)}/cancel`, 'POST', {});
+  if (r.error) { toast(r.error, 'err'); return; }
+  renderContentBatchProgress(r.job);
+}
+function finishContentBatchGeneration() {
+  if (contentBatchPollTimer) clearTimeout(contentBatchPollTimer);
+  contentBatchPollTimer = null;
+  activeContentBatchJobId = '';
+  spin('spContentGenerate', false);
+  disableBtn('btnContentGenerate', false);
 }
 async function loadContentGenerations() {
   const el = document.getElementById('contentArticleList');
@@ -556,8 +543,54 @@ async function loadContentGenerations() {
   if (r.error) { toast(r.error, 'err'); return; }
   renderContentGenerations(r.articles || []);
 }
-function contentGenerationSubtypeLabel(a) {
-  return String(a?.article_subtype || '').trim();
+async function loadQualityGateArticles() {
+  const el = document.getElementById('qualityArticleList');
+  if (!currentClientId) {
+    if (el) el.innerHTML = '<div class="empty"><i class="ti ti-shield-check"></i><p>请先选择客户</p></div>';
+    return;
+  }
+  const r = await api('/api/content/generations?client_id=' + encodeURIComponent(currentClientId));
+  if (r.error) { toast(r.error, 'err'); return; }
+  renderQualityGateArticles(r.articles || []);
+}
+function qualityGateFailedChecks(article) {
+  const report = article?.gate_report || {};
+  return [...(report.code_layer || []), ...(report.llm_layer || [])].filter(item => item && item.passed === false);
+}
+function qualityGateReason(article) {
+  const first = qualityGateFailedChecks(article)[0];
+  if (!first) return '';
+  return (first.evidence || [])[0] || first.check_id || '需要人工确认';
+}
+const QUALITY_GATE_CHECK_DESCRIPTIONS = {
+  banned_words: '禁用词命中',
+  title_brand: '标题不得直接点名客户或本次机构',
+  comparison_presence: '对比型竞品在场',
+  meta_discourse: '成文不得泄漏内部工作用语',
+  shingle_duplicate: '与近期文章的重复度提示',
+  fact_traceability: '数字与主张可溯源',
+  competitor_fairness: '机构比较应公平呈现',
+  semantic_marketing: '营销与绝对化语义复核',
+  competitor_claim_repetition: '竞品强主张复读检查',
+  llm_response: '门禁模型返回结果检查',
+  quality_gate_internal: '门禁内部异常提示',
+};
+function qualityGateCheckDescription(checkId) {
+  return QUALITY_GATE_CHECK_DESCRIPTIONS[checkId] || '质量门禁检查项';
+}
+function qualityGateBadge(article) {
+  if (article?.generation_status === '人工已编辑') return '<span class="badge badge-p">人工已编辑</span>';
+  const verdict = article?.gate_report?.verdict;
+  if (verdict === 'pass') return '<span class="badge badge-g">已审核 · 可发布</span>';
+  if (verdict === 'blocked') return `<span class="badge badge-r">审核不通过：${escHtml(qualityGateReason(article))} · 建议修改后再用</span>`;
+  if (verdict === 'warn') return `<span class="badge badge-a">审核提示：${escHtml(qualityGateReason(article))} · 人工判断</span>`;
+  return '<span class="badge badge-a">未审核</span>';
+}
+function contentGenerationPatternNames(a) {
+  const entries = a?.provenance?.entries || {};
+  return ['skeleton', 'opening_module', 'ending_module', 'faq_module', 'table_module']
+    .map(key => entries[key]?.name).concat((entries.body_modules || []).map(item => item?.name))
+    .filter(Boolean).join(' · ');
 }
 function renderContentGenerations(articles) {
   const countEl = document.getElementById('content-article-count');
@@ -570,43 +603,108 @@ function renderContentGenerations(articles) {
   }
   window._contentGenerationCache = articles;
   el.innerHTML = articles.map(a => {
-    const subtypeLabel = contentGenerationSubtypeLabel(a);
     const title = escHtml(a.title || '未命名文章');
     const model = escHtml(a.model || '未知模型');
     const articleType = escHtml(a.article_type || '未标记类型');
     const createdAt = escHtml(a.created_at || '');
     const summary = escHtml((a.content || '').slice(0, 160));
+    const patterns = contentGenerationPatternNames(a);
     return `
     <div class="article-card">
       <div class="article-title">${title}</div>
       <div class="article-meta">
         <span class="badge badge-p">调用模型：${model}</span>
         <span class="badge badge-g">${articleType}</span>
-        ${subtypeLabel ? `<span class="badge badge-a">子类型：${escHtml(subtypeLabel)}</span>` : ''}
+        ${qualityGateBadge(a)}
         <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
         <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
         <span style="font-size:10px;color:var(--text3)">${createdAt}</span>
       </div>
+      ${patterns ? `<div style="font-size:10px;color:var(--text3);margin:5px 0">写法：${escHtml(patterns)}</div>` : ''}
       <div class="article-summary">${summary}${(a.content || '').length > 160 ? '...' : ''}</div>
       <div class="article-acts">
         <button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button>
         <button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button>
+        <button class="btn btn-o btn-sm" onclick="manualEditContentGeneration('${a.id}')">人工编辑</button>
+        <button class="btn btn-p btn-sm" onclick="aiModifyContentGeneration('${a.id}')">AI 修改</button>
         <button class="btn btn-danger btn-sm" onclick="deleteContentGeneration('${a.id}')">删除</button>
       </div>
     </div>`;
   }).join('');
 }
+function renderQualityGateArticles(articles) {
+  const countEl = document.getElementById('quality-article-count');
+  if (countEl) countEl.textContent = articles.length + ' 篇';
+  const el = document.getElementById('qualityArticleList');
+  if (!el) return;
+  window._qualityGateArticleCache = articles;
+  if (!articles.length) {
+    el.innerHTML = '<div class="empty"><i class="ti ti-shield-check"></i><p>暂无已生产文章</p></div>';
+    return;
+  }
+  el.innerHTML = articles.map(a => {
+    const checks = qualityGateFailedChecks(a);
+    const details = checks.length
+      ? `<div class="quality-gate-details">${checks.map(item => `<span class="badge ${item.severity === 'block' ? 'badge-r' : 'badge-a'}">${escHtml(item.check_id)}（${escHtml(qualityGateCheckDescription(item.check_id))}）：${escHtml((item.evidence || []).join('；') || '未通过')}</span>`).join('')}</div>`
+      : '<div class="quality-gate-details"><span style="font-size:11px;color:var(--text3)">无未通过检查项</span></div>';
+    return `<div class="article-card">
+      <div class="article-title">${escHtml(a.title || '未命名文章')}</div>
+      <div class="article-meta">${qualityGateBadge(a)}<span class="badge badge-p">${escHtml(a.article_type || '未标记类型')}</span><span style="font-size:10px;color:var(--text3)">${escHtml(a.created_at || '')}</span></div>
+      ${details}
+      <div class="article-summary">${escHtml((a.content || '').slice(0, 160))}${(a.content || '').length > 160 ? '...' : ''}</div>
+      <div class="article-acts"><button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button><button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button><button class="btn btn-o btn-sm" onclick="manualEditContentGeneration('${a.id}')">人工编辑</button><button class="btn btn-p btn-sm" onclick="aiModifyContentGeneration('${a.id}')">AI 修改</button></div>
+    </div>`;
+  }).join('');
+}
+function findContentGeneration(id) {
+  return [...(window._contentGenerationCache || []), ...(window._qualityGateArticleCache || [])].find(item => item.id === id);
+}
+let contentEditMode = '';
+let contentEditArticleId = '';
+function openContentEditDialog(article, mode) {
+  const modal = document.getElementById('contentEditModal');
+  if (!modal || !article) return;
+  contentEditMode = mode;
+  contentEditArticleId = article.id;
+  document.getElementById('contentEditModalTitle').textContent = mode === 'manual' ? '人工编辑文章' : 'AI 修改文章';
+  document.getElementById('contentEditModalLabel').textContent = mode === 'manual' ? '完整文章（首行作为标题）' : '本次修改指令（会连同原文和历史修改词交给 AI）';
+  document.getElementById('contentEditModalInput').value = mode === 'manual' ? (article.content || '') : '';
+  modal.style.display = 'flex';
+}
+function closeContentEditDialog(force=false) {
+  const save = document.getElementById('contentEditModalSave');
+  if (!force && contentEditMode === 'ai' && save?.disabled && !confirm('AI 修改仍在进行中，确认关闭？')) return;
+  document.getElementById('contentEditModal').style.display = 'none';
+  contentEditArticleId = ''; contentEditMode = '';
+}
+function manualEditContentGeneration(id) { openContentEditDialog(findContentGeneration(id), 'manual'); }
+function aiModifyContentGeneration(id) { openContentEditDialog(findContentGeneration(id), 'ai'); }
+async function saveContentEditDialog() {
+  const value = document.getElementById('contentEditModalInput').value.trim();
+  if (!value || !contentEditArticleId || !currentClientId) { toast('请填写内容或修改指令', 'err'); return; }
+  const save = document.getElementById('contentEditModalSave');
+  const defaultLabel = save.innerHTML;
+  save.disabled = true;
+  if (contentEditMode === 'ai') save.innerHTML = '<span class="spin" style="display:inline-block"></span> AI 修改中，含门禁重检（约 1-3 分钟）…';
+  try {
+    const url = `/api/content/generations/${encodeURIComponent(contentEditArticleId)}${contentEditMode === 'ai' ? '/ai_modify' : ''}?client_id=${encodeURIComponent(currentClientId)}`;
+    const r = await api(url, contentEditMode === 'ai' ? 'POST' : 'PUT', contentEditMode === 'ai' ? {instruction: value} : {content: value});
+    if (r.error) { toast(r.error, 'err'); return; }
+    const mode = contentEditMode;
+    closeContentEditDialog(true);
+    await Promise.all([loadContentGenerations(), loadQualityGateArticles()]);
+    toast(mode === 'ai' ? 'AI 修改版本已生成' : '文章已人工保存');
+  } finally { save.disabled = false; save.innerHTML = defaultLabel; }
+}
 function viewContentGeneration(id) {
-  const a = (window._contentGenerationCache || []).find(x => x.id === id);
+  const a = findContentGeneration(id);
   if (!a) return;
-  const subtypeLabel = contentGenerationSubtypeLabel(a);
-  const subtypeHtml = subtypeLabel ? `<div class="content-generation-subtype">文章子类型：${escHtml(subtypeLabel)}</div>` : '';
   const title = escHtml(a.title || '生成文章');
   const win = window.open('','_blank','width=760,height=680');
-  win.document.write(`<html><head><title>${title}</title><link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet"></head><body>${subtypeHtml}<h1>${title}</h1><pre>${escHtml(a.content || '')}</pre></body></html>`);
+  win.document.write(`<html><head><title>${title}</title><link href="{{ url_for('static', filename='css/app.css') }}" rel="stylesheet"></head><body><h1>${title}</h1><pre>${escHtml(a.content || '')}</pre></body></html>`);
 }
 function copyContentGeneration(id) {
-  const a = (window._contentGenerationCache || []).find(x => x.id === id);
+  const a = findContentGeneration(id);
   if (!a) return;
   copyTextToClipboard(a.content || '', '文章已复制 ✦');
 }
@@ -1910,55 +2008,9 @@ function startReferenceSmoothProgress() {
   }, 200);
 }
 
-function renderReferencePlugins(data) {
-  const list = document.getElementById('referencePluginList');
-  const meta = document.getElementById('referencePluginMeta');
-  if (!list) return;
-  const plugins = data?.plugins || [];
-  if (meta) meta.textContent = plugins.length ? `${plugins.length} 个插件 · ${data.updated_at || ''}` : '';
-  if (!plugins.length) {
-    list.innerHTML = '<div class="empty"><i class="ti ti-bulb"></i><p>暂无引用情报插件，可先点击“生成引用情报”</p></div>';
-    return;
-  }
-  list.innerHTML = plugins.map((p, i) => `
-    <div style="padding:12px 0;border-bottom:1px solid var(--border2)">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <span style="width:24px;height:24px;border-radius:8px;background:var(--pri-ll);color:var(--pri);font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center">${i+1}</span>
-        <span style="font-size:13px;font-weight:900;color:#312e81">${escHtml(p.subtype_name || '未命名插件')}</span>
-        <span class="badge badge-g">${escHtml(p.parent_type || '对比型')}</span>
-      </div>
-      <div style="font-size:11px;font-weight:900;color:var(--text3);margin:8px 0 4px">prompt_text</div>
-      <div style="font-size:12px;line-height:1.7;color:var(--text2);white-space:pre-wrap;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm);padding:10px">${escHtml(p.prompt_text || '')}</div>
-      <div style="font-size:11px;font-weight:900;color:var(--text3);margin:10px 0 4px">few_shot</div>
-      <div style="font-size:12px;line-height:1.7;color:var(--text2);white-space:pre-wrap;background:rgba(52,211,153,.05);border:1px solid rgba(52,211,153,.14);border-radius:var(--r-sm);padding:10px">${escHtml(p.few_shot || '')}</div>
-      ${(p.source_articles || []).length ? `
-        <div style="font-size:11px;font-weight:900;color:var(--text3);margin:10px 0 4px">基于 ${(p.source_articles || []).length} 篇文章合并</div>
-        <div style="display:flex;flex-direction:column;gap:4px">
-          ${(p.source_articles || []).map((a, j) => `
-            <div style="font-size:11px;line-height:1.5;color:var(--text2);overflow-wrap:anywhere">
-              <span style="font-weight:800;color:#312e81">${j + 1}. ${escHtml(a.title || a.url || '未命名文章')}</span>
-              ${a.url ? `<a href="${escHtml(a.url)}" target="_blank" rel="noopener noreferrer" style="color:var(--pri);margin-left:6px">${escHtml(a.url)}</a>` : ''}
-            </div>
-          `).join('')}
-        </div>
-      ` : ''}
-    </div>`).join('');
-}
-
 async function loadReferenceIntelligence() {
   getReferenceDate();
   loadPatternLibrary();
-  if (!currentClientId) {
-    renderReferencePlugins({plugins: []});
-    return;
-  }
-  const date = getReferenceDate();
-  try {
-    const data = await api(`/api/reference_intelligence/plugins?client_id=${currentClientId}&date=${date}`);
-    renderReferencePlugins(data);
-  } catch(e) {
-    document.getElementById('referencePluginList').innerHTML = `<div style="color:var(--red);font-size:12px">加载失败：${escHtml(e.message)}</div>`;
-  }
 }
 
 async function analyzeReferenceIntelligence() {
@@ -2124,7 +2176,7 @@ function renderPatternLibrarySources(sources) {
   }).join('')}</div>`;
 }
 
-function renderPatternLibraryEntry(entry) {
+function renderPatternLibraryEntry(entry, canWrite = false) {
   const sources = Array.isArray(entry.sources) ? entry.sources : [];
   const risks = patternLibraryRiskMarks(entry);
   const allSourcesRisky = sources.length > 0 && sources.every(source => (source.risk_marks || []).length > 0);
@@ -2139,7 +2191,7 @@ function renderPatternLibraryEntry(entry) {
       <div class="pattern-entry-title"><span>${escHtml(entry.name || '未命名条目')}</span>${moduleType}</div>
       <div class="pattern-entry-actions">
         <span class="pattern-status status-${escHtml(entry.status)}">${escHtml(patternLibraryStatusLabel(entry.status))}</span>
-        <button class="${action.className}" data-pattern-entry="${escHtml(entry.id)}" data-pattern-status="${action.status}">${action.label}</button>
+        ${canWrite ? `<button class="${action.className}" data-pattern-entry="${escHtml(entry.id)}" data-pattern-status="${action.status}">${action.label}</button>` : ''}
       </div>
     </div>
     <div class="pattern-entry-meta">
@@ -2190,7 +2242,7 @@ function renderPatternLibraryEntries(data) {
     const list = document.getElementById(`patternLibrary${listSuffix}`);
     const count = document.getElementById(`patternLibrary${countSuffix}`);
     if (count) count.textContent = `${group.length} 条`;
-    if (list) list.innerHTML = group.length ? group.map(renderPatternLibraryEntry).join('') : patternLibraryEmpty(empty);
+    if (list) list.innerHTML = group.length ? group.map(entry => renderPatternLibraryEntry(entry, Boolean(data?.can_write))).join('') : patternLibraryEmpty(empty);
   });
   document.querySelectorAll('[data-pattern-status]').forEach(button => {
     button.addEventListener('click', () => updatePatternLibraryStatus(button.dataset.patternEntry, button.dataset.patternStatus));
@@ -2657,7 +2709,7 @@ async function clearDailyData() {
 
 async function deleteDailyRecord(id) {
   if (!confirm('确认删除这条记录？')) return;
-  await api(`/api/daily/records/${id}`, 'DELETE');
+  await api(`/api/daily/records/${id}?client_id=${encodeURIComponent(currentClientId)}`, 'DELETE');
   toast('已删除 喵～');
   loadDailyData();
 }
@@ -2665,7 +2717,7 @@ async function deleteDailyRecord(id) {
 async function batchDeleteDailyRecords() {
   if (!dailySelectedIds.size) return;
   if (!confirm(`确认删除选中的 ${dailySelectedIds.size} 条记录？`)) return;
-  await api('/api/daily/records/batch_delete', 'POST', { ids: [...dailySelectedIds] });
+  await api('/api/daily/records/batch_delete', 'POST', { client_id: currentClientId, ids: [...dailySelectedIds] });
   toast(`已删除 ${dailySelectedIds.size} 条 喵～`);
   dailySelectedIds.clear();
   loadDailyData();

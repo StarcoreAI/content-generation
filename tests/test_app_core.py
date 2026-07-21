@@ -6,10 +6,12 @@ import threading
 import time
 import unittest
 from contextlib import contextmanager
+from pathlib import Path
 from unittest.mock import patch
 
 import app as geo_app
 import base_crawler
+from services.pattern_library import PatternLibrary
 
 
 @contextmanager
@@ -35,6 +37,7 @@ def isolated_app_data():
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
+        "GENERATE_PLANNING_BRIEF": geo_app.generate_planning_brief,
         "BASE_CRAWLER_DATA_DIR": base_crawler.DATA_DIR,
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -81,6 +84,46 @@ def isolated_app_data():
                     delattr(geo_app, key)
                 else:
                     setattr(geo_app, key, value)
+
+
+@contextmanager
+def isolated_content_app_data():
+    with isolated_app_data() as tmp:
+        original_brief_builder = geo_app.generate_planning_brief
+        seed_active_content_patterns("对比型")
+        seed_active_content_patterns("介绍型")
+        geo_app.generate_planning_brief = lambda sample, **_kwargs: valid_brief()
+        try:
+            yield tmp
+        finally:
+            geo_app.generate_planning_brief = original_brief_builder
+
+
+def seed_active_content_patterns(parent_type="对比型"):
+    library = PatternLibrary(Path(geo_app.D) / "pattern_library")
+
+    def add(kind, name, payload):
+        entry = library.create_candidate("global", kind, name, payload, {"url": f"seed://{name}"})
+        return library.set_status("global", entry["id"], "active")
+
+    skeleton = add("skeleton", f"{parent_type}骨架", {"parent_type": parent_type, "sections": ["开头", "正文"]})
+    opening = add("module", "开头", {"type": "开头", "pattern": "开头套路"})
+    ending = add("module", "结尾", {"type": "结尾", "pattern": "结尾套路"})
+    faq = add("module", "FAQ", {"type": "FAQ段", "pattern": "问答套路"})
+    return {"skeleton": skeleton, "opening": opening, "ending": ending, "faq": faq}
+
+
+def valid_brief():
+    return {
+        "title_candidates": ["标题一", "标题二"],
+        "angle_statement": "以异地在职者为主线",
+        "sections": [
+            {"id": 1, "功能": "开头", "要点": "资料事实", "引用": ["资料 > 原文"], "字数": 200},
+            {"id": 2, "功能": "正文", "要点": "资料事实", "引用": ["资料 > 原文"], "字数": 600},
+        ],
+        "bans": ["禁令 A"],
+        "dedup_hints": "避免重复",
+    }
 
 
 class CoreFunctionTests(unittest.TestCase):
@@ -185,7 +228,7 @@ class CoreFunctionTests(unittest.TestCase):
             )
 
     def test_content_generate_uses_content_materials_history_and_stores_newest_first(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-1"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "苏韵汽车音响"}])
             material_dir = os.path.join(geo_app.UPLOAD_FOLDER, cid)
@@ -235,15 +278,13 @@ class CoreFunctionTests(unittest.TestCase):
 
             with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_deepseek_pro, create=True):
                 first = client.post(
-                    "/api/content/generate",
-                    json={"client_id": cid, "opinion": "写一篇面向扬州车主的宣传文章"},
+                    "/api/content/generate", json={"client_id": cid},
                 )
                 self.assertEqual(first.status_code, 200)
                 self.assertEqual(first.get_json()["article"]["content"], "第一版文章")
 
                 second = client.post(
-                    "/api/content/generate",
-                    json={"client_id": cid, "opinion": "第二版加强施工流程和真实感"},
+                    "/api/content/generate", json={"client_id": cid},
                 )
                 self.assertEqual(second.status_code, 200)
                 self.assertEqual(second.get_json()["article"]["content"], "第二版文章")
@@ -254,11 +295,11 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertNotIn("CUSTOMER_ONLY_PROFILE_SHOULD_NOT_APPEAR", prompt_payload)
             self.assertIn("苏韵主营汽车音响改装", prompt_payload)
             self.assertIn("扬州车主升级DSP和隔音", prompt_payload)
-            self.assertIn("写一篇面向扬州车主的宣传文章", prompt_payload)
+            self.assertNotIn("写一篇面向扬州车主的宣传文章", prompt_payload)
 
             second_payload = json.dumps(captured_messages[1], ensure_ascii=False)
-            self.assertIn("第一版文章", second_payload)
-            self.assertIn("第二版加强施工流程和真实感", second_payload)
+            self.assertNotIn("第一版文章", second_payload)
+            self.assertNotIn("第二版加强施工流程和真实感", second_payload)
 
             listing = client.get(f"/api/content/generations?client_id={cid}")
             self.assertEqual(listing.status_code, 200)
@@ -268,7 +309,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(articles[0]["model"], "deepseek-chat")
 
     def test_content_generate_records_configured_model(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-model"
             geo_app.save(geo_app.F_SETTINGS, {
                 "api_key": "test-key",
@@ -290,7 +331,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(response.get_json()["article"]["model"], "deepseek-v4-pro")
 
     def test_content_generate_respects_content_material_use_toggle(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-material-toggle"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
             client = geo_app.app.test_client()
@@ -304,6 +345,7 @@ class CoreFunctionTests(unittest.TestCase):
                 },
                 content_type="multipart/form-data",
             )
+
             self.assertEqual(uploaded.status_code, 200)
             materials = uploaded.get_json()["materials"]
 
@@ -332,7 +374,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(response.get_json()["article"]["material_count"], 1)
 
     def test_content_generate_uses_selected_customer_material_packages(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-package-toggle"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
             output_dir = geo_app.material_package_output_dir(cid)
@@ -384,8 +426,171 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(included.get_json()["article"]["material_count"], 2)
             self.assertEqual(skipped.get_json()["article"]["material_count"], 0)
 
-    def test_content_generate_keeps_full_selected_material_packages(self):
+    def test_client_choice_entries_round_trip_and_probe_groups_stay_separate(self):
         with isolated_app_data():
+            cid = "client-angles"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌"}])
+            geo_app.save(geo_app.F_GROUPS, {cid: [
+                {"id": "g1", "questions": ["问题一", "问题二"]},
+                {"id": "g2", "questions": ["问题二", "问题三"]},
+            ]})
+            client = geo_app.app.test_client()
+            response = client.put(f"/api/clients/{cid}", json={"audience_angles": ["异地在职者", "时间紧张者", "异地在职者"]})
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["client"]["audience_angles"], [
+                {"text": "异地在职者", "enabled": True, "source": "manual"},
+                {"text": "时间紧张者", "enabled": True, "source": "manual"},
+            ])
+            self.assertEqual(geo_app.load_client_faq_questions(cid), [])
+            self.assertEqual(geo_app.load_probe_group_questions(cid), ["问题一", "问题二", "问题三"])
+
+    def test_empty_content_choices_are_lazily_generated_persisted_and_used(self):
+        with isolated_content_app_data():
+            cid = "client-lazy-choices"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "education"}])
+            geo_app.save(geo_app.F_GROUPS, {cid: [{"id": "g1", "questions": ["哪家靠谱", "怎么报名"]}]})
+            lazy_response = {
+                "audience_angles": ["异地在职者带着时间安排顾虑在问"],
+                "faq_questions": ["怎么判断机构是否靠谱"],
+            }
+            with patch.object(geo_app, "ai_json", return_value=lazy_response) as ai_json, \
+                    patch.object(geo_app, "run_quality_gate", return_value={"verdict": "pass"}), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="正常文章"):
+                article = geo_app.run_content_generation({"client_id": cid})
+
+            client = geo_app.get_client(cid)
+            self.assertEqual("ai", client["audience_angles"][0]["source"])
+            self.assertTrue(client["audience_angles"][0]["enabled"])
+            self.assertEqual("怎么判断机构是否靠谱", client["faq_questions"][0]["text"])
+            self.assertEqual("异地在职者带着时间安排顾虑在问", article["provenance"]["audience_angle"])
+            self.assertGreaterEqual(ai_json.call_args.args[1], 4000)
+            self.assertIn("哪家靠谱", ai_json.call_args.args[0])
+
+    def test_all_disabled_choices_do_not_trigger_lazy_generation(self):
+        with isolated_content_app_data():
+            cid = "client-disabled-choices"
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": cid, "name": "客户", "brand": "品牌",
+                "audience_angles": [{"text": "已停用角度", "enabled": False, "source": "manual"}],
+                "faq_questions": [{"text": "已停用问题", "enabled": False, "source": "manual"}],
+            }])
+            with patch.object(geo_app, "ai_json") as ai_json, \
+                    patch.object(geo_app, "run_quality_gate", return_value={"verdict": "pass"}), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="正常文章"):
+                article = geo_app.run_content_generation({"client_id": cid})
+
+            ai_json.assert_not_called()
+            self.assertEqual("", article["provenance"]["audience_angle"])
+            self.assertEqual([], article["provenance"]["faq_questions"])
+
+    def test_generation_uses_only_selected_competitor_sections_and_records_subset(self):
+        with isolated_content_app_data():
+            cid = "client-competitor-choices"
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": cid, "name": "客户", "brand": "品牌",
+                "audience_angles": [{"text": "读者顾虑", "enabled": True, "source": "manual"}],
+                "faq_questions": [{"text": "怎么核验", "enabled": True, "source": "manual"}],
+                "competitor_rules": {"must_use": ["乙机构"], "banned": ["丙机构"]},
+            }])
+            sources = {"customer_material_text": "客户资料", "content_upload_text": "", "files": [],
+                       "competitor_markdown": "# 甲机构\n甲资料\n# 乙机构\n乙资料\n# 丙机构\n丙资料\n# 丁机构\n丁资料"}
+            captured = []
+            def brief(sample, **kwargs):
+                captured.append(kwargs["competitor_markdown"])
+                return valid_brief()
+            with patch.object(geo_app, "read_content_generation_sources", return_value=sources), \
+                    patch.object(geo_app, "generate_planning_brief", side_effect=brief), \
+                    patch.object(geo_app, "run_quality_gate", return_value={"verdict": "pass"}), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="正常文章"):
+                article = geo_app.run_content_generation({"client_id": cid})
+
+            self.assertIn("乙机构", article["provenance"]["competitor_names"])
+            self.assertNotIn("丙机构", article["provenance"]["competitor_names"])
+            self.assertIn("# 乙机构", captured[0])
+            self.assertNotIn("# 丙机构", captured[0])
+
+    def test_failed_lazy_choice_response_does_not_persist_or_block_generation(self):
+        with isolated_content_app_data():
+            cid = "client-lazy-failure"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌"}])
+            with patch.object(geo_app, "ai_json", side_effect=ValueError("bad_json")), \
+                    patch.object(geo_app, "run_quality_gate", return_value={"verdict": "pass"}), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="正常文章"):
+                article = geo_app.run_content_generation({"client_id": cid})
+
+            self.assertNotIn("audience_angles", geo_app.get_client(cid))
+            self.assertNotIn("faq_questions", geo_app.get_client(cid))
+            self.assertEqual("", article["provenance"]["audience_angle"])
+
+    def test_content_options_endpoint_returns_live_competitor_candidates(self):
+        with isolated_content_app_data():
+            cid = "client-options"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌"}])
+            source_dir = geo_app.competitor_package_output_dir(cid)
+            source_dir.mkdir(parents=True, exist_ok=True)
+            (source_dir / "latest_web_competitors.md").write_text("# 甲机构\n资料\n# 乙机构\n资料", encoding="utf-8")
+
+            response = geo_app.app.test_client().get(f"/api/clients/{cid}/content-options")
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(["甲机构", "乙机构"], response.get_json()["competitor_candidates"])
+
+    def test_content_generate_persists_brief_and_matching_provenance(self):
+        with isolated_content_app_data():
+            cid = "client-new-chain"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "education", "audience_angles": ["异地在职者"], "faq_questions": ["问题一", "问题二", "问题三"]}])
+            geo_app.save(geo_app.F_GROUPS, {cid: [{"id": "g1", "questions": ["问题一", "问题二", "问题三"]}]})
+            client = geo_app.app.test_client()
+            with patch("services.brief_builder.FREE_SLOT_PROBABILITY", 0), \
+                    patch("services.brief_builder.FAQ_PROBABILITY", 1), \
+                    patch.object(geo_app, "generate_planning_brief", return_value=valid_brief()), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="生成文章"):
+                response = client.post("/api/content/generate", json={"client_id": cid, "opinion": "按资料写", "article_type": "对比型"})
+
+            self.assertEqual(response.status_code, 200)
+            article = response.get_json()["article"]
+            self.assertEqual(article["brief"], valid_brief())
+            self.assertTrue(article["provenance"]["entries"]["skeleton"]["id"])
+            self.assertTrue(article["provenance"]["entries"]["opening_module"]["id"])
+            self.assertEqual(article["provenance"]["audience_angle"], "异地在职者")
+            self.assertEqual(set(article["provenance"]["faq_questions"]), {"问题一", "问题二", "问题三"})
+
+    def test_content_generation_shared_entry_reads_configured_faq_questions(self):
+        with isolated_content_app_data():
+            cid = "client-shared-entry"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "education", "faq_questions": ["问题一", "问题二", "问题三"]}])
+            geo_app.save(geo_app.F_GROUPS, {cid: [{"id": "g1", "questions": ["问题一", "问题二", "问题三"]}]})
+            with patch("services.brief_builder.FREE_SLOT_PROBABILITY", 0), \
+                    patch("services.brief_builder.FAQ_PROBABILITY", 1), \
+                    patch.object(geo_app, "ai_deepseek_pro", return_value="生成文章"):
+                result = geo_app.run_content_generation({
+                    "client_id": cid,
+                    "opinion": "按资料写",
+                    "article_type": "对比型",
+                })
+
+            self.assertEqual(set(result["provenance"]["faq_questions"]), {"问题一", "问题二", "问题三"})
+            self.assertEqual(set(result["sampling"]["faq_questions"]), {"问题一", "问题二", "问题三"})
+            self.assertEqual(geo_app.load_content_session(cid)["articles"][0]["id"], result["id"])
+
+    def test_content_generate_brief_or_writer_failure_leaves_no_article(self):
+        with isolated_content_app_data():
+            cid = "client-no-partial"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "education"}])
+            client = geo_app.app.test_client()
+            with patch.object(geo_app, "generate_planning_brief", side_effect=ValueError("brief_failed")):
+                failed_brief = client.post("/api/content/generate", json={"client_id": cid, "opinion": "按资料写"})
+            with patch.object(geo_app, "generate_planning_brief", return_value=valid_brief()), \
+                    patch.object(geo_app, "ai_deepseek_pro", side_effect=["", ""]):
+                failed_writer = client.post("/api/content/generate", json={"client_id": cid, "opinion": "按资料写"})
+
+            self.assertEqual(failed_brief.status_code, 500)
+            self.assertEqual(failed_writer.status_code, 500)
+            self.assertEqual(geo_app.load_content_session(cid)["articles"], [])
+
+    def test_content_generate_keeps_full_selected_material_packages(self):
+        with isolated_content_app_data():
             cid = "client-full-material-packages"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
             output_dir = geo_app.material_package_output_dir(cid)
@@ -413,14 +618,13 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertIn("WEB_PACKAGE_TAIL_MARKER", payload)
 
     def test_content_generate_persists_to_sqlite_history_store(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-sqlite"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
 
             with patch.object(geo_app, "ai_deepseek_pro", return_value="SQLite article", create=True):
                 response = geo_app.app.test_client().post(
-                    "/api/content/generate",
-                    json={"client_id": cid, "opinion": "write a sqlite-backed article"},
+                    "/api/content/generate", json={"client_id": cid},
                 )
 
             db_path = os.path.splitext(geo_app.F_CONTENT_GENERATIONS)[0] + ".sqlite3"
@@ -431,9 +635,155 @@ class CoreFunctionTests(unittest.TestCase):
                 [item["content"] for item in geo_app.load_content_session(cid)["articles"]],
                 ["SQLite article"],
             )
+            self.assertNotIn("operator_opinion", response.get_json()["article"])
 
-    def test_content_generate_includes_sample_links_and_selected_top_articles(self):
-        with isolated_app_data():
+    def test_content_generation_persists_optional_batch_id_without_subtype(self):
+        with isolated_content_app_data():
+            cid = "client-batch-id"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Brand"}])
+            with patch.object(geo_app, "ai_deepseek_pro", return_value="Neutral title\nNeutral body"), \
+                    patch.object(geo_app, "ai_json", return_value={"checks": []}):
+                article = geo_app.run_content_generation({"client_id": cid}, batch_id="batch-1")
+
+            self.assertEqual("batch-1", article["batch_id"])
+            self.assertNotIn("article_subtype", article)
+            self.assertEqual("batch-1", geo_app.load_content_session(cid)["articles"][0]["batch_id"])
+
+    def test_content_generate_batch_validates_count_and_queues_allowed_counts(self):
+        with isolated_content_app_data():
+            cid = "client-batch-route"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Brand"}])
+            client = geo_app.app.test_client()
+            for count in (0, 2, 4, 6, 11):
+                response = client.post("/api/content/generate_batch", json={"client_id": cid, "count": count})
+                self.assertEqual(400, response.status_code)
+            with patch.object(geo_app, "queue_content_batch_generation_job", side_effect=lambda payload, count, created_by="": {
+                "job_id": "job-1", "batch_id": "batch-1", "client_id": cid, "count": count,
+                "status": "queued", "cancel_requested": False, "items": [],
+            }) as queued:
+                for count in (1, 3, 5):
+                    response = client.post("/api/content/generate_batch", json={"client_id": cid, "count": count})
+                    self.assertEqual(200, response.status_code)
+                    self.assertEqual(count, response.get_json()["job"]["count"])
+                self.assertEqual(3, queued.call_count)
+
+    def test_content_generate_persists_quality_gate_report(self):
+        with isolated_content_app_data():
+            cid = "client-gate-report"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Yishengxue"}])
+            with patch.object(geo_app, "ai_deepseek_pro", return_value="Neutral title\nNeutral body"), \
+                    patch.object(geo_app, "ai_json", return_value={"checks": []}) as gate_llm:
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate", json={"client_id": cid, "opinion": "write a neutral article", "article_type": "介绍型"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            article = response.get_json()["article"]
+            self.assertTrue(article["gate_report"])
+            self.assertEqual(article["gate_report"]["llm_layer_status"], "passed")
+            self.assertGreaterEqual(gate_llm.call_args.args[1], 4000)
+            self.assertEqual(geo_app.load_content_session(cid)["articles"][0]["gate_report"], article["gate_report"])
+
+    def test_content_generate_persists_blocked_brand_title(self):
+        with isolated_content_app_data():
+            cid = "client-gate-blocked"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "翼升学", "brand": "翼升学"}])
+            with patch.object(geo_app, "ai_deepseek_pro", return_value="翼升学服务介绍\n正文"), \
+                    patch.object(geo_app, "ai_json", return_value={"checks": []}):
+                response = geo_app.app.test_client().post(
+                    "/api/content/generate", json={"client_id": cid, "opinion": "写介绍", "article_type": "介绍型"},
+                )
+
+            self.assertEqual(response.status_code, 200)
+            article = response.get_json()["article"]
+            self.assertEqual(article["generation_status"], "门禁拦截")
+            self.assertEqual(article["gate_report"]["verdict"], "blocked")
+            self.assertEqual(len(geo_app.load_content_session(cid)["articles"]), 1)
+
+    def test_quality_gate_competitor_names_skips_generic_markdown_header(self):
+        names = geo_app.quality_gate_competitor_names("# 竞品公开资料整理包\n## 翼程教育\n")
+        self.assertEqual(names, ["翼程教育"])
+
+    def test_content_generation_manual_edit_and_ai_revision_keep_version_chain(self):
+        with isolated_content_app_data():
+            cid = "client-content-revision"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Brand"}])
+            geo_app.append_content_generation(
+                cid,
+                {
+                    "id": "root-article", "title": "Original title", "content": "Original title\nOriginal body",
+                    "operator_opinion": "Original request", "model": "deepseek-chat", "article_type": "介绍型",
+                    "created_at": "2026-07-21 10:00:00", "brief": valid_brief(), "provenance": {"parent_type": "介绍型"},
+                    "gate_report": {"verdict": "blocked", "code_layer": [{"check_id": "title_brand", "passed": False}]},
+                },
+                {"role": "user", "content": "Original request", "created_at": "2026-07-21 10:00:00"},
+                {"role": "assistant", "content": "Original title\nOriginal body", "created_at": "2026-07-21 10:00:00", "article_id": "root-article"},
+            )
+            client = geo_app.app.test_client()
+            with patch.object(geo_app, "content_article_gate_report", side_effect=AssertionError("manual_must_not_gate")), \
+                    patch.object(geo_app, "run_quality_gate", side_effect=AssertionError("manual_must_not_gate")):
+                edited = client.put(
+                    f"/api/content/generations/root-article?client_id={cid}",
+                    json={"content": "Edited title\nEdited body"},
+                )
+            self.assertEqual(edited.status_code, 200)
+            edited_article = edited.get_json()["article"]
+            self.assertEqual(edited_article["title"], "Edited title")
+            self.assertEqual(edited_article["generation_status"], "人工已编辑")
+            self.assertEqual(edited_article["gate_report"]["verdict"], "blocked")
+
+            captured = []
+            def fake_writer(messages, max_tokens=6000):
+                captured.append(messages)
+                return "Revised title\nRevised body"
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_writer), \
+                    patch.object(geo_app, "ai_json", return_value={"checks": []}):
+                revised = client.post(
+                    f"/api/content/generations/root-article/ai_modify?client_id={cid}",
+                    json={"instruction": "Add a practical example"},
+                )
+
+            self.assertEqual(revised.status_code, 200)
+            article = revised.get_json()["article"]
+            self.assertEqual(article["parent_id"], "root-article")
+            self.assertEqual(article["root_id"], "root-article")
+            self.assertEqual(article["modify_instruction"], "Add a practical example")
+            prompt = json.dumps(captured[0], ensure_ascii=False)
+            self.assertIn("Edited body", prompt)
+            self.assertIn("Add a practical example", prompt)
+
+            with patch.object(geo_app, "ai_deepseek_pro", side_effect=fake_writer), \
+                    patch.object(geo_app, "ai_json", return_value={"checks": []}):
+                second = client.post(
+                    f"/api/content/generations/{article['id']}/ai_modify?client_id={cid}",
+                    json={"instruction": "Shorten the ending"},
+                )
+
+            self.assertEqual(second.status_code, 200)
+            self.assertIn("Add a practical example", json.dumps(captured[1], ensure_ascii=False))
+            self.assertEqual(len(geo_app.load_content_session(cid)["articles"]), 3)
+
+    def test_content_generation_manual_edit_returns_json_error_when_store_fails(self):
+        with isolated_content_app_data():
+            cid = "client-manual-error"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "Client", "brand": "Brand"}])
+            geo_app.append_content_generation(
+                cid,
+                {"id": "article-1", "title": "Old", "content": "Old\nBody", "created_at": "2026-07-21 10:00:00"},
+                {}, {},
+            )
+            with patch.object(geo_app.ContentGenerationStore, "update_article_content", side_effect=RuntimeError("store_failed")):
+                response = geo_app.app.test_client().put(
+                    f"/api/content/generations/article-1?client_id={cid}",
+                    json={"content": "New\nBody"},
+                )
+
+            self.assertEqual(500, response.status_code)
+            self.assertEqual("store_failed", response.get_json()["error"])
+
+    def test_content_generate_drops_legacy_sample_metadata(self):
+        with isolated_content_app_data():
             cid = "client-1"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "苏韵汽车音响"}])
             captured_messages = []
@@ -462,15 +812,16 @@ class CoreFunctionTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             prompt_payload = json.dumps(captured_messages[0], ensure_ascii=False)
-            self.assertIn("https://example.com/sample-a", prompt_payload)
-            self.assertIn("汽车音响改装Top20样例", prompt_payload)
-            self.assertIn("懂车帝", prompt_payload)
+            self.assertNotIn("https://example.com/sample-a", prompt_payload)
+            self.assertNotIn("汽车音响改装Top20样例", prompt_payload)
             article = response.get_json()["article"]
-            self.assertEqual(article["sample_link_count"], 1)
-            self.assertEqual(article["selected_article_count"], 1)
+            self.assertNotIn("sample_link_count", article)
+            self.assertNotIn("selected_article_count", article)
+            self.assertNotIn("sample_links", article)
+            self.assertNotIn("selected_articles", article)
 
     def test_content_generate_uses_explicit_article_type(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-article-type"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             captured_messages = []
@@ -491,11 +842,11 @@ class CoreFunctionTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             payload = json.dumps(captured_messages[0], ensure_ascii=False)
-            self.assertIn("文章类型：介绍型", payload)
-            self.assertIn("标题必须包含品牌名：翼升学", payload)
+            self.assertNotIn("文章类型：介绍型", payload)
+            self.assertEqual(response.get_json()["article"]["article_type"], "介绍型")
 
     def test_content_generate_history_is_isolated_by_article_type_but_listing_is_combined(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-history-type"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             captured_messages = []
@@ -510,7 +861,6 @@ class CoreFunctionTests(unittest.TestCase):
                     "/api/content/generate",
                     json={
                         "client_id": cid,
-                        "opinion": "写一篇对比型文章",
                         "article_type": "对比型",
                     },
                 )
@@ -518,7 +868,6 @@ class CoreFunctionTests(unittest.TestCase):
                     "/api/content/generate",
                     json={
                         "client_id": cid,
-                        "opinion": "写一篇介绍型文章",
                         "article_type": "介绍型",
                     },
                 )
@@ -526,7 +875,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(first.status_code, 200)
             self.assertEqual(second.status_code, 200)
             second_payload = json.dumps(captured_messages[1], ensure_ascii=False)
-            self.assertIn("写一篇介绍型文章", second_payload)
+            self.assertNotIn("写一篇介绍型文章", second_payload)
             self.assertNotIn("对比型旧文章", second_payload)
             self.assertNotIn("写一篇对比型文章", second_payload)
 
@@ -536,7 +885,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual([a["content"] for a in articles], ["介绍型新文章", "对比型旧文章"])
 
     def test_content_generate_history_is_isolated_by_selected_day(self):
-        with isolated_app_data():
+        with isolated_content_app_data():
             cid = "client-history-day"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "河北翼升学", "brand": "翼升学"}])
             geo_app.append_content_generation(
@@ -571,7 +920,6 @@ class CoreFunctionTests(unittest.TestCase):
                     "/api/content/generate",
                     json={
                         "client_id": cid,
-                        "opinion": "今天重新生成一篇对比型文章",
                         "article_type": "对比型",
                         "history_date": "2026-07-07",
                     },
@@ -579,7 +927,7 @@ class CoreFunctionTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             payload = json.dumps(captured_messages[0], ensure_ascii=False)
-            self.assertIn("今天重新生成一篇对比型文章", payload)
+            self.assertNotIn("今天重新生成一篇对比型文章", payload)
             self.assertNotIn("昨天的运营意见", payload)
             self.assertNotIn("昨天的对比型旧文章", payload)
 
@@ -621,6 +969,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertEqual(data["articles"], [])
             self.assertEqual(geo_app.load_content_session(cid, history_date="2026-07-07")["messages"], [])
 
+    @unittest.skip("Step E replaces legacy writer templates with planning briefs")
     def test_content_generation_system_prompt_starts_with_default_geo_rules(self):
         messages = geo_app.build_content_generation_messages(
             {"id": "client-1", "name": "客户", "brand": "测试品牌"},
@@ -642,6 +991,7 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("样例文章只能作为写法参考", system_prompt)
         self.assertIn("不要编造案例、资质、价格、地址、设备、评价或承诺", system_prompt)
 
+    @unittest.skip("Step E replaces legacy writer templates with planning briefs")
     def test_content_generation_defaults_to_comparison_type_prompt(self):
         messages = geo_app.build_content_generation_messages(
             {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
@@ -719,49 +1069,7 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertNotIn("快速匹配", payload)
         self.assertNotIn("避坑", payload)
 
-    def test_content_generation_can_insert_reference_plugin_subtype(self):
-        messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
-            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
-            [],
-            "请参考引用情报插件写一篇内容",
-            article_type="对比型",
-            article_subtype="本地机构筛选标准型",
-            article_subtype_plugin={
-                "subtype_name": "本地机构筛选标准型",
-                "prompt_text": "先按机构类型和适合人群拆解。",
-                "few_shot": "用户问怎么选时，先写选择困难，再按本地老牌机构和连锁标准化机构展开。",
-            },
-        )
-
-        payload = json.dumps(messages, ensure_ascii=False)
-        self.assertIn("【文章子类型：本地机构筛选标准型】", payload)
-        self.assertIn("先按机构类型和适合人群拆解。", payload)
-        self.assertIn("用户问怎么选时，先写选择困难", payload)
-        self.assertNotIn("【攻略对比型展开 few-shot 示例】", payload)
-
-    def test_content_generation_can_insert_reference_plugin_subtype_for_intro_type(self):
-        messages = geo_app.build_content_generation_messages(
-            {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
-            {"text": "客户资料PDF：翼升学提供成人学历提升服务。", "files": ["profile.pdf"]},
-            [],
-            "请参考引用情报插件写一篇品牌介绍",
-            article_type="介绍型",
-            article_subtype="痛点回应介绍型",
-            article_subtype_plugin={
-                "parent_type": "介绍型",
-                "subtype_name": "痛点回应介绍型",
-                "prompt_text": "先写用户顾虑，再用品牌资料逐项回应。",
-                "few_shot": "用户担心服务是否正规时，先写选择顾虑，再按流程、团队和售后说明品牌如何回应。",
-            },
-        )
-
-        payload = json.dumps(messages, ensure_ascii=False)
-        self.assertIn("文章类型：介绍型", payload)
-        self.assertIn("【文章子类型：痛点回应介绍型】", payload)
-        self.assertIn("先写用户顾虑，再用品牌资料逐项回应。", payload)
-        self.assertIn("用户担心服务是否正规时", payload)
-
+    @unittest.skip("Step E moves article-shape requirements to planning briefs")
     def test_content_generation_intro_type_requires_brand_title_and_brand_body(self):
         messages = geo_app.build_content_generation_messages(
             {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
@@ -785,6 +1093,7 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertIn("避免营销口号", payload)
         self.assertIn("不要写成医院榜单、第三方排名或多机构对比", payload)
 
+    @unittest.skip("Step E moves article-shape requirements to planning briefs")
     def test_content_generation_does_not_parse_article_type_from_opinion(self):
         messages = geo_app.build_content_generation_messages(
             {"id": "client-1", "name": "河北翼升学", "brand": "翼升学"},
@@ -2819,42 +3128,10 @@ class FlaskApiTests(unittest.TestCase):
             else:
                 os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = old_value
 
-    def test_reference_intelligence_plugins_remain_readable_for_content_generation(self):
+    def test_retired_reference_endpoint_returns_404(self):
         with isolated_app_data():
-            client = geo_app.app.test_client()
-            geo_app.save(geo_app.reference_intelligence_path("c1", "2026-07-08", "task-1"), {
-                "client_id": "c1",
-                "date": "2026-07-08",
-                "task_id": "task-1",
-                "clusters": [],
-                "plugins": [
-                    {
-                        "parent_type": "介绍型",
-                        "subtype_name": "需求场景匹配型",
-                        "prompt_text": "先按用户需求场景拆分。",
-                        "few_shot": "用户问预算时，先列选择标准。",
-                        "source_articles": [
-                            {
-                                "title": "来源文章",
-                                "url": "https://example.com/source",
-                            }
-                        ],
-                    }
-                ],
-            })
-
-            response = client.get("/api/reference_intelligence/plugins?client_id=c1&date=2026-07-08&task_id=task-1")
-            self.assertEqual(response.status_code, 200)
-            data = response.get_json()
-            self.assertEqual(data["clusters"], [])
-            self.assertEqual(data["plugins"][0]["parent_type"], "介绍型")
-            self.assertEqual(data["plugins"][0]["subtype_name"], "需求场景匹配型")
-            self.assertEqual(data["plugins"][0]["prompt_text"], "先按用户需求场景拆分。")
-            self.assertEqual(data["plugins"][0]["few_shot"], "用户问预算时，先列选择标准。")
-            self.assertEqual(data["plugins"][0]["source_articles"], [
-                {"title": "来源文章", "url": "https://example.com/source"}
-            ])
-
+            response = geo_app.app.test_client().get("/api/reference_intelligence/plugins?client_id=c1")
+            self.assertEqual(response.status_code, 404)
     def test_pattern_library_scopes_and_entries_include_latest_ingest_summary(self):
         with isolated_app_data() as tmp:
             library = geo_app.PatternLibrary(os.path.join(tmp, "pattern_library"))
@@ -2869,6 +3146,13 @@ class FlaskApiTests(unittest.TestCase):
                     "citation_count": 3,
                     "risk_marks": ["AI 生成痕迹明显"],
                 },
+            )
+            global_entry = library.create_candidate(
+                "global",
+                "module",
+                "答案前置型开头",
+                {"type": "开头", "pattern": "先给答案"},
+                {"url": "seed://OP-G02", "title": "答案前置型开头 | seed"},
             )
             report_path = os.path.join(
                 geo_app.F_REFERENCE_INTELLIGENCE,
@@ -2887,6 +3171,7 @@ class FlaskApiTests(unittest.TestCase):
             scopes_response = self.client.get("/api/pattern-library/scopes")
             self.assertEqual(scopes_response.status_code, 200)
             self.assertEqual(scopes_response.get_json()["scopes"], [
+                {"scope": "global", "entry_count": 1},
                 {"scope": "industry:成人教育", "entry_count": 1}
             ])
 
@@ -2903,6 +3188,16 @@ class FlaskApiTests(unittest.TestCase):
                 "matched": 1,
                 "errors": 0,
             })
+
+            global_entries_response = self.client.get("/api/pattern-library/entries?scope=global")
+            self.assertEqual(global_entries_response.status_code, 200)
+            self.assertEqual(global_entries_response.get_json()["entries"][0]["id"], global_entry["id"])
+
+            retired = self.client.post("/api/pattern-library/status", json={
+                "scope": "global", "entry_id": global_entry["id"], "status": "retired",
+            })
+            self.assertEqual(retired.status_code, 200)
+            self.assertEqual(retired.get_json()["entry"]["status"], "retired")
 
     def test_pattern_library_status_update_rejects_invalid_and_missing_entries(self):
         with isolated_app_data() as tmp:

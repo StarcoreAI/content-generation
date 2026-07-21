@@ -11,18 +11,48 @@ def article(article_id, created_at="2026-01-01 10:00:00"):
         "id": article_id,
         "title": f"Title {article_id}",
         "content": f"Content {article_id}",
-        "operator_opinion": f"Opinion {article_id}",
         "model": "deepseek-chat",
         "material_count": 1,
-        "sample_link_count": 1,
-        "selected_article_count": 1,
-        "sample_links": ["https://example.com/sample"],
-        "selected_articles": [{"title": "Sample", "url": "https://example.com/a"}],
         "created_at": created_at,
     }
 
 
 class ContentGenerationStoreTests(unittest.TestCase):
+    def test_provenance_columns_are_idempotent_and_round_trip(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+            with store._connection() as conn:
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_articles)")}
+            self.assertTrue({
+                "parent_id", "root_id", "batch_id", "brief_json", "provenance_json",
+                "gate_report_json", "modify_instruction",
+            }.issubset(columns))
+
+            store.append_generation(
+                "client-a",
+                {
+                    **article("a1"),
+                    "parent_id": "parent-1",
+                    "root_id": "root-1",
+                    "batch_id": "batch-1",
+                    "brief": {"sections": [{"id": 1}]},
+                    "provenance": {"skeleton_id": "s1"},
+                    "gate_report": {"ok": True},
+                    "modify_instruction": "只改标题",
+                },
+                {"role": "user", "content": "request"},
+                {"role": "assistant", "content": "article", "article_id": "a1"},
+            )
+
+            saved = store.load_session("client-a")["articles"][0]
+            self.assertEqual(saved["parent_id"], "parent-1")
+            self.assertEqual(saved["root_id"], "root-1")
+            self.assertEqual(saved["batch_id"], "batch-1")
+            self.assertEqual(saved["brief"], {"sections": [{"id": 1}]})
+            self.assertEqual(saved["provenance"], {"skeleton_id": "s1"})
+            self.assertEqual(saved["gate_report"], {"ok": True})
+            self.assertEqual(saved["modify_instruction"], "只改标题")
+
     def test_append_generation_adds_rows_without_overwriting(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
@@ -138,6 +168,36 @@ class ContentGenerationStoreTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in session["articles"]], ["a2"])
             self.assertEqual([item["content"] for item in session["messages"]], ["request a2", "article a2"])
             self.assertFalse(store.delete_generation("client-a", "missing"))
+
+    def test_manual_edit_and_revision_lineage_preserve_original(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+            store.append_generation(
+                "client-a",
+                {**article("root"), "article_type": "介绍型"},
+                {"role": "user", "content": "original request"},
+                {"role": "assistant", "content": "original article", "article_id": "root"},
+            )
+            edited = store.update_article_content("client-a", "root", "Edited title\nEdited body")
+            store.append_generation(
+                "client-a",
+                {
+                    **article("revision", "2026-01-01 10:05:00"),
+                    "content": "Revision body",
+                    "parent_id": "root",
+                    "root_id": "root",
+                    "modify_instruction": "Add a practical example",
+                    "article_type": "介绍型",
+                },
+                {"role": "user", "content": "Add a practical example"},
+                {"role": "assistant", "content": "Revision body", "article_id": "revision"},
+            )
+
+            saved = store.load_session("client-a")["articles"]
+            self.assertEqual(saved[0]["content"], "Edited title\nEdited body")
+            self.assertEqual(saved[0]["title"], "Edited title")
+            self.assertEqual([item["id"] for item in store.load_revision_lineage("client-a", "revision")], ["root", "revision"])
+            self.assertEqual(store.load_revision_lineage("client-a", "revision")[1]["modify_instruction"], "Add a practical example")
 
     def test_load_session_imports_legacy_json_once_for_client(self):
         with tempfile.TemporaryDirectory() as tmp:

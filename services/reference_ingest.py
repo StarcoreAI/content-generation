@@ -11,6 +11,10 @@ CITABILITY_VOCABULARY = [
     {"tag": "提示以官方渠道核验", "desc": "引导读者去官方渠道确认关键信息"},
     {"tag": "风险与规则前置提示", "desc": "把规则、风险、限制条件放在推荐之前讲"},
     {"tag": "可执行核验清单", "desc": "给出报名/付款前可逐项执行的核验动作"},
+    {"tag": "问题式小标题", "desc": "H2/小标题直接写成用户会问的问题，与首句直答形成可整体摘走的问答对"},
+    {"tag": "答案前置直答", "desc": "开篇或小节首句 40-60 字内直接回答核心问题，先结论后展开"},
+    {"tag": "事实密度锚点", "desc": "数据、日期、实体名紧邻出现形成可引用的原子事实"},
+    {"tag": "更新时间标注", "desc": "标注发布/更新日期或信息核验时间，提供时效性信号"},
 ]
 CONTROLLED_CITABILITY_TAGS = {item["tag"] for item in CITABILITY_VOCABULARY}
 
@@ -318,7 +322,16 @@ def ingest_anatomy_cards(cards, *, library, scope, groups_by_id, ai_json_fn):
         items = _pattern_items(card)
         citability_items = _citability_items(card)
         entries = library.list_entries(scope)
-        comparable_entries = [entry for entry in entries if entry.get("kind") in {"skeleton", "module"}]
+        global_entries = library.list_entries("global")
+        comparable_entries = [
+            entry for entry in entries + global_entries
+            if entry.get("kind") in {"skeleton", "module"}
+        ]
+        entry_scopes = {
+            entry["id"]: entry_scope
+            for entry_scope, scoped_entries in ((scope, entries), ("global", global_entries))
+            for entry in scoped_entries
+        }
         other_entries = [
             entry for entry in entries
             if entry.get("kind") == "checklist" and _text(entry.get("name")).startswith("其他:")
@@ -355,7 +368,7 @@ def ingest_anatomy_cards(cards, *, library, scope, groups_by_id, ai_json_fn):
             if decision["match"]:
                 existing = next(entry for entry in comparable_entries if entry["id"] == decision["match"])
                 before = existing["evidence_count"]
-                entry = library.add_evidence(scope, existing["id"], source, payload_update=item["payload"])
+                entry = library.add_evidence(entry_scopes[existing["id"]], existing["id"], source, payload_update=item["payload"])
                 action = "matched"
             else:
                 before = 0

@@ -57,6 +57,7 @@
   <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
   <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
+  <div class="s-nav" onclick="navTo('quality',this)"><i class="ti ti-shield-check"></i>质量门禁</div>
   <div class="s-sec">配置</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
   <div class="s-nav" onclick="navTo('settings',this)"><i class="ti ti-settings"></i>系统设置</div>
@@ -299,7 +300,7 @@
   <div class="pg-hd">
     <div>
       <div class="pg-title">✦ <em>引用情报分析</em></div>
-      <div class="pg-sub">从高频引用文章筛选可学写法、逐篇解剖并沉淀到待审核写法库；已生成插件仍供内容生产使用</div>
+      <div class="pg-sub">从高频引用文章筛选可学写法、逐篇解剖并沉淀到待审核写法库</div>
     </div>
     <div class="acts">
       <input type="date" id="referenceDate" onchange="loadReferenceIntelligence()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
@@ -318,16 +319,6 @@
     <div style="height:9px;background:rgba(109,92,247,.1);border-radius:20px;overflow:hidden">
       <div id="referenceAnalyzeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--pri),var(--pri-l));border-radius:20px;transition:width .25s linear"></div>
     </div>
-  </div>
-  <div class="info-banner">
-    当前插件为历史已落盘数据，内容生产仍会按父类型展示并使用；新一轮分析会依次执行抓取、过滤定性、逐篇解剖和入库比对。
-  </div>
-  <div class="card">
-    <div class="card-hd">
-      <span class="card-title">引用情报插件</span>
-      <span style="font-size:11px;color:var(--text3)" id="referencePluginMeta"></span>
-    </div>
-    <div id="referencePluginList"><div class="empty"><i class="ti ti-bulb"></i><p>请选择客户后查看引用情报</p></div></div>
   </div>
   <section class="reference-pattern-library">
   <div class="pg-hd">
@@ -421,7 +412,7 @@
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">内容生产资料参考 × 运营意见多轮生成</div></div>
+    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">抽样 → 简报 → 写作 → 质量门禁</div></div>
   </div>
   <!-- 深度分析导入提示 -->
   <div id="ct-import-banner" style="display:none;padding:10px 14px;background:linear-gradient(135deg,rgba(109,92,247,.08),rgba(244,114,182,.06));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm);margin-bottom:14px;font-size:12px;font-weight:700;color:var(--pri)"></div>
@@ -441,25 +432,16 @@
       <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
         <input type="checkbox" id="useMaterialWebSupplement" checked style="width:auto;accent-color:var(--pri)">使用 AI联网扩展资料
       </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
+        <input type="checkbox" id="useCompetitorMaterials" checked style="width:auto;accent-color:var(--pri)">使用竞品资料
+      </label>
     </div>
     <div id="contentMaterialList"><div style="font-size:11px;color:var(--text3)">暂无内容生产资料</div></div>
   </div>
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">优质样例文章</span><div class="card-sub">可粘贴运营认可的样例链接，也可从当天高频引用 Top20 中选择</div></div>
-      <button class="btn btn-o btn-sm" onclick="loadContentTop20Samples()">刷新 Top20</button>
-    </div>
-    <div class="form-row">
-      <div class="fld"><label>样例文章链接（每行一个）</label><textarea id="contentSampleLinks" rows="3" placeholder="https://example.com/article-a&#10;https://example.com/article-b"></textarea></div>
-    </div>
-    <div style="font-size:11px;font-weight:800;color:var(--text2);margin-bottom:8px">当天高频引用 Top20</div>
-    <div id="contentTop20Samples"><div style="font-size:11px;color:var(--text3)">选择客户后自动加载当天 Top20</div></div>
-  </div>
-
-  <div class="card">
-    <div class="card-hd">
-      <div><span class="card-title">运营意见</span><div class="card-sub">系统会使用上方已选择资料，并只带上所选日期的历史生成内容</div></div>
+      <div><span class="card-title">生成配置</span><div class="card-sub">系统会基于已选资料抽样、生成简报并写作，再运行质量门禁；文章修改请到质量门禁操作。</div></div>
     </div>
     <div class="form-row">
       <div class="fld">
@@ -469,31 +451,43 @@
           <button type="button" class="btn btn-o btn-sm" id="contentArticleTypeIntro" onclick="selectContentArticleType('介绍型')">介绍型</button>
         </div>
       </div>
-      <div class="fld" id="contentArticleSubtypeWrap">
-        <label>文章子类型</label>
-        <div id="contentArticleSubtypes" style="display:flex;gap:8px;flex-wrap:wrap"></div>
-        <div id="contentArticleSubtypeMeta" style="font-size:10px;color:var(--text3);margin-top:5px">对比型默认使用攻略对比型；引用情报插件会按父类型显示在这里</div>
-      </div>
       <div class="fld" style="max-width:180px">
         <label>历史日期</label>
-        <input type="date" id="contentHistoryDate" onchange="loadContentGenerations();loadContentSubtypePlugins()">
+        <input type="date" id="contentHistoryDate" onchange="loadContentGenerations()">
       </div>
     </div>
-    <div class="form-row">
-      <div class="fld"><label>运营修改意见 / 生成要求</label><textarea id="contentOpinion" rows="7" placeholder="例如：写一篇面向扬州车主的汽车音响升级宣传文章，语气自然一点，重点写施工流程、调音能力和到店体验。"></textarea></div>
-    </div>
     <div style="display:flex;align-items:center;gap:12px">
+      <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:var(--text2)">生成篇数
+        <select id="contentGenerationCount" style="width:auto;padding:7px 9px">
+          <option value="1">1 篇</option>
+          <option value="3">3 篇</option>
+          <option value="5" selected>5 篇</option>
+        </select>
+      </label>
       <button class="btn btn-p" id="btnContentGenerate" onclick="generateContentArticle()">
         <span class="spin" id="spContentGenerate" style="display:none"></span> 生成文章
       </button>
       <span style="font-size:11px;color:var(--text3)" id="contentGenerateStatus"></span>
     </div>
+    <div id="contentBatchProgress" style="display:none;margin-top:10px"></div>
   </div>
   <div class="card">
     <div class="card-hd">
       <span class="card-title">生成结果 <span id="content-article-count" style="color:var(--text3);font-size:11px"></span></span>
     </div>
     <div id="contentArticleList"><div class="empty"><i class="ti ti-writing"></i><p>暂无文章，请先生成</p></div></div>
+  </div>
+</div>
+
+<!-- ═══ 质量门禁 ═══ -->
+<div class="page" id="page-quality">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>质量门禁</em></div><div class="pg-sub">展示该客户所有已生产文章；审核不通过的文章也保留，供人工编辑或 AI 修改。</div></div>
+    <button class="btn btn-o btn-sm" onclick="loadQualityGateArticles()">刷新</button>
+  </div>
+  <div class="card">
+    <div class="card-hd"><span class="card-title">文章审核列表 <span id="quality-article-count" style="color:var(--text3);font-size:11px"></span></span></div>
+    <div id="qualityArticleList"><div class="empty"><i class="ti ti-shield-check"></i><p>请选择客户后查看全部文章</p></div></div>
   </div>
 </div>
 
@@ -558,6 +552,13 @@
 </div><!-- end shell -->
 
 <div id="toast"></div>
+<div class="content-edit-modal" id="contentEditModal" style="display:none" role="dialog" aria-modal="true">
+  <div class="content-edit-dialog">
+    <div class="card-hd"><span class="card-title" id="contentEditModalTitle"></span><button class="btn btn-o btn-sm" onclick="closeContentEditDialog()">关闭</button></div>
+    <div class="fld"><label id="contentEditModalLabel"></label><textarea id="contentEditModalInput" rows="18"></textarea></div>
+    <div class="acts" style="margin-top:12px"><button class="btn btn-p btn-sm" id="contentEditModalSave" onclick="saveContentEditDialog()">保存</button></div>
+  </div>
+</div>
 
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 </body>

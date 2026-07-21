@@ -134,26 +134,6 @@ class DailyStatsTests(unittest.TestCase):
         )
 
 
-class ContentPromptTests(unittest.TestCase):
-    def test_content_prompt_helpers_normalize_samples(self):
-        from services.content_prompts import (
-            normalize_sample_links,
-            normalize_selected_sample_articles,
-        )
-
-        self.assertEqual(
-            normalize_sample_links("https://a.example\nhttps://a.example, https://b.example"),
-            ["https://a.example", "https://b.example"],
-        )
-        self.assertEqual(
-            normalize_selected_sample_articles([
-                {"title": "Article A", "url": "https://a.example", "platform": "Sohu", "count": 2},
-                {"title": "Article A duplicate", "url": "https://a.example", "platform": "Sohu", "count": 3},
-            ]),
-            [{"title": "Article A", "url": "https://a.example", "platform": "Sohu", "count": 2}],
-        )
-
-
 class RecordStatsTests(unittest.TestCase):
     def test_build_raw_platform_stats_preserves_route_shape(self):
         from services.record_stats import build_raw_platform_stats

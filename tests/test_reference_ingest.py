@@ -4,7 +4,7 @@ from pathlib import Path
 import json
 
 from services.pattern_library import PatternLibrary
-from services.reference_ingest import STAGE2_MAX_TOKENS, build_ingest_prompt, ingest_anatomy_cards
+from services.reference_ingest import CITABILITY_VOCABULARY, STAGE2_MAX_TOKENS, build_ingest_prompt, ingest_anatomy_cards
 
 
 def anatomy_card(group_id, url, name="Decision skeleton", features=None):
@@ -92,6 +92,53 @@ class ReferenceIngestTests(unittest.TestCase):
             self.assertEqual(entries[0]["evidence_count"], 2)
             self.assertEqual(report["items"][0]["action"], "matched")
             self.assertEqual(report["items"][0]["entry_id"], existing["id"])
+
+    def test_global_pattern_is_compared_and_keeps_evidence_in_global_scope(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library = PatternLibrary(Path(tmp), now_fn=lambda: "2026-07-20 12:00:00")
+            scope = "industry:adult_education"
+            global_entry = library.create_candidate(
+                "global", "skeleton", "Shared decision skeleton", {},
+                {"url": "seed://SK-G01", "title": "Shared decision skeleton seed"},
+            )
+            prompts = []
+
+            def fake_ai_json(prompt, max_tokens):
+                prompts.append(prompt)
+                return {"results": [{
+                    "item_key": "skeleton", "match": global_entry["id"], "reason": "same shared pattern",
+                }]}
+
+            report = ingest_anatomy_cards(
+                [anatomy_card("new", "https://example.com/new")],
+                library=library,
+                scope=scope,
+                groups_by_id={"new": group("new", "https://example.com/new")},
+                ai_json_fn=fake_ai_json,
+            )
+
+            self.assertIn(global_entry["name"], prompts[0])
+            self.assertEqual(report["items"][0]["entry_id"], global_entry["id"])
+            self.assertEqual(library.list_entries("global")[0]["evidence_count"], 2)
+            self.assertEqual(library.list_entries(scope), [])
+
+            ingest_anatomy_cards(
+                [anatomy_card("other", "https://example.com/other", name="Industry-only pattern")],
+                library=library,
+                scope=scope,
+                groups_by_id={"other": group("other", "https://example.com/other")},
+                ai_json_fn=lambda prompt, max_tokens: {"results": [{
+                    "item_key": "skeleton", "match": None, "reason": "new industry pattern",
+                }]},
+            )
+
+            self.assertEqual([entry["name"] for entry in library.list_entries(scope)], ["Industry-only pattern"])
+            self.assertEqual(len(library.list_entries("global")), 1)
+
+    def test_citability_vocabulary_includes_seed_additions(self):
+        self.assertTrue({"问题式小标题", "答案前置直答", "事实密度锚点", "更新时间标注"}.issubset(
+            {item["tag"] for item in CITABILITY_VOCABULARY}
+        ))
 
     def test_non_match_creates_candidate_and_features_aggregate_without_llm(self):
         with tempfile.TemporaryDirectory() as tmp:
