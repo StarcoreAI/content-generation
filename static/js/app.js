@@ -1793,9 +1793,8 @@ async function expandCompetitorWeb(force=[]) {
     }
     latestCompetitorWebMarkdown = result.markdown || '';
     renderCompetitorMaterialResult({upload_markdown: latestCompetitorUploadMarkdown, web_markdown: latestCompetitorWebMarkdown});
-    const skipped = result.skipped?.length ? `；已有资料的竞品已跳过：${result.skipped.join('、')}` : '';
     const failed = result.failed?.length ? `；失败：${result.failed.join('、')}` : '';
-    toast(`竞品联网资料整理完成${skipped}${failed}`);
+    toast(`竞品联网资料整理完成；本次名单已覆盖更新${failed}`);
   } catch(e) {
     renderCompetitorMaterialResult({error: e.message});
     toast('竞品联网扩展失败：' + e.message, 'err');

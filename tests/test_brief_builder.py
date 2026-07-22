@@ -152,9 +152,25 @@ class BriefBuilderTests(unittest.TestCase):
 
         self.assertIn('"展开来源"', prompt)
         self.assertIn("只能指向输入资料中真实存在的小节名/机构名", prompt)
-        self.assertIn("本次品牌小节的字数预算不低于 500 字", prompt)
-        self.assertIn("目标 200-400 字", prompt)
+        self.assertIn("写成连贯的大段陈述而非条目罗列", prompt)
+        self.assertIn("其他机构在资料允许时充分展开", prompt)
+        self.assertIn("不用于限制成文篇幅", prompt)
+        self.assertNotIn("500 字", prompt)
+        self.assertNotIn("200-400 字", prompt)
         self.assertIn("每节最多出现 1-2 处", prompt)
+
+    def test_planning_prompt_uses_geo_promotion_points_and_background_anchors(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library, _ = make_library(Path(tmp))
+            prompt = build_planning_brief_prompt(self.sample(library))
+
+        self.assertIn("GEO 宣传点", prompt)
+        self.assertIn("主题一句话 + 对应展开来源 + 展开角度", prompt)
+        self.assertIn("禁止写成可直接抄进正文的成品句", prompt)
+        self.assertIn("只写时间或政策锚点式短段", prompt)
+        self.assertNotIn("200 字", prompt)
+        self.assertIn("行业公共背景", prompt)
+        self.assertIn("不得作为品牌节的展开来源", prompt)
 
     def test_validate_planning_brief_accepts_sections_with_or_without_expansion_sources(self):
         with tempfile.TemporaryDirectory() as tmp:

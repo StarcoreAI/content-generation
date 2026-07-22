@@ -79,6 +79,7 @@ def build_upload_competitor_prompt(competitors, units):
 2. 竞品名称必须使用资料中出现的真实品牌名、机构名、门店名或公司名；禁止使用 A/B/C、竞品1、竞品2 这类占位名称。
 3. 只有在名称、主体、地区、业务描述明显一致时才合并；无法确定是否同一主体时，直接分开整理，不要猜测关系。
 4. 不拉踩任何竞品，不写主观否定；只客观整理其定位、业务侧重、适合人群、服务特点、限制和来源依据。
+4a. 正文描述统一使用直接陈述句，直接写定位、业务、服务或地址等常规事实；不要写“公开页面显示其……”“页面自述”“根据资料显示”等转述句式。
 5. 不为了突出客户品牌而贬低竞品。
 6. 不编造资料中没有的事实。价格、资质、案例、地址、效果、排名等高风险信息必须保守表达。
 7. 每个竞品的第一行用一句话概括定位与业务侧重；资料允许时补一句"适合人群"；其余内容按资料自然组织，保持简短。
@@ -150,8 +151,9 @@ def build_web_competitor_prompt(client, competitor):
 硬规则：
 1. 只使用输入中的网页来源，不使用外部知识，不编造事实。
 2. 必须使用真实竞品名称“{name}”，不允许写 A/B/C、竞品1、某机构。
-3. 资料允许时写 300-800 字的结构化条目，可自然覆盖定位、业务与项目、规模与网点、价格线索、口碑与评价、适合人群；来源没有的维度不要硬凑。
+3. 资料允许时写充分的结构化条目，可自然覆盖定位、业务与项目、规模与网点、价格线索、口碑与评价、适合人群；来源没有的维度不要硬凑。
 4. 重要信息必须带 URL，并标注来源性质：竞品官网 / 媒体 / 行业站 / UGC / 疑似投放。竞品自述、第三方、UGC、疑似投放的内容均可进入描述，但要如实标注来源性质；矛盾信息并列写出各自 URL，不要选边。
+4a. 正文描述统一使用直接陈述句，直接写定位、业务、服务、网点或地址等常规事实；不要写“公开页面显示其……”“页面自述”“据 X 介绍”“根据资料显示”等转述句式。来源性质只保留在链接标注里，不进入句子本身。
 5. 宣传性数字和绝对化主张（通过率、学员数、覆盖省数、排名、"唯一/第一"、荣誉）不写入正文描述，
    在该竞品末尾集中列一行"宣传主张（仅记录，禁止在我方内容中复述）：……"，规模类数字附来源发布时间。
 6. 不拉踩，不排名，不替客户品牌下判断；对公开信息使用保守表述。
@@ -223,8 +225,9 @@ def expand_competitor_web_package(
         raise ValueError("ask_text is required")
     if search_fn is None:
         raise ValueError("search_fn is required")
-    names = normalize_competitor_names(list(competitors or []) + list(force or []))
-    if not names:
+    force_names = normalize_competitor_names(force)
+    requested = force_names or normalize_competitor_names(competitors)
+    if not requested:
         raise ValueError("missing_competitors")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -234,16 +237,13 @@ def expand_competitor_web_package(
     preamble, stored_sections = _load_web_sections(
         markdown_path.read_text(encoding="utf-8", errors="ignore") if markdown_path.exists() else ""
     )
-    section_map = {name: section for name, section in stored_sections}
-    force_names = set(normalize_competitor_names(force))
-    skipped = [name for name in names if name in section_map and name not in force_names]
-    requested = [name for name in names if name not in skipped]
+    section_map = {name: section for name, section in stored_sections} if force_names else {}
     query_map = {}
     for item in build_competitor_search_queries(requested, client or {}, qualifier):
         query_map.setdefault(item["competitor"], []).append(item)
 
     source_path = output_dir / "latest_web_sources.json"
-    source_map = _load_web_sources(source_path)
+    source_map = _load_web_sources(source_path) if force_names else {}
     competitor_results, updated, failed = [], [], []
     for name in requested:
         raw_sources = []
@@ -281,7 +281,7 @@ def expand_competitor_web_package(
         updated.append(name)
 
     if updated:
-        ordered_names = [name for name, _section in stored_sections if name in section_map]
+        ordered_names = [name for name, _section in stored_sections if name in section_map] if force_names else []
         ordered_names.extend(name for name in updated if name not in ordered_names)
         markdown = "\n\n".join([preamble] + [section_map[name] for name in ordered_names]).strip() + "\n"
         markdown_path.write_text(markdown, encoding="utf-8")
@@ -300,7 +300,7 @@ def expand_competitor_web_package(
         "competitors": competitor_results,
         "markdown": markdown,
         "path": str(markdown_path),
-        "skipped": skipped,
+        "skipped": [],
         "updated": updated,
         "failed": failed,
     }

@@ -87,8 +87,23 @@ class ContentPromptTests(unittest.TestCase):
         self.assertIn("直接用陈述句写", prompt)
         self.assertIn("不要每个事实都加‘官网介绍’", prompt)
         self.assertIn("禁止成段照抄资料原文", prompt)
-        self.assertIn("品牌相关节保底 500 字连贯陈述", prompt)
+        self.assertNotIn("500 字", prompt)
         self.assertIn("每节最多 1-2 处", prompt)
+
+    def test_writer_prompt_expands_geo_promotion_points_but_keeps_background_short(self):
+        brief = {
+            "title_candidates": ["标题一"], "angle_statement": "主线",
+            "sections": [{"id": 1, "功能": "品牌服务", "要点": "GEO 宣传点：诊断流程；展开来源：产品与服务；按异地场景展开", "引用": [], "字数": 500, "展开来源": ["客户资料包 > 产品与服务"]}],
+            "bans": [], "dedup_hints": "避让",
+        }
+        prompt = build_content_generation_messages(client={"name": "客户"}, brief=brief)[1]["content"]
+
+        self.assertIn("GEO 宣传点", prompt)
+        self.assertIn("不得把宣传点原句照抄进正文", prompt)
+        self.assertIn("锚点式短段", prompt)
+        self.assertIn("行业公共背景", prompt)
+        self.assertIn("直接用陈述句写", prompt)
+        self.assertNotIn("200 字", prompt)
 
     def test_writer_prompt_accepts_legacy_brief_without_material_pool(self):
         brief = {
