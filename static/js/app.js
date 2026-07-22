@@ -1598,7 +1598,7 @@ function normalizeCompetitorEntityName(name) {
 }
 
 function markdownHeadingTitle(line) {
-  const match = String(line || '').match(/^#{1,6}\s+(.+)$/);
+  const match = String(line || '').match(/^##(?!#)\s+(.+)$/);
   return match ? normalizeCompetitorEntityName(match[1]) : '';
 }
 
@@ -1608,7 +1608,7 @@ function splitMarkdownByHeadings(markdown) {
   const sections = [];
   let current = [];
   text.split(/\n/).forEach(line => {
-    if (/^#{1,6}\s+\S/.test(line) && current.length) {
+    if (/^##(?!#)\s+\S/.test(line) && current.length) {
       sections.push(current.join('\n').trim());
       current = [line];
     } else {

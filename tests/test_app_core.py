@@ -494,7 +494,7 @@ class CoreFunctionTests(unittest.TestCase):
                 "competitor_rules": {"must_use": ["乙机构"], "banned": ["丙机构"]},
             }])
             sources = {"customer_material_text": "客户资料", "content_upload_text": "", "files": [],
-                       "competitor_markdown": "# 甲机构\n甲资料\n# 乙机构\n乙资料\n# 丙机构\n丙资料\n# 丁机构\n丁资料"}
+                       "competitor_markdown": "## 甲机构\n甲资料\n## 乙机构\n乙资料\n## 丙机构\n丙资料\n## 丁机构\n丁资料"}
             captured = []
             def brief(sample, **kwargs):
                 captured.append(kwargs["competitor_markdown"])
@@ -507,8 +507,8 @@ class CoreFunctionTests(unittest.TestCase):
 
             self.assertIn("乙机构", article["provenance"]["competitor_names"])
             self.assertNotIn("丙机构", article["provenance"]["competitor_names"])
-            self.assertIn("# 乙机构", captured[0])
-            self.assertNotIn("# 丙机构", captured[0])
+            self.assertIn("## 乙机构", captured[0])
+            self.assertNotIn("## 丙机构", captured[0])
 
     def test_failed_lazy_choice_response_does_not_persist_or_block_generation(self):
         with isolated_content_app_data():
@@ -529,7 +529,10 @@ class CoreFunctionTests(unittest.TestCase):
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌"}])
             source_dir = geo_app.competitor_package_output_dir(cid)
             source_dir.mkdir(parents=True, exist_ok=True)
-            (source_dir / "latest_web_competitors.md").write_text("# 甲机构\n资料\n# 乙机构\n资料", encoding="utf-8")
+            (source_dir / "latest_web_competitors.md").write_text(
+                "# 竞品联网资料补充包\n\n## 甲机构\n资料\n\n### 价格线索\n资料\n\n## 乙机构\n资料\n\n### 服务与售后线索\n资料",
+                encoding="utf-8",
+            )
 
             response = geo_app.app.test_client().get(f"/api/clients/{cid}/content-options")
 

@@ -61,7 +61,7 @@ def quality_gate_competitor_names(markdown, provided_names=None):
         names = re.split(r"[\n,，]+", names)
     candidates = list(names) if isinstance(names, list) else []
     for line in str(markdown or "").splitlines():
-        match = re.match(r"^\s{0,3}#{1,6}\s+(.+?)\s*$", line)
+        match = re.match(r"^\s{0,3}##(?!#)\s+(.+?)\s*$", line)
         if not match:
             continue
         name = re.sub(r"^(?:竞品(?:名称)?\s*[:：]\s*)", "", match.group(1)).strip()

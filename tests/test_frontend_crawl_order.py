@@ -539,6 +539,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("reSearchCompetitorWeb", html)
         self.assertIn("本次名单已覆盖更新", html)
         self.assertNotIn("已有资料的竞品已跳过", html)
+        self.assertIn("/^##(?!#)\\s+\\S/.test(line)", html)
 
         render_match = re.search(
             r"function renderCompetitorMaterialResult\(result\) \{(?P<body>.*?)\n\}\n\nasync function loadCompetitorResult",
