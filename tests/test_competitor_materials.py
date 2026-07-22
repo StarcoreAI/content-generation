@@ -254,7 +254,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertIn("不得输出链接、URL、来源标签或来源说明", web_prompt)
         self.assertNotIn("不采信", web_prompt)
 
-    def test_web_competitor_prompt_uses_long_sources_for_detail_without_outputting_source_links(self):
+    def test_web_competitor_prompt_includes_short_sources_when_fewer_than_three_long_sources(self):
         from services.competitor_materials import build_web_competitor_prompt
 
         web_prompt = build_web_competitor_prompt({}, {
@@ -278,9 +278,23 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertNotIn("链接线索", web_prompt)
         self.assertNotIn("https://example.com/long", web_prompt)
         self.assertNotIn("https://example.com/short", web_prompt)
-        self.assertNotIn("正文片段：机构A 简短摘要。", web_prompt)
+        self.assertIn("正文片段：机构A 简短摘要。", web_prompt)
         self.assertIn("不为了简洁省略", web_prompt)
         self.assertIn("不得输出链接、URL、来源标签或来源说明", web_prompt)
+
+    def test_web_competitor_prompt_excludes_short_sources_when_at_least_three_long_sources(self):
+        from services.competitor_materials import build_web_competitor_prompt
+
+        web_prompt = build_web_competitor_prompt({}, {
+            "name": "机构A",
+            "sources": [
+                {"title": f"长正文来源{i}", "content": "机构A 的服务流程和售后安排。" * 20}
+                for i in range(3)
+            ] + [{"title": "短摘要来源", "content": "机构A 简短摘要。"}],
+        })
+
+        self.assertIn("长正文来源0", web_prompt)
+        self.assertNotIn("正文片段：机构A 简短摘要。", web_prompt)
 
     def test_competitor_section_removes_comparison_guidance_subsection(self):
         from services.competitor_materials import _competitor_section
@@ -337,6 +351,23 @@ class CompetitorMaterialsTests(unittest.TestCase):
 
         self.assertEqual(result["updated"], ["成功机构"])
         self.assertEqual(result["failed"], ["失败机构"])
+
+    def test_expand_web_package_rejects_heading_only_model_output(self):
+        from services.competitor_materials import expand_competitor_web_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = expand_competitor_web_package(
+                {}, ["空壳机构"], "", Path(tmp),
+                ask_text=lambda *_args: "## 空壳机构",
+                search_fn=lambda _query: [{
+                    "title": "公开资料", "url": "https://example.com/source",
+                    "content": "空壳机构的公开资料内容足够长，可用于竞品资料整理。" * 10,
+                }],
+                fetched_at="2026-07-16 12:00",
+            )
+
+        self.assertEqual(result["updated"], [])
+        self.assertEqual(result["failed"], ["空壳机构"])
 
 
 if __name__ == "__main__":

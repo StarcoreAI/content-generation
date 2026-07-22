@@ -190,17 +190,16 @@ def _source_blocks(competitors):
         sources = item.get("sources") or []
         if not sources:
             continue
-        expandable = []
+        long_sources, short_sources = [], []
         for source in sources:
-            title = source.get("title", "")
             content = source.get("content", "")
-            if len(str(content or "").strip()) < 200:
-                continue
-            expandable.append(
+            block = (
                 f"标题：{source.get('title', '')}\n"
                 f"时间：{source.get('published_date') or source.get('fetched_at') or ''}\n"
                 f"正文片段：{content}"
             )
+            (long_sources if len(str(content or "").strip()) >= 200 else short_sources).append(block)
+        expandable = long_sources if len(long_sources) >= 3 else long_sources + short_sources
         blocks.append(
             f"=== 竞品：{name} ===\n"
             "【可展开来源】\n"
@@ -263,6 +262,11 @@ def _competitor_section(name, markdown):
             lines.append(line)
     text = "\n".join(lines).strip()
     if not text:
+        return ""
+    if not any(
+        line.strip() and not re.match(r"^#{1,6}\s+", line)
+        for line in text.splitlines()
+    ):
         return ""
     first_line = text.splitlines()[0].strip()
     if re.fullmatch(rf"##\s+{re.escape(name)}", first_line):
