@@ -444,7 +444,6 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertIn("banned_words: '禁用词命中'", html)
-        self.assertIn("comparison_presence: '对比型竞品在场'", html)
         self.assertIn("fact_traceability: '数字与主张可溯源'", html)
         self.assertIn("建议修改后再用", html)
         self.assertIn("人工判断", html)

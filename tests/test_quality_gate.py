@@ -5,7 +5,6 @@ from pathlib import Path
 
 from services.quality_gate import (
     check_banned_words,
-    check_comparison_presence,
     check_meta_discourse,
     check_title_brand,
     load_banned_words,
@@ -79,11 +78,15 @@ class QualityGateTests(unittest.TestCase):
         self.assertFalse(check_title_brand("翼升学服务介绍", "翼升学", [])['passed'])
         self.assertTrue(check_title_brand("成人学历服务介绍", "翼升学", [])['passed'])
 
-    def test_comparison_requires_two_competitors_but_intro_does_not(self):
-        comparison = {"parent_type": "对比型"}
-        self.assertFalse(check_comparison_presence("翼升学提供咨询服务", comparison, {}, ["翼程", "中公"])['passed'])
-        self.assertTrue(check_comparison_presence("翼程和中公均可咨询", comparison, {}, ["翼程", "中公"])['passed'])
-        self.assertTrue(check_comparison_presence("翼升学提供咨询服务", {"parent_type": "介绍型"}, {}, ["翼程", "中公"])['passed'])
+    def test_comparison_coverage_does_not_create_a_code_gate(self):
+        report = run_quality_gate(
+            "中性标题", "翼升学提供咨询服务", {"parent_type": "对比型"}, {},
+            client_brand="翼升学", competitor_names=["华图教育", "中公教育"],
+            competitor_markdown="", recent_articles=[],
+            ai_json_fn=lambda prompt, max_tokens: {"checks": []},
+        )
+        self.assertEqual("pass", report["verdict"])
+        self.assertNotIn("comparison_presence", [item["check_id"] for item in report["code_layer"]])
 
     def test_meta_discourse_blocks_internal_placeholder(self):
         self.assertFalse(check_meta_discourse("本节保留结构位置")['passed'])

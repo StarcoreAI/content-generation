@@ -140,31 +140,6 @@ def check_title_brand(article_title, client_brand, competitor_names):
     return _check("title_brand", "code", not hits, "block", hits)
 
 
-def _parent_type(brief, provenance):
-    for source in (brief, provenance):
-        if not isinstance(source, dict):
-            continue
-        value = source.get("parent_type")
-        if value:
-            return str(value)
-        sample = source.get("sample") or {}
-        if isinstance(sample, dict) and sample.get("parent_type"):
-            return str(sample["parent_type"])
-    return ""
-
-
-def check_comparison_presence(article_content, brief, provenance, competitor_names):
-    if _parent_type(brief, provenance) != "对比型":
-        return _check("comparison_presence", "code", True, "block")
-    text = str(article_content or "")
-    hits = []
-    for name in competitor_names or []:
-        name = str(name or "").strip()
-        if name and name in text and name not in hits:
-            hits.append(name)
-    return _check("comparison_presence", "code", len(hits) >= 2, "block", hits)
-
-
 def check_meta_discourse(article_content):
     text = str(article_content or "")
     phrases = [
@@ -258,7 +233,6 @@ def run_quality_gate(article_title, article_content, brief, provenance, *, clien
         code_layer = [
             check_banned_words(article_content, industry=industry),
             check_title_brand(article_title, client_brand, competitor_names),
-            check_comparison_presence(article_content, brief, provenance, competitor_names),
             check_meta_discourse(article_content),
             check_shingle_duplicate(article_content, recent_articles),
         ]

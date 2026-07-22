@@ -571,7 +571,6 @@ function qualityGateReason(article) {
 const QUALITY_GATE_CHECK_DESCRIPTIONS = {
   banned_words: '禁用词命中',
   title_brand: '标题不得直接点名客户或本次机构',
-  comparison_presence: '对比型竞品在场',
   meta_discourse: '成文不得泄漏内部工作用语',
   shingle_duplicate: '与近期文章的重复度提示',
   fact_traceability: '数字与主张可溯源',
