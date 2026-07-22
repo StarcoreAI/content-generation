@@ -197,6 +197,25 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertIn("来源性质只保留在链接标注里", web_prompt)
         self.assertNotIn("不采信", web_prompt)
 
+    def test_competitor_section_removes_comparison_guidance_subsection(self):
+        from services.competitor_materials import _competitor_section
+
+        markdown = _competitor_section("机构A", """## 机构A
+
+- 提供成人学历提升咨询服务。[官网](https://example.com)
+
+### 适合对比关注的维度
+- 可比较价格、服务和口碑。
+
+### 来源
+- [官网](https://example.com)
+""")
+
+        self.assertIn("提供成人学历提升咨询服务", markdown)
+        self.assertIn("### 来源", markdown)
+        self.assertNotIn("适合对比关注的维度", markdown)
+        self.assertNotIn("可比较价格、服务和口碑", markdown)
+
     def test_expand_web_package_reports_all_failed_without_writing_a_shell(self):
         from services.competitor_materials import expand_competitor_web_package
 

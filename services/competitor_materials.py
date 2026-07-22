@@ -158,7 +158,7 @@ def build_web_competitor_prompt(client, competitor):
    在该竞品末尾集中列一行"宣传主张（仅记录，禁止在我方内容中复述）：……"，规模类数字附来源发布时间。
 6. 不拉踩，不排名，不替客户品牌下判断；对公开信息使用保守表述。
 7. 来源没有的信息不要硬凑栏目，不要输出空栏目。
-8. 输出 Markdown，第一行必须是“## {name}”，不要输出总标题或解释过程。
+8. 输出 Markdown，第一行必须是“## {name}”，不要输出总标题或解释过程。只保留该竞品的事实、来源和“宣传主张（仅记录，禁止在我方内容中复述）”；不得添加“适合对比关注的维度”“对比关注点”“怎么选”“选择建议”等面向读者的比较指导小节。
 
 客户行业/品类：{(client or {}).get('category') or (client or {}).get('industry') or ''}
 
@@ -182,8 +182,22 @@ def _load_web_sections(markdown):
     return preamble, sections
 
 
+_META_COMPARISON_HEADING = re.compile(r"适合对比|对比关注|怎么选|选择建议|使用建议|核验建议")
+
+
 def _competitor_section(name, markdown):
     text = str(markdown or "").strip()
+    if not text:
+        return ""
+    lines = []
+    skipping = False
+    for line in text.splitlines():
+        heading = re.match(r"^#{1,6}\s+(.+?)\s*$", line)
+        if heading:
+            skipping = bool(_META_COMPARISON_HEADING.search(heading.group(1)))
+        if not skipping:
+            lines.append(line)
+    text = "\n".join(lines).strip()
     if not text:
         return ""
     first_line = text.splitlines()[0].strip()
