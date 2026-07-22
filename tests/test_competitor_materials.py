@@ -369,6 +369,42 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertEqual(result["updated"], [])
         self.assertEqual(result["failed"], ["空壳机构"])
 
+    def test_expand_web_package_writes_run_report_with_query_search_and_summary_details(self):
+        from services.competitor_materials import expand_competitor_web_package
+
+        def ask_text(prompt, max_tokens):
+            if "竞品联网检索词策划助手" in prompt:
+                return "甲机构 | 甲机构 装修服务"
+            if "甲机构" in prompt:
+                return "## 甲机构\n- 甲机构提供装修服务。"
+            raise RuntimeError("summary unavailable")
+
+        def search_fn(query):
+            if query.startswith("乙机构"):
+                raise RuntimeError("tavily timeout")
+            return [
+                {"title": "甲机构官网", "url": "https://example.com/accepted", "content": "甲机构的公开服务资料足够长，可用于整理。"},
+                {"title": "无关页面", "url": "https://example.com/rejected", "content": "这是一段足够长但没有竞品名称的内容。"},
+            ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            result = expand_competitor_web_package(
+                {"industry": "家装"}, ["甲机构", "乙机构"], "", output_dir,
+                ask_text, search_fn, fetched_at="2026-07-22 18:51",
+            )
+            report = json.loads((output_dir / "latest_web_run_report.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(result["updated"], ["甲机构"])
+        self.assertEqual(result["failed"], ["乙机构"])
+        self.assertEqual(report["query_generation"]["raw_output"], "甲机构 | 甲机构 装修服务")
+        self.assertEqual(report["competitors"]["甲机构"]["searches"][0]["raw_result_count"], 2)
+        self.assertEqual(report["competitors"]["甲机构"]["searches"][0]["selected_source_count"], 1)
+        self.assertEqual(report["competitors"]["甲机构"]["summary"]["raw_output"], "## 甲机构\n- 甲机构提供装修服务。")
+        self.assertEqual(report["competitors"]["乙机构"]["status"], "failed")
+        self.assertEqual(report["competitors"]["乙机构"]["failure_stage"], "search")
+        self.assertIn("tavily timeout", report["competitors"]["乙机构"]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

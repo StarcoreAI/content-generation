@@ -70,11 +70,21 @@ def build_competitor_search_query_prompt(competitors, client=None, qualifier="",
 """
 
 
+def _error_summary(exc, limit=500):
+    message = str(exc or "").strip()
+    return f"{type(exc).__name__}: {message}"[:limit]
+
+
 def generate_competitor_search_queries(competitors, client=None, qualifier="", ask_text=None,
-                                       customer_context="", competitor_context=""):
+                                       customer_context="", competitor_context="", run_report=None):
     names = normalize_competitor_names(competitors)
     fallback = build_competitor_search_queries(names, client or {}, qualifier)
+    report = run_report if isinstance(run_report, dict) else None
+    if report is not None:
+        report.update({"raw_output": "", "used_fallback": False, "error": "", "queries": []})
     if not names or ask_text is None:
+        if report is not None:
+            report.update({"used_fallback": True, "queries": fallback})
         return fallback
     try:
         generated = str(ask_text(
@@ -83,8 +93,12 @@ def generate_competitor_search_queries(competitors, client=None, qualifier="", a
             ),
             max_tokens=1600,
         ) or "")
-    except Exception:
+    except Exception as exc:
+        if report is not None:
+            report.update({"used_fallback": True, "error": _error_summary(exc), "queries": fallback})
         return fallback
+    if report is not None:
+        report["raw_output"] = generated
 
     by_name = {name: [] for name in names}
     for line in generated.splitlines():
@@ -101,8 +115,13 @@ def generate_competitor_search_queries(competitors, client=None, qualifier="", a
     for item in fallback:
         fallback_by_name.setdefault(item["competitor"], []).append(item["query"])
     for name in names:
-        for query in by_name[name] or fallback_by_name.get(name, []):
+        name_queries = by_name[name] or fallback_by_name.get(name, [])
+        if not by_name[name] and report is not None:
+            report["used_fallback"] = True
+        for query in name_queries:
             queries.append({"competitor": name, "query": query})
+    if report is not None:
+        report["queries"] = queries
     return queries
 
 
@@ -322,42 +341,80 @@ def expand_competitor_web_package(
         markdown_path.read_text(encoding="utf-8", errors="ignore") if markdown_path.exists() else ""
     )
     section_map = {name: section for name, section in stored_sections} if force_names else {}
+    query_generation = {}
     query_map = {}
     for item in generate_competitor_search_queries(
         requested, client or {}, qualifier, ask_text=ask_text,
         customer_context=customer_context, competitor_context=competitor_context,
+        run_report=query_generation,
     ):
         query_map.setdefault(item["competitor"], []).append(item)
 
     source_path = output_dir / "latest_web_sources.json"
     source_map = _load_web_sources(source_path) if force_names else {}
+    run_competitors = {
+        name: {
+            "queries": [item["query"] for item in query_map.get(name, [])],
+            "searches": [],
+            "raw_source_count": 0,
+            "selected_source_count": 0,
+            "selected_sources": [],
+            "summary": {"raw_output": "", "final_section": ""},
+            "status": "pending",
+            "failure_stage": "",
+            "error": "",
+        }
+        for name in requested
+    }
     competitor_results, updated, failed = [], [], []
     for name in requested:
+        run_item = run_competitors[name]
         raw_sources = []
-        try:
-            for item in query_map.get(name, []):
-                raw_sources.extend(search_fn(item["query"]) or [])
-        except Exception:
-            failed.append(name)
+        for item in query_map.get(name, []):
+            search_item = {"query": item["query"], "raw_result_count": 0, "raw_results": [], "selected_source_count": 0}
+            run_item["searches"].append(search_item)
+            try:
+                results = search_fn(item["query"]) or []
+                search_item["raw_results"] = results
+                search_item["raw_result_count"] = len(results)
+                search_item["selected_source_count"] = len(filter_sources(
+                    results, fetched_at=fetched_at, limit=per_competitor_limit,
+                    max_content_chars=3000, subject_keywords=[name],
+                ))
+                raw_sources.extend(results)
+            except Exception as exc:
+                search_item["error"] = _error_summary(exc)
+                run_item.update({"status": "failed", "failure_stage": "search", "error": search_item["error"]})
+                failed.append(name)
+                break
+        if run_item["status"] == "failed":
             continue
+        run_item["raw_source_count"] = len(raw_sources)
         sources = filter_sources(
             raw_sources, fetched_at=fetched_at, limit=per_competitor_limit,
             max_content_chars=3000, subject_keywords=[name],
         )
+        run_item["selected_sources"] = sources
+        run_item["selected_source_count"] = len(sources)
         if not sources:
+            run_item.update({"status": "failed", "failure_stage": "filter", "error": "no_sources_after_filter"})
             failed.append(name)
             continue
         competitor = {"name": name, "sources": sources}
         try:
-            markdown = _competitor_section(
-                name, ask_text(build_web_competitor_prompt(client or {}, competitor), max_tokens)
-            )
-        except Exception:
+            raw_summary = ask_text(build_web_competitor_prompt(client or {}, competitor), max_tokens)
+            run_item["summary"]["raw_output"] = str(raw_summary or "")
+            markdown = _competitor_section(name, raw_summary)
+        except Exception as exc:
+            run_item.update({"status": "failed", "failure_stage": "summary", "error": _error_summary(exc)})
             failed.append(name)
             continue
         if not markdown:
+            run_item.update({"status": "failed", "failure_stage": "summary", "error": "empty_summary"})
             failed.append(name)
             continue
+        run_item["summary"]["final_section"] = markdown
+        run_item["status"] = "updated"
         section_map[name] = markdown
         source_map[name] = {
             "queries": [item["query"] for item in query_map.get(name, [])],
@@ -380,6 +437,18 @@ def expand_competitor_web_package(
         markdown = markdown_path.read_text(encoding="utf-8", errors="ignore") if markdown_path.exists() else ""
     queries = [item for name in requested for item in query_map.get(name, [])]
     source_count = sum(item["source_count"] for item in competitor_results)
+    run_report_path = output_dir / "latest_web_run_report.json"
+    save_json(run_report_path, {
+        "schema_version": 1,
+        "fetched_at": fetched_at,
+        "mode": "force" if force_names else "normal",
+        "requested": requested,
+        "query_generation": query_generation,
+        "competitors": run_competitors,
+        "updated": updated,
+        "failed": failed,
+        "source_count": source_count,
+    })
     return {
         "ok": True,
         "queries": queries,
@@ -390,6 +459,7 @@ def expand_competitor_web_package(
         "skipped": [],
         "updated": updated,
         "failed": failed,
+        "run_report_path": str(run_report_path),
     }
 
 
