@@ -16,6 +16,7 @@ from services.auth import authenticate_user, create_user, find_user
 from services.article_structure import analyze_article_structure
 from services.article_fetcher import fetch_article_text
 from services.content_generations import ContentGenerationStore
+from services.publications import PublicationStore
 from services.batch_generation import BatchGenerationJobs
 from services.quality_gate import run_quality_gate, quality_gate_competitor_names
 from services.content_choices import (
@@ -95,6 +96,7 @@ ANONYMOUS_ENDPOINTS = {
     "auth_logout",
     "auth_me",
     "health_check",
+    "publication_preview",
 }
 
 
@@ -1945,6 +1947,11 @@ def content_generation_store():
     db_path = os.path.splitext(F_CONTENT_GENERATIONS)[0] + ".sqlite3"
     return ContentGenerationStore(db_path, legacy_json_path=F_CONTENT_GENERATIONS)
 
+
+def publication_store():
+    db_path = os.path.splitext(F_CONTENT_GENERATIONS)[0] + ".sqlite3"
+    return PublicationStore(db_path)
+
 def append_content_generation(cid, article, user_message, assistant_message):
     return content_generation_store().append_generation(cid, article, user_message, assistant_message)
 
@@ -2031,7 +2038,41 @@ def review_content_generation_article(cid, article_id, ai_json_fn=None):
     return store.update_article_gate_report(cid, article_id, content_article_gate_report(cid, article, ai_json_fn=ai_json_fn))
 
 def delete_content_generation(cid, article_id):
+    if publication_store().article_has_publication_state(cid, article_id):
+        return None
     return content_generation_store().delete_generation(cid, article_id)
+
+
+@app.route("/public/publications/<preview_token>")
+def publication_preview(preview_token):
+    draft = publication_store().get_draft_by_preview_token(preview_token)
+    if not draft:
+        return "Not Found", 404
+    response = app.make_response(render_template("publication_preview.html", draft=draft))
+    response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
+
+
+@app.route("/api/distribution/drafts", methods=["POST"])
+def create_publication_draft_route():
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("client_id") or "")
+    article_id = str(data.get("article_id") or "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    article = content_generation_store().get_article(cid, article_id)
+    if not article:
+        return jsonify({"error": "article_not_found"}), 404
+    draft = publication_store().create_draft(cid, article, (current_user() or {}).get("username", ""))
+    return jsonify({"ok": True, "draft": draft})
+
+
+@app.route("/api/distribution/drafts", methods=["GET"])
+def list_publication_drafts_route():
+    cid = request.args.get("client_id", "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({"ok": True, "drafts": publication_store().list_drafts(cid)})
 
 @app.route("/api/content/generations", methods=["GET"])
 def list_content_generations():
@@ -2056,6 +2097,8 @@ def delete_content_generation_route(article_id):
         return jsonify({"error": "缺少client_id"}), 400
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
+    if publication_store().article_has_publication_state(cid, article_id):
+        return jsonify({"error": "article_has_publication_state"}), 409
     if not delete_content_generation(cid, article_id):
         return jsonify({"error": "article_not_found"}), 404
     history_date = normalize_content_history_date(request.args.get("date"))

@@ -49,6 +49,20 @@ class PublicationStore:
             ).fetchone()
         return dict(row) if row else None
 
+    def get_draft_by_preview_token(self, preview_token):
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM publication_drafts WHERE preview_token = ?", (preview_token,)
+            ).fetchone()
+        return dict(row) if row else None
+
+    def list_drafts(self, client_id):
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM publication_drafts WHERE client_id = ? ORDER BY created_at DESC", (client_id,)
+            )
+            return [dict(row) for row in rows]
+
     def create_supplier_order(self, client_id, draft_id, provider_order_no, resource_type,
                               resource_id, resource_name, price):
         now = self._now()
