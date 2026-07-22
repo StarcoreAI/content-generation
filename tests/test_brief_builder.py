@@ -330,7 +330,7 @@ class BriefBuilderTests(unittest.TestCase):
 
             self.assertEqual(brief["title_candidates"], ["标题一", "标题二"])
             self.assertEqual(len(brief["sections"]), len(sample["skeleton"]["payload"]["sections"]))
-            self.assertEqual(calls[0][1], 6000)
+            self.assertEqual(calls[0][1], 8000)
             self.assertIn("限制使用：录取率只能以官方发布为准", calls[0][0])
             self.assertIn("某竞品通过率第一", calls[0][0])
             self.assertIn("不得替换、不得弃用", calls[0][0])
