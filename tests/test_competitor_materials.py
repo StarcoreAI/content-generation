@@ -136,7 +136,9 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertTrue(all(tokens >= 4000 for _prompt, tokens in prompts))
         self.assertIn("资料允许时写充分的结构化条目", prompts[0][0])
         self.assertNotIn("300-800 字", prompts[0][0])
-        self.assertIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0][0])
+        self.assertNotIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0][0])
+        self.assertNotIn("来源没有的维度不要硬凑", prompts[0][0])
+        self.assertNotIn("重要信息必须带 URL", prompts[0][0])
         self.assertNotIn("疑似投放来源的内容不作为该竞品的事实", prompts[0][0])
         self.assertEqual(len(calls), 12)
         self.assertEqual(len(prompts), 4)
@@ -193,7 +195,10 @@ class CompetitorMaterialsTests(unittest.TestCase):
 
         self.assertIn("直接陈述句", upload_prompt)
         self.assertIn("直接陈述句", web_prompt)
-        self.assertIn("宣传主张（仅记录，禁止在我方内容中复述）", web_prompt)
+        self.assertNotIn("宣传主张（仅记录，禁止在我方内容中复述）", web_prompt)
+        self.assertNotIn("来源没有的维度不要硬凑", web_prompt)
+        self.assertNotIn("重要信息必须带 URL", web_prompt)
+        self.assertIn("4. 正文描述统一使用直接陈述句", web_prompt)
         self.assertIn("来源性质只保留在链接标注里", web_prompt)
         self.assertNotIn("不采信", web_prompt)
 
