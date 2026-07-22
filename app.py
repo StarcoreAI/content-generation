@@ -17,6 +17,7 @@ from services.article_structure import analyze_article_structure
 from services.article_fetcher import fetch_article_text
 from services.content_generations import ContentGenerationStore
 from services.publications import PublicationStore
+from services.rwmeiti import RWMeitiClient
 from services.batch_generation import BatchGenerationJobs
 from services.quality_gate import run_quality_gate, quality_gate_competitor_names
 from services.content_choices import (
@@ -1442,6 +1443,7 @@ def expand_competitor_web(cid):
             cid,
             competitors,
             qualifier=(payload.get("qualifier") or "").strip(),
+            force=_request_competitors({"competitors": payload.get("force")}),
         )
     except ValueError as exc:
         if str(exc) == "missing_tavily_api_key":
@@ -1953,6 +1955,10 @@ def publication_store():
     db_path = os.path.splitext(F_CONTENT_GENERATIONS)[0] + ".sqlite3"
     return PublicationStore(db_path)
 
+
+def rwmeiti_client_from_env():
+    return RWMeitiClient(os.environ.get("RWMEITI_BASE_URL", "http://dr.rwmeiti.com/meijieapi/daili3"), os.environ.get("RWMEITI_SECRET_ID", ""), os.environ.get("RWMEITI_SECRET_KEY", ""))
+
 def append_content_generation(cid, article, user_message, assistant_message):
     return content_generation_store().append_generation(cid, article, user_message, assistant_message)
 
@@ -2074,6 +2080,63 @@ def list_publication_drafts_route():
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     return jsonify({"ok": True, "drafts": publication_store().list_drafts(cid)})
+
+
+@app.route("/api/distribution/resources/sync", methods=["POST"])
+def sync_distribution_resources_route():
+    cid = str((request.get_json(silent=True) or {}).get("client_id") or "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = rwmeiti_client_from_env()
+    resources, page = [], 1
+    while True:
+        batch = client.list_self_media(page, 200)
+        resources.extend(batch)
+        if len(batch) < 200:
+            break
+        page += 1
+    publication_store().save_resources(cid, resources, now_str())
+    return jsonify({"ok": True, "count": len(resources)})
+
+
+@app.route("/api/distribution/resources", methods=["GET"])
+def list_distribution_resources_route():
+    cid = request.args.get("client_id", "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({"ok": True, "resources": publication_store().list_resources(cid)})
+
+
+@app.route("/api/distribution/orders", methods=["GET", "POST"])
+def distribution_orders_route():
+    if request.method == "GET":
+        cid = request.args.get("client_id", "")
+        if not require_client_access(cid):
+            return jsonify({"error": "client_not_found"}), 404
+        return jsonify({"ok": True, "orders": publication_store().list_orders(cid)})
+    data = request.get_json(silent=True) or {}
+    cid, draft_id, resource_id = str(data.get("client_id") or ""), str(data.get("draft_id") or ""), str(data.get("resource_id") or "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    draft, resource = publication_store().get_draft(cid, draft_id), publication_store().get_resource(cid, resource_id)
+    if not draft or not resource:
+        return jsonify({"error": "draft_or_resource_not_found"}), 404
+    public_base = os.environ.get("GEO_PUBLIC_BASE_URL", "").rstrip("/")
+    if not public_base.startswith("https://"):
+        return jsonify({"error": "public_preview_url_not_configured"}), 400
+    if not os.environ.get("RWMEITI_SECRET_ID") or not os.environ.get("RWMEITI_SECRET_KEY"):
+        return jsonify({"error": "rwmeiti_credentials_not_configured"}), 400
+    order_no = "geo-" + draft_id
+    preview_url = public_base + "/public/publications/" + draft["preview_token"]
+    supplier_content = '稿件链接：<a href="' + preview_url + '">' + preview_url + "</a>"
+    try:
+        result = rwmeiti_client_from_env().create_self_media_order(draft["article_title"], supplier_content, resource_id, order_no, resource["price"])
+    except Exception as exc:
+        order = publication_store().create_supplier_order(cid, draft_id, order_no, "self_media", resource_id, resource["name"], resource["price"])
+        publication_store().update_supplier_order(cid, order["id"], "submit_unknown", "", str(exc))
+        return jsonify({"ok": True, "order": {**order, "status": "submit_unknown"}}), 202
+    order = publication_store().create_supplier_order(cid, draft_id, order_no, "self_media", resource_id, resource["name"], resource["price"])
+    return jsonify({"ok": True, "order": order, "provider": result})
 
 @app.route("/api/content/generations", methods=["GET"])
 def list_content_generations():

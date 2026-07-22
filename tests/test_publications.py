@@ -53,6 +53,18 @@ class PublicationStoreTests(unittest.TestCase):
         )
         self.assertTrue(self.store.article_has_publication_state("client-a", "a1"))
 
+    def test_resources_are_replaced_by_latest_sync_for_one_client(self):
+        self.store.save_resources("client-a", [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}], "2026-07-22 10:00:00")
+        self.store.save_resources("client-a", [{"resource_id": "8", "name": "账号B", "price": 99, "status": "1", "raw": {}}], "2026-07-22 11:00:00")
+        resources = self.store.list_resources("client-a")
+        self.assertEqual([item["resource_id"] for item in resources], ["8"])
+
+    def test_order_status_can_be_updated_and_listed(self):
+        draft = self.store.create_draft("client-a", {"id": "a1", "title": "标题", "content": "正文"}, "op")
+        order = self.store.create_supplier_order("client-a", draft["id"], "geo-1", "self_media", "7", "账号A", 88)
+        self.store.update_supplier_order("client-a", order["id"], "completed", "https://example.com/a", "")
+        self.assertEqual(self.store.list_orders("client-a")[0]["status"], "completed")
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -146,6 +146,16 @@ class PublicationStore:
                 conn.rollback()
                 raise
 
+    def update_supplier_order(self, client_id, order_id, status, provider_url="", provider_reason=""):
+        with self._connection() as conn:
+            conn.execute("UPDATE supplier_orders SET status = ?, provider_url = ?, provider_reason = ?, updated_at = ? WHERE client_id = ? AND id = ?", (status, provider_url, provider_reason, self._now(), client_id, order_id))
+            conn.commit()
+
+    def list_orders(self, client_id):
+        with self._connection() as conn:
+            rows = conn.execute("SELECT * FROM supplier_orders WHERE client_id = ? ORDER BY created_at DESC", (client_id,))
+            return [dict(row) for row in rows]
+
     def list_publications(self, client_id):
         with self._connection() as conn:
             rows = conn.execute(
@@ -160,6 +170,32 @@ class PublicationStore:
                 (client_id, article_id),
             ).fetchone()
         return bool(row)
+
+    def save_resources(self, client_id, resources, synced_at):
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                conn.execute("DELETE FROM supplier_resources WHERE client_id = ? AND provider = 'rwmeiti' AND resource_type = 'self_media'", (client_id,))
+                for item in resources:
+                    conn.execute("INSERT INTO supplier_resources VALUES (?, 'rwmeiti', 'self_media', ?, ?, ?, ?, ?, ?)", (
+                        client_id, str(item.get("resource_id") or ""), str(item.get("name") or ""),
+                        float(item.get("price") or 0), str(item.get("status") or ""),
+                        json.dumps(item.get("raw") or {}, ensure_ascii=False), synced_at,
+                    ))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def list_resources(self, client_id):
+        with self._connection() as conn:
+            rows = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND provider = 'rwmeiti' AND resource_type = 'self_media' ORDER BY name", (client_id,))
+            return [dict(row) for row in rows]
+
+    def get_resource(self, client_id, resource_id):
+        with self._connection() as conn:
+            row = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND resource_id = ?", (client_id, resource_id)).fetchone()
+        return dict(row) if row else None
 
     @contextmanager
     def _connection(self):
