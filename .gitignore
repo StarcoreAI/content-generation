@@ -11,6 +11,7 @@ reports/
 pdf/
 deploy_artifacts/
 .tmp/
+.worktrees/
 
 # Local runtime data: clients, settings, cookies, browser state, uploads.
 data/
