@@ -140,6 +140,8 @@ sudo systemctl restart geo-content-v2.service
 curl -fsS http://127.0.0.1:18080/api/health
 ```
 
+RWMeiti 后端基础能力需要的 `RWMEITI_BASE_URL`、`RWMEITI_SECRET_ID`、`RWMEITI_SECRET_KEY` 与 `GEO_PUBLIC_BASE_URL` 只能写在服务器 `.env`，不得提交到 Git 或显示在页面/API 中。当前分发管理前端尚未提交或部署；在供应商提供固定签名向量、通过 mock 核验并完成运营确认前，不要填入真实凭据，也不要调用资源同步或下单接口。
+
 If `git status --short` shows local changes other than expected untracked
 runtime files such as `.env`, stop and inspect before pulling. Do not overwrite
 cloud `data/`, `pdf/`, `logs/`, or `.env`.

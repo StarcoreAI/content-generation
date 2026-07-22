@@ -8,6 +8,12 @@
 
 **Tech Stack:** Python stdlib (hashlib, urllib, secrets), Flask, SQLite, vanilla JS, unittest/mock.
 
+## 实施状态（2026-07-22）
+
+- 已合入：`PublicationStore` 的资源保存/读取与订单状态更新、`RWMeitiClient` 的签名/资源查询/下单/订单查询封装，以及资源同步和人工下单后端路由；所有已写测试均使用 mock。
+- 尚未完成：供应商固定签名向量核验、订单状态回查并写入发布 URL、发布登记、真实运营验收。
+- 前端实现仍留在工作区，尚未提交或部署；本计划不得被视为已经上线的分发功能。真实凭据和真实供应商请求继续禁止用于开发验证。
+
 ## Global Constraints
 
 - Every supplier submission and order refresh is explicitly triggered by an operator; do not automatically submit, retry, poll, cancel, or schedule supplier orders.
