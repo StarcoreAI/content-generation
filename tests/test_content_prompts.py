@@ -58,10 +58,37 @@ class ContentPromptTests(unittest.TestCase):
 
         self.assertIn("【简报素材池】", prompt)
         self.assertIn("翼升学公开页面介绍了异地服务流程", prompt)
-        self.assertIn("每节施工时从素材池中选取相关素材展开", prompt)
-        self.assertIn("本次品牌的素材鼓励充分选用", prompt)
-        self.assertIn("其他机构的介绍完整性不受客户篇幅影响", prompt)
+        self.assertIn("素材池条目继续鼓励用足", prompt)
+        self.assertIn("素材池没覆盖、但展开来源小节里有的内容可以直接用", prompt)
+        self.assertIn("竞品同样允许大段展开", prompt)
         self.assertIn("不得以“信息更多”暗示品牌更优", prompt)
+
+    def test_writer_prompt_expands_section_sources_without_copying_or_source_by_source_attribution(self):
+        brief = {
+            "title_candidates": ["标题一", "标题二"],
+            "angle_statement": "面向异地在职者的选择主线",
+            "sections": [{
+                "id": 1, "功能": "品牌服务", "要点": "按异地报考场景写透流程", "引用": [], "字数": 500,
+                "展开来源": ["客户资料包 > 产品与服务", "竞品资料 > 翼程教育"],
+            }],
+            "bans": [], "dedup_hints": "避免重复",
+        }
+
+        prompt = build_content_generation_messages(
+            client={"name": "翼升学", "brand": "翼升学"},
+            brief=brief,
+            customer_material_text="## 产品与服务\n异地报名协助。",
+            competitor_markdown="## 翼程教育\n服务说明。",
+        )[1]["content"]
+
+        self.assertIn("展开来源", prompt)
+        self.assertIn("客户资料包 > 产品与服务", prompt)
+        self.assertIn("竞品资料 > 翼程教育", prompt)
+        self.assertIn("直接用陈述句写", prompt)
+        self.assertIn("不要每个事实都加‘官网介绍’", prompt)
+        self.assertIn("禁止成段照抄资料原文", prompt)
+        self.assertIn("品牌相关节保底 500 字连贯陈述", prompt)
+        self.assertIn("每节最多 1-2 处", prompt)
 
     def test_writer_prompt_accepts_legacy_brief_without_material_pool(self):
         brief = {

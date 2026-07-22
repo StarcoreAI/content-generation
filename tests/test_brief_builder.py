@@ -4,7 +4,12 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from services.brief_builder import build_brief_sample, build_planning_brief_prompt, generate_planning_brief
+from services.brief_builder import (
+    build_brief_sample,
+    build_planning_brief_prompt,
+    generate_planning_brief,
+    validate_planning_brief,
+)
 from services.pattern_library import PatternLibrary
 
 
@@ -135,8 +140,47 @@ class BriefBuilderTests(unittest.TestCase):
         self.assertIn("目标 8-15 条", prompt)
         self.assertIn("行业公共", prompt)
         self.assertIn("不得出现“客户/竞品/资料包”等内部称谓", prompt)
-        self.assertIn("来源写为“其官网介绍 > 资料小节名”或“公开页面显示 > 资料小节名”", prompt)
+        self.assertIn("直接陈述句", prompt)
+        self.assertIn("保底清单", prompt)
+        self.assertNotIn("每条必须是读者视角的可直接取用表述，用机构名称及“其官网介绍”“公开页面显示”等说法", prompt)
         self.assertIn("每条必须可定位到输入资料", prompt)
+
+    def test_planning_prompt_guides_expansion_and_limits_disclaimer_density(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library, _ = make_library(Path(tmp))
+            prompt = build_planning_brief_prompt(self.sample(library))
+
+        self.assertIn('"展开来源"', prompt)
+        self.assertIn("只能指向输入资料中真实存在的小节名/机构名", prompt)
+        self.assertIn("本次品牌小节的字数预算不低于 500 字", prompt)
+        self.assertIn("目标 200-400 字", prompt)
+        self.assertIn("每节最多出现 1-2 处", prompt)
+
+    def test_validate_planning_brief_accepts_sections_with_or_without_expansion_sources(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library, _ = make_library(Path(tmp))
+            sample = self.sample(library)
+
+        base_brief = {
+            "title_candidates": ["标题一", "标题二"],
+            "angle_statement": "主线",
+            "sections": [
+                {"id": 1, "功能": "开头", "要点": "施工", "引用": [], "字数": 200},
+                {"id": 2, "功能": "正文", "要点": "施工", "引用": [], "字数": 500},
+            ],
+            "bans": [],
+            "dedup_hints": "避让",
+        }
+        with_sources = {
+            **base_brief,
+            "sections": [
+                {**base_brief["sections"][0], "展开来源": ["客户资料包 > 产品与服务"]},
+                {**base_brief["sections"][1], "展开来源": ["竞品资料 > 翼程教育"]},
+            ],
+        }
+
+        self.assertEqual(validate_planning_brief(base_brief, sample), base_brief)
+        self.assertEqual(validate_planning_brief(with_sources, sample), with_sources)
 
     def test_recent_ending_is_avoided_once_when_alternative_exists(self):
         with tempfile.TemporaryDirectory() as tmp:
