@@ -1180,14 +1180,14 @@ def _request_competitors(payload):
 def _client_or_404(cid):
     return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
 
-def run_client_competitor_web_expansion(cid, competitors, qualifier=""):
+def run_client_competitor_web_expansion(cid, competitors, qualifier="", force=None):
     client = _client_or_404(cid) or {"id": cid}
     settings = get_settings()
     tavily_key = get_tavily_api_key(settings)
     if not tavily_key:
         raise ValueError("missing_tavily_api_key")
     ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
-    search_fn = lambda query: tavily_search(query, tavily_key)
+    search_fn = lambda query: tavily_search(query, tavily_key, max_results=5)
     return expand_competitor_web_package(
         client=client,
         competitors=competitors,
@@ -1195,6 +1195,7 @@ def run_client_competitor_web_expansion(cid, competitors, qualifier=""):
         output_dir=competitor_package_output_dir(cid),
         ask_text=ask_text,
         search_fn=search_fn,
+        force=force,
     )
 
 @app.route("/api/materials/<cid>", methods=["GET"])

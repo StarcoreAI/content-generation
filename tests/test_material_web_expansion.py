@@ -99,13 +99,14 @@ class MaterialWebExpansionTests(unittest.TestCase):
             return FakeResponse()
 
         with mock.patch.object(web_expansion.urllib.request, "urlopen", side_effect=fake_urlopen):
-            results = web_expansion.tavily_search("翼升学 成考", "tvly-test", timeout=12)
+            results = web_expansion.tavily_search("翼升学 成考", "tvly-test", timeout=12, max_results=5)
 
         self.assertEqual(captured["url"], "https://api.tavily.com/search")
         self.assertEqual(captured["headers"]["Authorization"], "Bearer tvly-test")
         self.assertEqual(captured["payload"]["query"], "翼升学 成考")
         self.assertEqual(captured["payload"]["country"], "china")
         self.assertEqual(captured["payload"]["topic"], "general")
+        self.assertEqual(captured["payload"]["max_results"], 5)
         self.assertNotIn("chunks_per_source", captured["payload"])
         self.assertTrue(captured["payload"]["include_raw_content"])
         self.assertEqual(captured["timeout"], 12)

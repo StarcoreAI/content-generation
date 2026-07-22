@@ -36,8 +36,13 @@ def build_competitor_search_queries(competitors, client=None, qualifier=""):
     scope = competitor_qualifier(client or {}, qualifier)
     queries = []
     for name in normalize_competitor_names(competitors):
-        query = f"{name} {scope}".strip()
-        queries.append({"competitor": name, "query": query})
+        for query in [
+            f"{name} {scope}".strip(),
+            f"{name} 怎么样 靠谱",
+            f"{name} 价格 费用",
+            f"{name} 简介",
+        ]:
+            queries.append({"competitor": name, "query": query})
     return queries
 
 
@@ -136,33 +141,70 @@ def _source_blocks(competitors):
     return "\n\n".join(blocks) or "未检索到可用公开来源。"
 
 
-def build_web_competitor_prompt(client, competitors):
+def build_web_competitor_prompt(client, competitor):
+    name = competitor.get("name") or ""
     return f"""你是 GEO 竞品公开资料整理助手。
-你的任务是基于公开网页搜索结果，为每个竞品整理客观、可追溯的竞品资料补充包，
+你的任务是基于公开网页搜索结果，只为“{name}”整理客观、可追溯的竞品资料补充包，
 供后续对比型文章中的"其他机构简评"段落和对比表参考。
 
 硬规则：
 1. 只使用输入中的网页来源，不使用外部知识，不编造事实。
-2. 每个竞品必须使用真实竞品名称，不允许写 A/B/C、竞品1、某机构。
-3. 每条重要信息必须带 URL，并标注来源性质：竞品官网 / 媒体 / 行业站 / UGC / 疑似投放。
-   疑似投放的判断特征：测评排名体软文、标注"来源：网络"的地方新闻站转载、把某机构排在第一并集中夸赞的文章。
-4. 疑似投放来源的内容不作为该竞品的事实，不进入正文描述；
-   只在该竞品末尾用一句话记录，例如"存在投放类宣传文章（URL），其中主张不采信"。
-5. 竞品官网和百科内容属于竞品自述，转述时必须带"官网介绍/页面自述"字样；
-   其中的宣传性数字（通过率、学员数、覆盖省数、排名、荣誉）不写入正文描述，
+2. 必须使用真实竞品名称“{name}”，不允许写 A/B/C、竞品1、某机构。
+3. 资料允许时写 300-800 字的结构化条目，可自然覆盖定位、业务与项目、规模与网点、价格线索、口碑与评价、适合人群；来源没有的维度不要硬凑。
+4. 重要信息必须带 URL，并标注来源性质：竞品官网 / 媒体 / 行业站 / UGC / 疑似投放。竞品自述、第三方、UGC、疑似投放的内容均可进入描述，但要如实标注来源性质；矛盾信息并列写出各自 URL，不要选边。
+5. 宣传性数字和绝对化主张（通过率、学员数、覆盖省数、排名、"唯一/第一"、荣誉）不写入正文描述，
    在该竞品末尾集中列一行"宣传主张（仅记录，禁止在我方内容中复述）：……"，规模类数字附来源发布时间。
 6. 不拉踩，不排名，不替客户品牌下判断；对公开信息使用保守表述。
-7. 每个竞品的第一行用一句话概括定位与业务侧重；来源允许时补一句"适合人群"；
-   其余内容简短自然组织，单个竞品总量不超过 200 字（宣传主张行除外）。
-8. 同一竞品的多个来源信息矛盾时（如总部地点、覆盖范围），并列写出两个说法和各自 URL，不要选边。
-9. 来源没有的信息不要硬凑栏目，不要输出空栏目。
-10. 输出 Markdown，不要解释过程。
+7. 来源没有的信息不要硬凑栏目，不要输出空栏目。
+8. 输出 Markdown，第一行必须是“## {name}”，不要输出总标题或解释过程。
 
 客户行业/品类：{(client or {}).get('category') or (client or {}).get('industry') or ''}
 
 联网来源：
-{_source_blocks(competitors)}
+{_source_blocks([competitor])}
 """
+
+
+def _load_web_sections(markdown):
+    text = str(markdown or "").strip()
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", text))
+    if not matches:
+        return "# 竞品联网资料补充包", []
+    preamble = text[:matches[0].start()].strip() or "# 竞品联网资料补充包"
+    sections = []
+    for index, match in enumerate(matches):
+        name = match.group(1).strip()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(text)
+        if name:
+            sections.append((name, text[match.start():end].strip()))
+    return preamble, sections
+
+
+def _competitor_section(name, markdown):
+    text = str(markdown or "").strip()
+    if not text:
+        return ""
+    first_line = text.splitlines()[0].strip()
+    if re.fullmatch(rf"##\s+{re.escape(name)}", first_line):
+        return text
+    return f"## {name}\n\n{text}"
+
+
+def _load_web_sources(path):
+    data = load_json(path, {})
+    competitors = data.get("competitors") if isinstance(data, dict) else {}
+    if isinstance(competitors, dict):
+        return dict(competitors)
+    merged = {}
+    for item in competitors or []:
+        name = str(item.get("name") or "").strip()
+        if name:
+            merged[name] = {
+                "queries": [item.get("query")] if item.get("query") else [],
+                "sources": item.get("sources") or [],
+                "fetched_at": str(item.get("fetched_at") or ""),
+            }
+    return merged
 
 
 def expand_competitor_web_package(
@@ -173,54 +215,84 @@ def expand_competitor_web_package(
     ask_text,
     search_fn,
     fetched_at=None,
-    per_competitor_limit=2,
+    per_competitor_limit=8,
     max_tokens=6000,
+    force=None,
 ):
     if ask_text is None:
         raise ValueError("ask_text is required")
     if search_fn is None:
         raise ValueError("search_fn is required")
-    names = normalize_competitor_names(competitors)
+    names = normalize_competitor_names(list(competitors or []) + list(force or []))
     if not names:
         raise ValueError("missing_competitors")
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     fetched_at = fetched_at or datetime.now().strftime("%Y-%m-%d %H:%M")
 
-    competitor_results = []
-    queries = build_competitor_search_queries(names, client or {}, qualifier)
-    for item in queries:
-        name = item["competitor"]
-        sources = filter_sources(
-            search_fn(item["query"]) or [],
-            fetched_at=fetched_at,
-            limit=per_competitor_limit,
-            subject_keywords=[name],
-        )
-        competitor_results.append({
-            "name": name,
-            "query": item["query"],
-            "source_count": len(sources),
-            "sources": sources,
-        })
-
-    source_count = sum(item["source_count"] for item in competitor_results)
-    if source_count:
-        markdown = str(
-            ask_text(build_web_competitor_prompt(client or {}, competitor_results), max_tokens=max_tokens) or ""
-        ).strip()
-    else:
-        markdown = "# 竞品联网资料补充包\n\n暂无可用竞品联网资料。"
-    if not markdown:
-        raise ValueError("empty_competitor_web_markdown")
-
     markdown_path = output_dir / "latest_web_competitors.md"
-    markdown_path.write_text(markdown, encoding="utf-8")
-    save_json(output_dir / "latest_web_sources.json", {
-        "queries": queries,
-        "competitors": competitor_results,
-        "source_count": source_count,
-    })
+    preamble, stored_sections = _load_web_sections(
+        markdown_path.read_text(encoding="utf-8", errors="ignore") if markdown_path.exists() else ""
+    )
+    section_map = {name: section for name, section in stored_sections}
+    force_names = set(normalize_competitor_names(force))
+    skipped = [name for name in names if name in section_map and name not in force_names]
+    requested = [name for name in names if name not in skipped]
+    query_map = {}
+    for item in build_competitor_search_queries(requested, client or {}, qualifier):
+        query_map.setdefault(item["competitor"], []).append(item)
+
+    source_path = output_dir / "latest_web_sources.json"
+    source_map = _load_web_sources(source_path)
+    competitor_results, updated, failed = [], [], []
+    for name in requested:
+        raw_sources = []
+        try:
+            for item in query_map.get(name, []):
+                raw_sources.extend(search_fn(item["query"]) or [])
+        except Exception:
+            failed.append(name)
+            continue
+        sources = filter_sources(
+            raw_sources, fetched_at=fetched_at, limit=per_competitor_limit,
+            max_content_chars=3000, subject_keywords=[name],
+        )
+        if not sources:
+            failed.append(name)
+            continue
+        competitor = {"name": name, "sources": sources}
+        try:
+            markdown = _competitor_section(
+                name, ask_text(build_web_competitor_prompt(client or {}, competitor), max_tokens)
+            )
+        except Exception:
+            failed.append(name)
+            continue
+        if not markdown:
+            failed.append(name)
+            continue
+        section_map[name] = markdown
+        source_map[name] = {
+            "queries": [item["query"] for item in query_map.get(name, [])],
+            "sources": sources,
+            "fetched_at": fetched_at,
+        }
+        competitor_results.append({"name": name, "queries": source_map[name]["queries"], "source_count": len(sources), "sources": sources})
+        updated.append(name)
+
+    if updated:
+        ordered_names = [name for name, _section in stored_sections if name in section_map]
+        ordered_names.extend(name for name in updated if name not in ordered_names)
+        markdown = "\n\n".join([preamble] + [section_map[name] for name in ordered_names]).strip() + "\n"
+        markdown_path.write_text(markdown, encoding="utf-8")
+        save_json(source_path, {
+            "competitors": source_map,
+            "source_count": sum(len(item.get("sources") or []) for item in source_map.values()),
+        })
+    else:
+        markdown = markdown_path.read_text(encoding="utf-8", errors="ignore") if markdown_path.exists() else ""
+    queries = [item for name in requested for item in query_map.get(name, [])]
+    source_count = sum(item["source_count"] for item in competitor_results)
     return {
         "ok": True,
         "queries": queries,
@@ -228,6 +300,9 @@ def expand_competitor_web_package(
         "competitors": competitor_results,
         "markdown": markdown,
         "path": str(markdown_path),
+        "skipped": skipped,
+        "updated": updated,
+        "failed": failed,
     }
 
 

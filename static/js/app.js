@@ -1686,6 +1686,7 @@ function renderCompetitorEntityGroups(groups) {
       ` : ''}
       ${group.web ? `
         <div style="font-size:11px;font-weight:900;color:var(--teal);margin:10px 0 6px">联网资料补充</div>
+        <button class="btn btn-o btn-sm" onclick="reSearchCompetitorWeb(${JSON.stringify(group.name)})">重新搜索</button>
         <div class="report-md" style="max-height:260px;overflow:auto;border:1px solid var(--border2);border-radius:var(--r-sm);padding:12px;background:white">${markdownPreview(group.web)}</div>
       ` : ''}
     </div>
@@ -1770,7 +1771,7 @@ async function analyzeCompetitorUpload(input) {
   }
 }
 
-async function expandCompetitorWeb() {
+async function expandCompetitorWeb(force=[]) {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
   const competitors = competitorNamesFromInput();
   if (!competitors.length) { toast('请先填写竞品名称','err'); return; }
@@ -1783,7 +1784,7 @@ async function expandCompetitorWeb() {
   spin('spCompetitorWeb', true);
   disableBtn('btnCompetitorWeb', true);
   try {
-    const result = await api(`/api/competitors/${currentClientId}/expand-web`, 'POST', { competitors, qualifier });
+    const result = await api(`/api/competitors/${currentClientId}/expand-web`, 'POST', { competitors, qualifier, force });
     if (result?.error || result?.ok === false) {
       const message = result.error === 'missing_tavily_api_key' ? '缺少 Tavily API Key，请先在系统设置中配置' : (result.error || '竞品联网扩展失败');
       renderCompetitorMaterialResult({error: message});
@@ -1792,7 +1793,9 @@ async function expandCompetitorWeb() {
     }
     latestCompetitorWebMarkdown = result.markdown || '';
     renderCompetitorMaterialResult({upload_markdown: latestCompetitorUploadMarkdown, web_markdown: latestCompetitorWebMarkdown});
-    toast('竞品联网资料整理完成');
+    const skipped = result.skipped?.length ? `；已有资料的竞品已跳过：${result.skipped.join('、')}` : '';
+    const failed = result.failed?.length ? `；失败：${result.failed.join('、')}` : '';
+    toast(`竞品联网资料整理完成${skipped}${failed}`);
   } catch(e) {
     renderCompetitorMaterialResult({error: e.message});
     toast('竞品联网扩展失败：' + e.message, 'err');
@@ -1800,6 +1803,11 @@ async function expandCompetitorWeb() {
     spin('spCompetitorWeb', false);
     disableBtn('btnCompetitorWeb', false);
   }
+}
+
+function reSearchCompetitorWeb(name) {
+  if (!name) return;
+  expandCompetitorWeb([name]);
 }
 
 function copyCompetitorMaterialMarkdown() {

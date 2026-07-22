@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+import json
 from pathlib import Path
 
 
@@ -13,20 +14,19 @@ class CompetitorMaterialsTests(unittest.TestCase):
             qualifier="成人学历提升",
         )
 
-        self.assertEqual(
-            queries,
-            [
-                {"competitor": "第一竞品", "query": "第一竞品 成人学历提升"},
-                {"competitor": "第二竞品", "query": "第二竞品 成人学历提升"},
-            ],
-        )
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+            "第二竞品 成人学历提升", "第二竞品 怎么样 靠谱", "第二竞品 价格 费用", "第二竞品 简介",
+        ])
 
     def test_build_search_queries_falls_back_to_client_industry(self):
         from services.competitor_materials import build_competitor_search_queries
 
         queries = build_competitor_search_queries(["第一竞品"], {"industry": "汽车音响"}, qualifier="")
 
-        self.assertEqual(queries, [{"competitor": "第一竞品", "query": "第一竞品 汽车音响"}])
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 汽车音响", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+        ])
 
     def test_build_search_queries_prefers_client_category_before_industry(self):
         from services.competitor_materials import build_competitor_search_queries
@@ -37,14 +37,18 @@ class CompetitorMaterialsTests(unittest.TestCase):
             qualifier="",
         )
 
-        self.assertEqual(queries, [{"competitor": "第一竞品", "query": "第一竞品 成人学历提升"}])
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+        ])
 
     def test_build_search_queries_uses_competitor_name_without_scope(self):
         from services.competitor_materials import build_competitor_search_queries
 
         queries = build_competitor_search_queries(["第一竞品"], {}, qualifier="")
 
-        self.assertEqual(queries, [{"competitor": "第一竞品", "query": "第一竞品"}])
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+        ])
 
     def test_analyze_upload_package_writes_markdown_with_competitor_prompt_rules(self):
         from services.competitor_materials import analyze_competitor_upload_package
@@ -81,7 +85,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertIn("内部观点备注（仅内部参考，不入内容）", prompts[0])
         self.assertNotIn("疑似同主体", prompts[0])
 
-    def test_expand_web_package_uses_fixed_queries_and_two_sources_per_competitor(self):
+    def test_expand_web_package_merges_per_competitor_and_skips_existing_sections(self):
         from services.competitor_materials import expand_competitor_web_package
 
         calls = []
@@ -97,31 +101,127 @@ class CompetitorMaterialsTests(unittest.TestCase):
             ]
 
         def ask_text(prompt, max_tokens):
-            prompts.append(prompt)
-            return "# 竞品联网资料补充包\n\n## 第一竞品\n- 页面介绍。"
+            prompts.append((prompt, max_tokens))
+            name = "第一竞品" if "第一竞品" in prompt else "第二竞品"
+            return f"## {name}\n- 页面介绍。"
 
         with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
             result = expand_competitor_web_package(
                 {"industry": "教育"},
                 ["第一竞品", "第二竞品"],
                 qualifier="成人学历提升",
-                output_dir=Path(tmp),
+                output_dir=output_dir,
                 ask_text=ask_text,
                 search_fn=search_fn,
                 fetched_at="2026-07-16 12:00",
             )
+            markdown = (output_dir / "latest_web_competitors.md").read_text(encoding="utf-8")
+            sources = json.loads((output_dir / "latest_web_sources.json").read_text(encoding="utf-8"))
+            calls_before_skip = list(calls)
+            prompts_before_skip = list(prompts)
+            skipped = expand_competitor_web_package(
+                {"industry": "教育"}, ["第一竞品", "第二竞品"],
+                qualifier="成人学历提升", output_dir=output_dir, ask_text=ask_text,
+                search_fn=search_fn, fetched_at="2026-07-16 12:01",
+            )
 
-        self.assertEqual(calls, ["第一竞品 成人学历提升", "第二竞品 成人学历提升"])
+        self.assertEqual(len(calls), 8)
         self.assertTrue(result["ok"])
-        self.assertEqual(result["source_count"], 4)
-        self.assertEqual([item["source_count"] for item in result["competitors"]], [2, 2])
-        self.assertIn("每个竞品必须使用真实竞品名称", prompts[0])
-        self.assertIn("其他机构简评", prompts[0])
-        self.assertIn("来源性质：竞品官网 / 媒体 / 行业站 / UGC / 疑似投放", prompts[0])
-        self.assertIn("疑似投放来源的内容不作为该竞品的事实", prompts[0])
-        self.assertIn("官网介绍/页面自述", prompts[0])
-        self.assertIn("同一竞品的多个来源信息矛盾时", prompts[0])
-        self.assertNotIn("生成检索词", prompts[0])
+        self.assertEqual(result["updated"], ["第一竞品", "第二竞品"])
+        self.assertEqual(result["source_count"], 6)
+        self.assertEqual([item["source_count"] for item in result["competitors"]], [3, 3])
+        self.assertIn("## 第一竞品", markdown)
+        self.assertIn("## 第二竞品", markdown)
+        self.assertEqual(set(sources["competitors"]), {"第一竞品", "第二竞品"})
+        self.assertEqual(len(prompts), 2)
+        self.assertTrue(all(tokens >= 4000 for _prompt, tokens in prompts))
+        self.assertIn("资料允许时写 300-800 字", prompts[0][0])
+        self.assertIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0][0])
+        self.assertNotIn("疑似投放来源的内容不作为该竞品的事实", prompts[0][0])
+        self.assertEqual(calls, calls_before_skip)
+        self.assertEqual(prompts, prompts_before_skip)
+        self.assertEqual(skipped["skipped"], ["第一竞品", "第二竞品"])
+        self.assertEqual(skipped["updated"], [])
+
+    def test_expand_web_package_appends_force_replaces_and_keeps_failed_competitor_unchanged(self):
+        from services.competitor_materials import expand_competitor_web_package
+
+        def search_fn(query):
+            if query.startswith("失败机构"):
+                raise RuntimeError("search failed")
+            name = query.split()[0]
+            return [{"title": name, "url": f"https://example.com/{name}/{len(query)}", "content": f"{name} 的公开资料内容足够长，可用于竞品资料整理和后续描述。"}]
+
+        def ask_text(prompt, _max_tokens):
+            name = next(name for name in ["旧机构", "新机构"] if name in prompt)
+            return f"## {name}\n- {name} 最新资料。"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "latest_web_competitors.md").write_text(
+                "# 竞品联网资料补充包\n\n## 旧机构\n- 旧资料。\n\n## 名称/特殊机构(测试)\n- 保留资料。\n",
+                encoding="utf-8",
+            )
+            (output_dir / "latest_web_sources.json").write_text(json.dumps({"competitors": {"旧机构": {"queries": [], "sources": [], "fetched_at": "旧"}}}), encoding="utf-8")
+            added = expand_competitor_web_package(
+                {}, ["新机构", "失败机构"], "", output_dir, ask_text, search_fn,
+                fetched_at="2026-07-16 12:00",
+            )
+            forced = expand_competitor_web_package(
+                {}, ["旧机构"], "", output_dir, ask_text, search_fn,
+                fetched_at="2026-07-16 12:01", force=["旧机构"],
+            )
+            markdown = (output_dir / "latest_web_competitors.md").read_text(encoding="utf-8")
+            sources = json.loads((output_dir / "latest_web_sources.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(added["updated"], ["新机构"])
+        self.assertEqual(added["failed"], ["失败机构"])
+        self.assertEqual(forced["updated"], ["旧机构"])
+        self.assertIn("## 新机构", markdown)
+        self.assertIn("## 旧机构\n- 旧机构 最新资料。", markdown)
+        self.assertIn("## 名称/特殊机构(测试)\n- 保留资料。", markdown)
+        self.assertNotIn("## 失败机构", markdown)
+        self.assertIn("旧机构", sources["competitors"])
+        self.assertIn("新机构", sources["competitors"])
+        self.assertNotIn("失败机构", sources["competitors"])
+
+    def test_expand_web_package_reports_all_failed_without_writing_a_shell(self):
+        from services.competitor_materials import expand_competitor_web_package
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            result = expand_competitor_web_package(
+                {}, ["失败机构"], "", output_dir,
+                ask_text=lambda *_args: self.fail("empty searches must not call ask_text"),
+                search_fn=lambda _query: [], fetched_at="2026-07-16 12:00",
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["failed"], ["失败机构"])
+        self.assertEqual(result["markdown"], "")
+        self.assertFalse((output_dir / "latest_web_competitors.md").exists())
+
+    def test_expand_web_package_keeps_other_competitors_when_one_llm_call_fails(self):
+        from services.competitor_materials import expand_competitor_web_package
+
+        def search_fn(query):
+            name = query.split()[0]
+            return [{"title": name, "url": f"https://example.com/{name}/{len(query)}", "content": f"{name} 的公开资料内容足够长，可用于竞品资料整理和后续描述。"}]
+
+        def ask_text(prompt, _max_tokens):
+            if "失败机构" in prompt:
+                raise RuntimeError("llm failed")
+            return "## 成功机构\n- 成功资料。"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = expand_competitor_web_package(
+                {}, ["成功机构", "失败机构"], "", Path(tmp), ask_text, search_fn,
+                fetched_at="2026-07-16 12:00",
+            )
+
+        self.assertEqual(result["updated"], ["成功机构"])
+        self.assertEqual(result["failed"], ["失败机构"])
 
 
 if __name__ == "__main__":

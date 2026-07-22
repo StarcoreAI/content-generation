@@ -227,10 +227,11 @@ class MaterialApiTests(unittest.TestCase):
         try:
             captured = {}
 
-            def fake_expand(client, competitors, qualifier, output_dir, ask_text, search_fn):
+            def fake_expand(client, competitors, qualifier, output_dir, ask_text, search_fn, force=None):
                 captured["client"] = client
                 captured["competitors"] = competitors
                 captured["qualifier"] = qualifier
+                captured["force"] = force
                 return {
                     "ok": True,
                     "queries": [{"competitor": "第一竞品", "query": "第一竞品 成人学历提升"}],
@@ -247,12 +248,13 @@ class MaterialApiTests(unittest.TestCase):
 
                 response = geo_app.app.test_client().post(
                     "/api/competitors/client-1/expand-web",
-                    json={"competitors": ["第一竞品"], "qualifier": "成人学历提升"},
+                    json={"competitors": ["第一竞品"], "qualifier": "成人学历提升", "force": ["第一竞品"]},
                 )
 
             self.assertEqual(response.status_code, 200)
             self.assertEqual(captured["competitors"], ["第一竞品"])
             self.assertEqual(captured["qualifier"], "成人学历提升")
+            self.assertEqual(captured["force"], ["第一竞品"])
             self.assertEqual(captured["client"]["industry"], "教育")
         finally:
             geo_app.expand_competitor_web_package = original

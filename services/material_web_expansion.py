@@ -73,13 +73,13 @@ def filter_sources(results, fetched_at=None, limit=10, max_content_chars=1800, s
     return sources
 
 
-def tavily_search(query, api_key, timeout=30):
+def tavily_search(query, api_key, timeout=30, max_results=3):
     if not api_key:
         raise ValueError("missing_tavily_api_key")
     payload = {
         "query": query,
         "search_depth": "basic",
-        "max_results": 3,
+        "max_results": max(1, int(max_results)),
         "topic": "general",
         "country": "china",
         "include_answer": False,
