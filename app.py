@@ -2,6 +2,7 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
+import contextvars
 import json, os, re, asyncio, threading, glob, random
 from datetime import datetime, date, timedelta
 from collections import defaultdict
@@ -63,6 +64,8 @@ reference_analysis_jobs = {}
 content_batch_jobs_guard = threading.RLock()
 content_batch_jobs = None
 content_generation_lock = threading.RLock()
+PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS = 1200
+planning_brief_diagnostic_context = contextvars.ContextVar("planning_brief_diagnostic_context", default=None)
 
 
 def get_crawl_platform_lock(platform):
@@ -207,6 +210,48 @@ def load(path, default):
 
 def save(path, data):
     save_json(path, data)
+
+
+def _append_planning_brief_attempt(attempt):
+    context = planning_brief_diagnostic_context.get()
+    if context is not None:
+        context.setdefault("attempts", []).append(dict(attempt))
+
+
+def _update_latest_planning_brief_attempt(**changes):
+    context = planning_brief_diagnostic_context.get()
+    if context and context.get("attempts"):
+        context["attempts"][-1].update(changes)
+
+
+def planning_brief_diagnostic_path(cid):
+    safe_cid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(cid or "")) or "unknown"
+    return os.path.join(D, "content_generation_diagnostics", safe_cid, "latest_planning_brief.json")
+
+
+def save_planning_brief_diagnostic(cid, run_id, record):
+    path = planning_brief_diagnostic_path(cid)
+    saved_record = dict(record or {})
+    attempts = []
+    for item in saved_record.get("attempts") or []:
+        entry = dict(item or {})
+        if "response_preview" in entry:
+            entry["response_preview"] = str(entry["response_preview"] or "")[:PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS]
+        attempts.append(entry)
+    saved_record["attempts"] = attempts
+    current = load(path, {})
+    if current.get("run_id") != str(run_id or ""):
+        current = {
+            "schema_version": 1,
+            "client_id": str(cid or ""),
+            "run_id": str(run_id or ""),
+            "records": [],
+        }
+    current["updated_at"] = now_str()
+    current.setdefault("records", []).append(saved_record)
+    save(path, current)
+    return path
+
 
 def normalize_platform_filter(platform):
     """Return None when the UI asks for all crawl platforms."""
@@ -517,10 +562,25 @@ def get_tavily_api_key(settings=None):
 
 def ai(prompt, max_tokens=2000):
     s = get_settings()
-    return ai_with_settings(prompt, max_tokens, s)
+    try:
+        raw, diagnostics = ai_with_settings_response(prompt, max_tokens, s)
+    except Exception as exc:
+        _append_planning_brief_attempt({"status": "request_error", "error": str(exc)})
+        raise
+    _append_planning_brief_attempt({
+        "status": "received",
+        **diagnostics,
+        "response_preview": raw[:PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS],
+    })
+    return raw
 
 
 def ai_with_settings(prompt, max_tokens=2000, settings=None):
+    raw, _diagnostics = ai_with_settings_response(prompt, max_tokens, settings)
+    return raw
+
+
+def ai_with_settings_response(prompt, max_tokens=2000, settings=None):
     s = settings or get_settings()
     if not s.get("api_key"):
         raise Exception("请先在系统设置中配置 API Key")
@@ -532,7 +592,13 @@ def ai_with_settings(prompt, max_tokens=2000, settings=None):
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
     resp = client.chat.completions.create(**kwargs)
-    return resp.choices[0].message.content.strip()
+    choice = resp.choices[0]
+    raw = str(getattr(choice.message, "content", "") or "").strip()
+    return raw, {
+        "model": str(getattr(resp, "model", "") or s.get("model", "")),
+        "finish_reason": str(getattr(choice, "finish_reason", "") or ""),
+        "response_length": len(raw),
+    }
 
 def ai_deepseek_pro(messages, max_tokens=6000):
     s = get_settings()
@@ -546,7 +612,13 @@ def ai_deepseek_pro(messages, max_tokens=6000):
 
 def ai_json(prompt, max_tokens=1500):
     raw = ai(prompt, max_tokens)
-    return parse_ai_json(raw)
+    try:
+        result = parse_ai_json(raw)
+    except json.JSONDecodeError as exc:
+        _update_latest_planning_brief_attempt(status="invalid_json", error=str(exc))
+        raise
+    _update_latest_planning_brief_attempt(status="parsed")
+    return result
 
 
 def ai_json_with_settings(prompt, max_tokens=1500, settings=None):
@@ -1819,13 +1891,30 @@ def _run_content_generation(payload, audience_angles=None, created_by="", batch_
         recent_endings=sampling_history["recent_endings"],
         avoid_skeleton_opening_pairs=avoid_skeleton_opening_pairs,
     )
-    brief = generate_planning_brief(
-        sample,
-        customer_material_text=sources["customer_material_text"],
-        content_upload_text=sources["content_upload_text"],
-        competitor_markdown=selected_competitor_markdown,
-        ai_json_fn=ai_json,
-    )
+    brief_diagnostic = {
+        "started_at": now_str(),
+        "batch_id": str(batch_id or ""),
+        "attempts": [],
+    }
+    brief_run_id = str(batch_id or uid())
+    brief_diagnostic_token = planning_brief_diagnostic_context.set(brief_diagnostic)
+    try:
+        brief = generate_planning_brief(
+            sample,
+            customer_material_text=sources["customer_material_text"],
+            content_upload_text=sources["content_upload_text"],
+            competitor_markdown=selected_competitor_markdown,
+            ai_json_fn=ai_json,
+        )
+    except Exception as exc:
+        brief_diagnostic.update({"status": "failed", "error": str(exc)})
+        save_planning_brief_diagnostic(cid, brief_run_id, brief_diagnostic)
+        raise
+    else:
+        brief_diagnostic["status"] = "success"
+        save_planning_brief_diagnostic(cid, brief_run_id, brief_diagnostic)
+    finally:
+        planning_brief_diagnostic_context.reset(brief_diagnostic_token)
     messages = build_content_generation_messages(
         client=client,
         brief=brief,

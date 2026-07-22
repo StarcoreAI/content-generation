@@ -308,8 +308,13 @@ def generate_planning_brief(sample, *, customer_material_text="", content_upload
         content_upload_text=content_upload_text,
         competitor_markdown=competitor_markdown,
     )
+    last_json_error = None
     for _ in range(BRIEF_LLM_MAX_ATTEMPTS):
-        raw = ai_json_fn(prompt, BRIEF_MAX_TOKENS)
+        try:
+            raw = ai_json_fn(prompt, BRIEF_MAX_TOKENS)
+        except json.JSONDecodeError as exc:
+            last_json_error = exc
+            continue
         if isinstance(raw, str):
             if not raw.strip():
                 continue
@@ -320,6 +325,8 @@ def generate_planning_brief(sample, *, customer_material_text="", content_upload
         if not raw:
             continue
         return validate_planning_brief(raw, sample)
+    if last_json_error is not None:
+        raise ValueError("invalid_planning_brief_json") from last_json_error
     raise ValueError("empty_planning_brief_response")
 
 

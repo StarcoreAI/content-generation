@@ -153,6 +153,78 @@ class CoreFunctionTests(unittest.TestCase):
         self.assertNotIn("max_tokens", captured)
         self.assertEqual(captured["model"], "model-a")
 
+    def test_ai_with_settings_response_exposes_completion_diagnostics(self):
+        class FakeChoice:
+            message = type("Message", (), {"content": "  body  "})
+            finish_reason = "length"
+
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return type("Response", (), {"model": "actual-model", "choices": [FakeChoice()]})
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with patch.object(geo_app, "OpenAI", FakeOpenAI):
+            raw, diagnostics = geo_app.ai_with_settings_response(
+                "prompt",
+                settings={"api_key": "key", "base_url": "https://api.example.com", "model": "configured-model"},
+            )
+
+        self.assertEqual(raw, "body")
+        self.assertEqual(diagnostics, {
+            "model": "actual-model",
+            "finish_reason": "length",
+            "response_length": 4,
+        })
+
+    def test_ai_json_records_parsing_diagnostics_in_planning_context(self):
+        class FakeChoice:
+            message = type("Message", (), {"content": "{}"})
+            finish_reason = "stop"
+
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return type("Response", (), {"model": "actual-model", "choices": [FakeChoice()]})
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        context = {"attempts": []}
+        token = geo_app.planning_brief_diagnostic_context.set(context)
+        try:
+            with patch.object(geo_app, "OpenAI", FakeOpenAI), \
+                    patch.object(geo_app, "get_settings", return_value={
+                        "api_key": "key", "base_url": "https://api.example.com", "model": "configured-model",
+                    }):
+                self.assertEqual(geo_app.ai_json("prompt"), {})
+        finally:
+            geo_app.planning_brief_diagnostic_context.reset(token)
+
+        self.assertEqual(context["attempts"], [{
+            "status": "parsed",
+            "model": "actual-model",
+            "finish_reason": "stop",
+            "response_length": 2,
+            "response_preview": "{}",
+        }])
+
+    def test_save_planning_brief_diagnostic_writes_truncated_attempts(self):
+        with isolated_app_data() as tmp:
+            geo_app.save_planning_brief_diagnostic(
+                "client-1",
+                "batch-1",
+                {"attempts": [{"response_preview": "x" * 1500}]},
+            )
+
+            path = os.path.join(tmp, "content_generation_diagnostics", "client-1", "latest_planning_brief.json")
+            data = geo_app.load(path, {})
+
+        self.assertEqual(data["run_id"], "batch-1")
+        self.assertEqual(data["records"][0]["attempts"][0]["response_preview"], "x" * 1200)
+
     def test_uid_is_unique_when_clock_timestamp_repeats(self):
         class FixedDatetime:
             @staticmethod

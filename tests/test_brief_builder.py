@@ -1,4 +1,5 @@
 import random
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -342,6 +343,33 @@ class BriefBuilderTests(unittest.TestCase):
                 generate_planning_brief(
                     self.sample(library), ai_json_fn=lambda prompt, max_tokens: calls.append(prompt) or "",
                 )
+            self.assertEqual(len(calls), 2)
+
+    def test_invalid_json_error_retries_once_then_uses_valid_brief(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library, _ = make_library(Path(tmp))
+            sample = self.sample(library, faq_questions=[])
+            calls = []
+            valid_brief = {
+                "title_candidates": ["标题一", "标题二"],
+                "angle_statement": "主线",
+                "sections": [
+                    {"id": 1, "功能": "开头", "要点": "施工指令", "引用": [], "字数": 200},
+                    {"id": 2, "功能": "正文", "要点": "施工指令", "引用": [], "字数": 500},
+                ],
+                "bans": [],
+                "dedup_hints": "避让",
+            }
+
+            def invalid_once_then_valid(_prompt, _max_tokens):
+                calls.append(1)
+                if len(calls) == 1:
+                    raise json.JSONDecodeError("Expecting value", "", 0)
+                return valid_brief
+
+            result = generate_planning_brief(sample, ai_json_fn=invalid_once_then_valid)
+
+            self.assertEqual(result, valid_brief)
             self.assertEqual(len(calls), 2)
 
     def test_invalid_brief_schema_fails_without_a_partial_result(self):
