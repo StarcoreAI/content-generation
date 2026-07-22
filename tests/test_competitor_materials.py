@@ -15,8 +15,8 @@ class CompetitorMaterialsTests(unittest.TestCase):
         )
 
         self.assertEqual([item["query"] for item in queries], [
-            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
-            "第二竞品 成人学历提升", "第二竞品 怎么样 靠谱", "第二竞品 价格 费用", "第二竞品 简介",
+            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 简介",
+            "第二竞品 成人学历提升", "第二竞品 怎么样 靠谱", "第二竞品 简介",
         ])
 
     def test_build_search_queries_falls_back_to_client_industry(self):
@@ -25,7 +25,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         queries = build_competitor_search_queries(["第一竞品"], {"industry": "汽车音响"}, qualifier="")
 
         self.assertEqual([item["query"] for item in queries], [
-            "第一竞品 汽车音响", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+            "第一竞品 汽车音响", "第一竞品 怎么样 靠谱", "第一竞品 简介",
         ])
 
     def test_build_search_queries_prefers_client_category_before_industry(self):
@@ -38,7 +38,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         )
 
         self.assertEqual([item["query"] for item in queries], [
-            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+            "第一竞品 成人学历提升", "第一竞品 怎么样 靠谱", "第一竞品 简介",
         ])
 
     def test_build_search_queries_uses_competitor_name_without_scope(self):
@@ -47,7 +47,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         queries = build_competitor_search_queries(["第一竞品"], {}, qualifier="")
 
         self.assertEqual([item["query"] for item in queries], [
-            "第一竞品", "第一竞品 怎么样 靠谱", "第一竞品 价格 费用", "第一竞品 简介",
+            "第一竞品", "第一竞品 怎么样 靠谱", "第一竞品 简介",
         ])
 
     def test_analyze_upload_package_writes_markdown_with_competitor_prompt_rules(self):
@@ -124,7 +124,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
                 search_fn=search_fn, fetched_at="2026-07-16 12:01",
             )
 
-        self.assertEqual(len(calls), 16)
+        self.assertEqual(len(calls), 12)
         self.assertTrue(result["ok"])
         self.assertEqual(result["updated"], ["第一竞品", "第二竞品"])
         self.assertEqual(result["source_count"], 6)
@@ -138,7 +138,7 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertNotIn("300-800 字", prompts[0][0])
         self.assertIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0][0])
         self.assertNotIn("疑似投放来源的内容不作为该竞品的事实", prompts[0][0])
-        self.assertEqual(len(calls), 16)
+        self.assertEqual(len(calls), 12)
         self.assertEqual(len(prompts), 4)
         self.assertEqual(rerun["skipped"], [])
         self.assertEqual(rerun["updated"], ["第一竞品", "第二竞品"])

@@ -39,7 +39,6 @@ def build_competitor_search_queries(competitors, client=None, qualifier=""):
         for query in [
             f"{name} {scope}".strip(),
             f"{name} 怎么样 靠谱",
-            f"{name} 价格 费用",
             f"{name} 简介",
         ]:
             queries.append({"competitor": name, "query": query})
