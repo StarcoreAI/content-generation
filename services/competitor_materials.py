@@ -45,6 +45,67 @@ def build_competitor_search_queries(competitors, client=None, qualifier=""):
     return queries
 
 
+def build_competitor_search_query_prompt(competitors, client=None, qualifier="", customer_context="", competitor_context=""):
+    names = normalize_competitor_names(competitors)
+    scope = competitor_qualifier(client or {}, qualifier)
+    return f"""你是 GEO 竞品联网检索词策划助手。
+请为每个真实竞品名称生成用于公开网页搜索的检索词，帮助后续整理该竞品的详细业务资料。
+
+客户行业/品类：{scope}
+客户地区：{(client or {}).get('region') or ''}
+竞品名单：
+{"\n".join(f"- {name}" for name in names)}
+
+规则：
+1. 每行严格输出“真实竞品名称 | 检索词”，不输出标题、编号或解释。
+2. 检索词必须保留对应真实竞品名称，并结合客户行业/品类。
+3. 围绕业务、服务、项目、案例、流程、施工或交付、团队、售后等能展开具体资料的方向生成；同一竞品的词要有不同角度。客户资料只用于识别同行业的业务场景、服务主词和目标人群，再结合竞品名称搜索同类公开资料；不要把客户品牌、客户优势或行业公共背景原样改成竞品检索词。可选竞品上传资料只取与该行竞品名称相同的分节，用来补充该竞品的主体、地区或服务线索，不借用其他竞品的信息。
+4. 不使用 A/B/C、竞品1、某机构等占位名称，不生成泛化的“哪家好”“排行榜”“怎么选”类词。
+
+客户资料注入包：
+{_compact_text(customer_context, 12000)}
+
+可选竞品上传资料：
+{_compact_text(competitor_context, 12000)}
+"""
+
+
+def generate_competitor_search_queries(competitors, client=None, qualifier="", ask_text=None,
+                                       customer_context="", competitor_context=""):
+    names = normalize_competitor_names(competitors)
+    fallback = build_competitor_search_queries(names, client or {}, qualifier)
+    if not names or ask_text is None:
+        return fallback
+    try:
+        generated = str(ask_text(
+            build_competitor_search_query_prompt(
+                names, client or {}, qualifier, customer_context, competitor_context,
+            ),
+            max_tokens=1600,
+        ) or "")
+    except Exception:
+        return fallback
+
+    by_name = {name: [] for name in names}
+    for line in generated.splitlines():
+        parts = re.split(r"\s*[|｜]\s*", line.strip(), maxsplit=1)
+        if len(parts) != 2:
+            continue
+        name, query = (part.strip() for part in parts)
+        if name not in by_name or not query or name not in query or query in by_name[name]:
+            continue
+        by_name[name].append(query)
+
+    queries = []
+    fallback_by_name = {}
+    for item in fallback:
+        fallback_by_name.setdefault(item["competitor"], []).append(item["query"])
+    for name in names:
+        for query in by_name[name] or fallback_by_name.get(name, []):
+            queries.append({"competitor": name, "query": query})
+    return queries
+
+
 def _readable_units(package_dir):
     extracted = extract_material_package(package_dir)
     return [
@@ -129,15 +190,22 @@ def _source_blocks(competitors):
         sources = item.get("sources") or []
         if not sources:
             continue
-        source_text = []
+        expandable = []
         for source in sources:
-            source_text.append(
+            title = source.get("title", "")
+            content = source.get("content", "")
+            if len(str(content or "").strip()) < 200:
+                continue
+            expandable.append(
                 f"标题：{source.get('title', '')}\n"
-                f"URL：{source.get('url', '')}\n"
                 f"时间：{source.get('published_date') or source.get('fetched_at') or ''}\n"
-                f"正文片段：{source.get('content', '')}"
+                f"正文片段：{content}"
             )
-        blocks.append(f"=== 竞品：{name} ===\n" + "\n\n".join(source_text))
+        blocks.append(
+            f"=== 竞品：{name} ===\n"
+            "【可展开来源】\n"
+            + ("\n\n".join(expandable) or "无")
+        )
     return "\n\n".join(blocks) or "未检索到可用公开来源。"
 
 
@@ -150,11 +218,11 @@ def build_web_competitor_prompt(client, competitor):
 硬规则：
 1. 只使用输入中的网页来源，不使用外部知识，不编造事实。
 2. 必须使用真实竞品名称“{name}”，不允许写 A/B/C、竞品1、某机构。
-3. 资料允许时写充分的结构化条目，可自然覆盖定位、业务与项目、规模与网点、价格线索、口碑与评价、适合人群。
-4. 正文描述统一使用直接陈述句，直接写定位、业务、服务、网点或地址等常规事实；不要写“公开页面显示其……”“页面自述”“据 X 介绍”“根据资料显示”等转述句式。来源性质只保留在链接标注里，不进入句子本身。
+3. 资料允许时写充分的结构化条目，可自然覆盖定位、业务与项目、规模与网点、价格线索、口碑与评价、适合人群。对【可展开来源】中的独有事实，不为了简洁省略案例、城市或门店、服务步骤、公开数据、团队和售后等具体信息，也不要压成“提供一站式服务”等泛化句。
+4. 正文描述统一使用直接陈述句，直接写定位、业务、服务、网点或地址等常规事实；不要写“公开页面显示其……”“页面自述”“据 X 介绍”“根据资料显示”等转述句式。
 5. 不拉踩，不排名，不替客户品牌下判断；对公开信息使用保守表述。
 6. 来源没有的信息不要硬凑栏目，不要输出空栏目。
-7. 输出 Markdown，第一行必须是“## {name}”，不要输出总标题或解释过程。只保留该竞品的事实和来源；不得添加“适合对比关注的维度”“对比关注点”“怎么选”“选择建议”等面向读者的比较指导小节。
+7. 输出 Markdown，第一行必须是“## {name}”，不要输出总标题或解释过程。只保留该竞品的事实；不得输出链接、URL、来源标签或来源说明；不得添加“适合对比关注的维度”“对比关注点”“怎么选”“选择建议”等面向读者的比较指导小节。
 
 客户行业/品类：{(client or {}).get('category') or (client or {}).get('industry') or ''}
 
@@ -230,6 +298,8 @@ def expand_competitor_web_package(
     per_competitor_limit=8,
     max_tokens=6000,
     force=None,
+    customer_context="",
+    competitor_context="",
 ):
     if ask_text is None:
         raise ValueError("ask_text is required")
@@ -249,7 +319,10 @@ def expand_competitor_web_package(
     )
     section_map = {name: section for name, section in stored_sections} if force_names else {}
     query_map = {}
-    for item in build_competitor_search_queries(requested, client or {}, qualifier):
+    for item in generate_competitor_search_queries(
+        requested, client or {}, qualifier, ask_text=ask_text,
+        customer_context=customer_context, competitor_context=competitor_context,
+    ):
         query_map.setdefault(item["competitor"], []).append(item)
 
     source_path = output_dir / "latest_web_sources.json"

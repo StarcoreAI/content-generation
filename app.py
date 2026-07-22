@@ -1189,6 +1189,8 @@ def run_client_competitor_web_expansion(cid, competitors, qualifier="", force=No
         raise ValueError("missing_tavily_api_key")
     ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
     search_fn = lambda query: tavily_search(query, tavily_key, max_results=5)
+    material_path = material_package_output_dir(cid) / "latest_injection.md"
+    competitor_path = competitor_package_output_dir(cid) / "latest_upload_competitors.md"
     return expand_competitor_web_package(
         client=client,
         competitors=competitors,
@@ -1197,6 +1199,8 @@ def run_client_competitor_web_expansion(cid, competitors, qualifier="", force=No
         ask_text=ask_text,
         search_fn=search_fn,
         force=force,
+        customer_context=material_path.read_text(encoding="utf-8", errors="ignore") if material_path.exists() else "",
+        competitor_context=competitor_path.read_text(encoding="utf-8", errors="ignore") if competitor_path.exists() else "",
     )
 
 @app.route("/api/materials/<cid>", methods=["GET"])

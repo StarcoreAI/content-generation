@@ -227,11 +227,14 @@ class MaterialApiTests(unittest.TestCase):
         try:
             captured = {}
 
-            def fake_expand(client, competitors, qualifier, output_dir, ask_text, search_fn, force=None):
+            def fake_expand(client, competitors, qualifier, output_dir, ask_text, search_fn, force=None,
+                            customer_context="", competitor_context=""):
                 captured["client"] = client
                 captured["competitors"] = competitors
                 captured["qualifier"] = qualifier
                 captured["force"] = force
+                captured["customer_context"] = customer_context
+                captured["competitor_context"] = competitor_context
                 return {
                     "ok": True,
                     "queries": [{"competitor": "第一竞品", "query": "第一竞品 成人学历提升"}],
@@ -245,6 +248,12 @@ class MaterialApiTests(unittest.TestCase):
             with isolated_material_app():
                 geo_app.save(geo_app.F_CLIENTS, [{"id": "client-1", "name": "客户", "industry": "教育"}])
                 geo_app.save(geo_app.F_SETTINGS, {"tavily_api_key": "tvly-test", "api_key": "model-key"})
+                material_dir = geo_app.material_package_output_dir("client-1")
+                material_dir.mkdir(parents=True, exist_ok=True)
+                (material_dir / "latest_injection.md").write_text("# 客户资料\n- 成人学历提升服务。", encoding="utf-8")
+                competitor_dir = geo_app.competitor_package_output_dir("client-1")
+                competitor_dir.mkdir(parents=True, exist_ok=True)
+                (competitor_dir / "latest_upload_competitors.md").write_text("# 竞品资料\n## 第一竞品\n- 线下咨询。", encoding="utf-8")
 
                 response = geo_app.app.test_client().post(
                     "/api/competitors/client-1/expand-web",
@@ -256,6 +265,8 @@ class MaterialApiTests(unittest.TestCase):
             self.assertEqual(captured["qualifier"], "成人学历提升")
             self.assertEqual(captured["force"], ["第一竞品"])
             self.assertEqual(captured["client"]["industry"], "教育")
+            self.assertIn("成人学历提升服务", captured["customer_context"])
+            self.assertIn("线下咨询", captured["competitor_context"])
         finally:
             geo_app.expand_competitor_web_package = original
 

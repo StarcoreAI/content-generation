@@ -50,6 +50,53 @@ class CompetitorMaterialsTests(unittest.TestCase):
             "第一竞品", "第一竞品 怎么样 靠谱", "第一竞品 简介",
         ])
 
+    def test_generated_search_queries_use_industry_and_business_angles(self):
+        from services.competitor_materials import generate_competitor_search_queries
+
+        prompts = []
+
+        def ask_text(prompt, max_tokens):
+            prompts.append((prompt, max_tokens))
+            return "\n".join([
+                "第一竞品 | 第一竞品 成人学历提升 服务流程",
+                "第一竞品 | 第一竞品 成人学历提升 项目案例",
+                "第二竞品 | 第二竞品 成人学历提升 课程服务",
+            ])
+
+        queries = generate_competitor_search_queries(
+            ["第一竞品", "第二竞品"],
+            {"industry": "教育", "category": "成人学历提升"},
+            qualifier="",
+            ask_text=ask_text,
+            customer_context="# 客户资料注入包\n\n## 产品与服务\n- 提供报名规划、学习支持和节点提醒服务。",
+            competitor_context="## 第一竞品\n- 昆山校区提供线下咨询和课程服务。",
+        )
+
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 成人学历提升 服务流程",
+            "第一竞品 成人学历提升 项目案例",
+            "第二竞品 成人学历提升 课程服务",
+        ])
+        self.assertEqual(len(prompts), 1)
+        self.assertIn("行业/品类", prompts[0][0])
+        self.assertIn("业务、服务、项目、案例、流程", prompts[0][0])
+        self.assertIn("报名规划、学习支持和节点提醒服务", prompts[0][0])
+        self.assertIn("昆山校区提供线下咨询和课程服务", prompts[0][0])
+        self.assertIn("客户资料只用于识别同行业的业务场景", prompts[0][0])
+        self.assertIn("只取与该行竞品名称相同的分节", prompts[0][0])
+
+    def test_generated_search_queries_fall_back_when_llm_output_is_invalid(self):
+        from services.competitor_materials import generate_competitor_search_queries
+
+        queries = generate_competitor_search_queries(
+            ["第一竞品"], {"industry": "教育"}, qualifier="",
+            ask_text=lambda *_args: "无法生成",
+        )
+
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 教育", "第一竞品 怎么样 靠谱", "第一竞品 简介",
+        ])
+
     def test_analyze_upload_package_writes_markdown_with_competitor_prompt_rules(self):
         from services.competitor_materials import analyze_competitor_upload_package
 
@@ -132,16 +179,20 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertIn("## 第一竞品", markdown)
         self.assertIn("## 第二竞品", markdown)
         self.assertEqual(set(sources["competitors"]), {"第一竞品", "第二竞品"})
-        self.assertEqual(len(prompts), 4)
-        self.assertTrue(all(tokens >= 4000 for _prompt, tokens in prompts))
-        self.assertIn("资料允许时写充分的结构化条目", prompts[0][0])
-        self.assertNotIn("300-800 字", prompts[0][0])
-        self.assertNotIn("宣传主张（仅记录，禁止在我方内容中复述）", prompts[0][0])
-        self.assertNotIn("来源没有的维度不要硬凑", prompts[0][0])
-        self.assertNotIn("重要信息必须带 URL", prompts[0][0])
-        self.assertNotIn("疑似投放来源的内容不作为该竞品的事实", prompts[0][0])
+        query_prompts = [(prompt, tokens) for prompt, tokens in prompts if "竞品联网检索词策划助手" in prompt]
+        summary_prompts = [(prompt, tokens) for prompt, tokens in prompts if "竞品公开资料整理助手" in prompt]
+        self.assertEqual(len(query_prompts), 2)
+        self.assertTrue(all(tokens == 1600 for _prompt, tokens in query_prompts))
+        self.assertEqual(len(summary_prompts), 4)
+        self.assertTrue(all(tokens >= 4000 for _prompt, tokens in summary_prompts))
+        self.assertIn("资料允许时写充分的结构化条目", summary_prompts[0][0])
+        self.assertNotIn("300-800 字", summary_prompts[0][0])
+        self.assertNotIn("宣传主张（仅记录，禁止在我方内容中复述）", summary_prompts[0][0])
+        self.assertNotIn("来源没有的维度不要硬凑", summary_prompts[0][0])
+        self.assertNotIn("重要信息必须带 URL", summary_prompts[0][0])
+        self.assertNotIn("疑似投放来源的内容不作为该竞品的事实", summary_prompts[0][0])
         self.assertEqual(len(calls), 12)
-        self.assertEqual(len(prompts), 4)
+        self.assertEqual(len(prompts), 6)
         self.assertEqual(rerun["skipped"], [])
         self.assertEqual(rerun["updated"], ["第一竞品", "第二竞品"])
 
@@ -199,8 +250,37 @@ class CompetitorMaterialsTests(unittest.TestCase):
         self.assertNotIn("来源没有的维度不要硬凑", web_prompt)
         self.assertNotIn("重要信息必须带 URL", web_prompt)
         self.assertIn("4. 正文描述统一使用直接陈述句", web_prompt)
-        self.assertIn("来源性质只保留在链接标注里", web_prompt)
+        self.assertNotIn("来源性质只保留在链接标注里", web_prompt)
+        self.assertIn("不得输出链接、URL、来源标签或来源说明", web_prompt)
         self.assertNotIn("不采信", web_prompt)
+
+    def test_web_competitor_prompt_uses_long_sources_for_detail_without_outputting_source_links(self):
+        from services.competitor_materials import build_web_competitor_prompt
+
+        web_prompt = build_web_competitor_prompt({}, {
+            "name": "机构A",
+            "sources": [
+                {
+                    "title": "长正文来源",
+                    "url": "https://example.com/long",
+                    "content": "机构A 的服务流程、项目案例和售后安排。" * 20,
+                },
+                {
+                    "title": "短摘要来源",
+                    "url": "https://example.com/short",
+                    "content": "机构A 简短摘要。",
+                },
+            ],
+        })
+
+        self.assertIn("【可展开来源】", web_prompt)
+        self.assertIn("机构A 的服务流程、项目案例和售后安排", web_prompt)
+        self.assertNotIn("链接线索", web_prompt)
+        self.assertNotIn("https://example.com/long", web_prompt)
+        self.assertNotIn("https://example.com/short", web_prompt)
+        self.assertNotIn("正文片段：机构A 简短摘要。", web_prompt)
+        self.assertIn("不为了简洁省略", web_prompt)
+        self.assertIn("不得输出链接、URL、来源标签或来源说明", web_prompt)
 
     def test_competitor_section_removes_comparison_guidance_subsection(self):
         from services.competitor_materials import _competitor_section
