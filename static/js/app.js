@@ -7,6 +7,8 @@ function navTo(page, el) {
   // page-specific load
   if (page === 'content') loadContent();
   if (page === 'quality') loadQualityGateArticles();
+  if (page === 'publish') loadPublishPage();
+  if (page === 'resources') loadResourcePage();
   if (page === 'daily') loadDailyPage();
   if (page === 'reference') loadReferenceIntelligence();
   if (page === 'materials') loadMaterialAnalysis();
@@ -16,6 +18,262 @@ function navTo(page, el) {
 }
 // ── State ─────────────────────────────────────────────
 let currentClientId = '';
+let distributionFavorites = [];
+let distributionFavoriteMatchJob = {status: 'idle'};
+let distributionFavoriteMatchTimer = null;
+
+async function loadPublishPage() {
+  const el = document.getElementById('publishDraftList');
+  if (!currentClientId) { el.textContent = '请选择客户后查看发布草稿'; return; }
+  const r = await api('/api/distribution/drafts?client_id=' + encodeURIComponent(currentClientId));
+  const resources = await api('/api/distribution/resources?client_id=' + encodeURIComponent(currentClientId));
+  const resourceLabel = x => x.resource_type === 'news_media' ? '新闻媒体' : '自媒体';
+  const options = (resources.resources || []).filter(x => String(x.status) === '1').map(x => `<option value="${escHtml(JSON.stringify({resource_id: x.resource_id, resource_type: x.resource_type || 'self_media'}))}">${escHtml(resourceLabel(x))} · ${escHtml(x.name)} · ¥${escHtml(x.price)}</option>`).join('');
+  el.innerHTML = r.error ? escHtml(r.error) : (r.drafts || []).map(d => `<div class="article-card"><div class="article-title">${escHtml(d.article_title)}</div><div class="article-meta">门禁：${escHtml(d.gate_verdict || '未审核')} · ${escHtml(d.status)}</div><div class="article-acts"><a class="btn btn-o btn-sm" target="_blank" href="/public/publications/${escHtml(d.preview_token)}">查看预览</a><select id="publish-resource-${escHtml(d.id)}"><option value="">选择发布资源</option>${options}</select><button class="btn btn-p btn-sm" onclick="submitDistributionOrder('${escHtml(d.id)}')">确认下单</button></div></div>`).join('') || '暂无发布草稿';
+}
+
+async function submitDistributionOrder(draftId) {
+  const selected = document.getElementById('publish-resource-' + draftId)?.value;
+  if (!selected) { toast('请选择资源', 'err'); return; }
+  const resource = JSON.parse(selected);
+  if (!confirm('将向供应商创建真实发稿订单，可能扣费。确认提交？')) return;
+  const r = await api('/api/distribution/orders', 'POST', {client_id: currentClientId, draft_id: draftId, resource_id: resource.resource_id, resource_type: resource.resource_type});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast(r.order?.status === 'submit_unknown' ? '状态未知，请勿重复提交' : '订单已提交');
+}
+
+async function uploadPublicationFiles(files) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const accepted = Array.from(files || []).filter(file => /\.(txt|md|docx)$/i.test(file.name));
+  if (!accepted.length) { toast('请选择 txt、md 或 docx 文章', 'err'); return; }
+  const form = new FormData();
+  form.append('client_id', currentClientId);
+  accepted.forEach(file => form.append('files', file, file.name));
+  const response = await fetch('/api/distribution/drafts/upload', {method: 'POST', body: form});
+  const result = await response.json();
+  if (!response.ok || result.error) { toast(result.error || '上传失败', 'err'); return; }
+  const rejected = result.rejected || [];
+  toast(rejected.length ? `已创建 ${result.drafts.length} 篇草稿，${rejected.length} 个文件未导入` : `已创建 ${result.drafts.length} 篇发布草稿`);
+  loadPublishPage();
+}
+
+function uploadPublicationInput(input) {
+  uploadPublicationFiles(input.files);
+  input.value = '';
+}
+
+function handlePublicationDrop(event) {
+  event.preventDefault();
+  uploadPublicationFiles(event.dataTransfer?.files);
+}
+
+async function loadResourcePage() {
+  const el = document.getElementById('resourceList');
+  loadDistributionCredentials();
+  loadDistributionFavorites();
+  loadDistributionFavoriteMatchStatus();
+  if (!currentClientId) { el.textContent = '请选择客户后查看资源'; return; }
+  const r = await api('/api/distribution/resources?client_id=' + encodeURIComponent(currentClientId));
+  el.innerHTML = r.error ? escHtml(r.error) : (r.resources || []).map(x => `<div class="article-card"><div class="article-title">${escHtml(x.name)}</div><div class="article-meta">${escHtml(x.resource_type === 'news_media' ? '新闻媒体' : '自媒体')} · ID ${escHtml(x.resource_id)} · ¥${escHtml(x.price)} · 状态 ${escHtml(x.status)}</div></div>`).join('') || '暂无已同步资源';
+}
+
+async function loadDistributionCredentials() {
+  const status = document.getElementById('distributionCredentialStatus');
+  if (!status) return;
+  const r = await api('/api/distribution/credentials');
+  if (r.error) { status.textContent = r.error; return; }
+  status.textContent = r.configured ? '已配置你的 RWMeiti 凭据' : '尚未配置；配置后才能匹配和同步供应商资源';
+  const placeholder = r.configured ? '已配置，留空不修改' : '填写 secret_id';
+  document.getElementById('distributionSecretId').placeholder = placeholder;
+  document.getElementById('distributionSecretKey').placeholder = r.configured ? '已配置，留空不修改' : '填写 secret_key';
+}
+
+async function saveDistributionCredentials() {
+  const secret_id = document.getElementById('distributionSecretId')?.value.trim() || '';
+  const secret_key = document.getElementById('distributionSecretKey')?.value.trim() || '';
+  if (!secret_id && !secret_key) { toast('请填写 secret_id 和 secret_key', 'err'); return; }
+  const r = await api('/api/distribution/credentials', 'POST', {secret_id, secret_key});
+  if (r.error) { toast(r.error, 'err'); return; }
+  document.getElementById('distributionSecretId').value = '';
+  document.getElementById('distributionSecretKey').value = '';
+  toast('分发凭据已保存');
+  loadDistributionCredentials();
+}
+
+async function loadDistributionFavorites() {
+  const el = document.getElementById('distributionFavoriteList');
+  if (!el) return;
+  const r = await api('/api/distribution/favorites');
+  if (r.error) { el.textContent = r.error; return; }
+  distributionFavorites = r.favorites || [];
+  el.innerHTML = distributionFavorites.map(x => {
+    const candidates = x.candidates || [];
+    const candidateHtml = candidates.length ? candidates.map(c => `<div style="margin:4px 0 0 180px;color:var(--text2)">候选：${escHtml(c.name)} · ${escHtml(c.resource_type === 'news_media' ? '新闻媒体' : '自媒体')} · ID ${escHtml(c.resource_id)} · ¥${escHtml(c.price)} · 状态 ${escHtml(c.status)} <button class="btn btn-o btn-sm" onclick="syncDistributionResource('${escHtml(c.resource_id)}','${escHtml(c.resource_type)}')">同步此资源</button></div>`).join('') : (distributionFavoriteMatchJob.status === 'completed' ? '<div style="margin:4px 0 0 180px">未匹配</div>' : '');
+    return `<div style="margin-top:6px"><div class="article-acts"><span style="min-width:180px;font-weight:700">${escHtml(x.name)}</span><input id="favorite-resource-${escHtml(x.id)}" value="${escHtml(x.resource_id || '')}" placeholder="供应商资源 ID" style="min-width:200px"><button class="btn btn-o btn-sm" onclick="saveDistributionFavorite('${escHtml(x.id)}')">保存 ID</button><button class="btn btn-danger btn-sm" onclick="deleteDistributionFavorite('${escHtml(x.id)}')">移除</button></div>${candidateHtml}</div>`;
+  }).join('') || '暂无常用资源，请先添加。';
+}
+
+async function startDistributionFavoriteMatch() {
+  const r = await api('/api/distribution/favorites/match', 'POST', {});
+  if (r.error) { toast(r.error, 'err'); return; }
+  distributionFavoriteMatchJob = r.job || {status: 'running'};
+  toast('已开始只读匹配');
+  loadDistributionFavoriteMatchStatus();
+}
+
+async function loadDistributionFavoriteMatchStatus() {
+  const el = document.getElementById('distributionFavoriteMatchStatus');
+  if (!el) return;
+  const r = await api('/api/distribution/favorites/match');
+  if (r.error) { el.textContent = r.error; return; }
+  const previousStatus = distributionFavoriteMatchJob.status;
+  distributionFavoriteMatchJob = r.job || {status: 'idle'};
+  const job = distributionFavoriteMatchJob;
+  el.textContent = job.status === 'running' ? `匹配中：已扫描 ${job.scanned || 0} 条` : job.status === 'completed' ? `匹配完成：扫描 ${job.scanned || 0} 条，命中 ${job.matched || 0} 个名单项` : job.status === 'failed' ? `匹配失败：${job.error || '供应商读取失败'}` : '';
+  clearTimeout(distributionFavoriteMatchTimer);
+  if (job.status === 'running') distributionFavoriteMatchTimer = setTimeout(loadDistributionFavoriteMatchStatus, 2000);
+  if (previousStatus === 'running' && job.status !== 'running') loadDistributionFavorites();
+}
+
+async function addDistributionFavorite() {
+  const name = document.getElementById('distributionFavoriteName')?.value.trim();
+  const resourceId = document.getElementById('distributionFavoriteResourceId')?.value.trim();
+  if (!name) { toast('请输入媒体名称', 'err'); return; }
+  const r = await api('/api/distribution/favorites', 'POST', {name, resource_id: resourceId});
+  if (r.error) { toast(r.error, 'err'); return; }
+  document.getElementById('distributionFavoriteName').value = '';
+  document.getElementById('distributionFavoriteResourceId').value = '';
+  toast('已加入常用名单');
+  loadDistributionFavorites();
+}
+
+async function saveDistributionFavorite(favoriteId) {
+  const resourceId = document.getElementById('favorite-resource-' + favoriteId)?.value.trim();
+  const r = await api('/api/distribution/favorites', 'POST', {id: favoriteId, resource_id: resourceId});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已保存资源 ID');
+  loadDistributionFavorites();
+}
+
+async function deleteDistributionFavorite(favoriteId) {
+  if (!confirm('从你的常用名单中移除此资源？')) return;
+  const r = await api('/api/distribution/favorites/' + encodeURIComponent(favoriteId), 'DELETE');
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已移除');
+  loadDistributionFavorites();
+}
+
+function syncFavoriteDistributionResources() {
+  const resourceIds = distributionFavorites.map(x => x.resource_id).filter(Boolean);
+  if (!resourceIds.length) { toast('请先为常用名单填写供应商资源 ID', 'err'); return; }
+  document.getElementById('distributionResourceIds').value = resourceIds.join(',');
+  syncDistributionResources();
+}
+
+async function syncDistributionResources() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const resourceIds = (document.getElementById('distributionResourceIds')?.value || '').split(/[,，\s]+/).filter(Boolean);
+  if (!resourceIds.length) { toast('请输入至少一个常用资源 ID', 'err'); return; }
+  const resourceType = document.getElementById('distributionResourceType')?.value || 'self_media';
+  const r = await api('/api/distribution/resources/sync', 'POST', {client_id: currentClientId, resources: resourceIds.map(resource_id => ({resource_id, resource_type: resourceType}))});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已同步 ' + r.count + ' 个资源');
+  loadResourcePage();
+}
+
+async function syncDistributionResource(resource_id, resource_type) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const r = await api('/api/distribution/resources/sync', 'POST', {client_id: currentClientId, resources: [{resource_id, resource_type}]});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已同步 ' + r.count + ' 个资源');
+  loadResourcePage();
+}
+
+// Local catalog flow replaces the legacy manual-ID controls above.
+async function loadResourcePage() {
+  const el = document.getElementById('resourceList');
+  loadDistributionCredentials();
+  loadDistributionFavorites();
+  loadDistributionCatalogStatus();
+  searchDistributionCatalog();
+  if (!currentClientId) { el.textContent = '请选择客户后查看可发布平台'; return; }
+  const r = await api('/api/distribution/resources?client_id=' + encodeURIComponent(currentClientId));
+  el.innerHTML = r.error ? escHtml(r.error) : (r.resources || []).map(x => `<div class="article-card"><div class="article-title">${escHtml(x.name || '未关联资源')}</div><div class="article-meta">${escHtml(distributionResourceTypeLabel(x.resource_type))} · ID ${escHtml(x.resource_id)} · ¥${escHtml(x.price)} · 状态 ${escHtml(x.status)}</div></div>`).join('') || '暂无常用发布平台';
+}
+
+function distributionResourceTypeLabel(resourceType) {
+  return resourceType === 'news_media' ? '新闻媒体' : '自媒体';
+}
+
+async function loadDistributionFavorites() {
+  const el = document.getElementById('distributionFavoriteList');
+  if (!el) return;
+  const r = await api('/api/distribution/favorites');
+  if (r.error) { el.textContent = r.error; return; }
+  distributionFavorites = r.favorites || [];
+  el.innerHTML = distributionFavorites.map(x => `<div style="margin-top:6px"><div class="article-acts"><span style="min-width:180px;font-weight:700">${escHtml(x.name || '未关联资源')}</span><span style="color:var(--text2)">${escHtml(distributionResourceTypeLabel(x.resource_type))} · ID ${escHtml(x.resource_id)} · ¥${escHtml(x.price)} · 状态 ${escHtml(x.status)}</span><button class="btn btn-danger btn-sm" onclick="deleteDistributionFavorite('${escHtml(x.id)}')">移除</button></div>${x.name ? '' : '<div style="margin:4px 0 0;color:var(--text3)">旧名单尚未关联资源，请在资源库中搜索后重新加入。</div>'}</div>`).join('') || '暂无常用平台，请先从资源库搜索添加。';
+}
+
+async function loadDistributionCatalogStatus() {
+  const el = document.getElementById('distributionCatalogStatus');
+  if (!el) return;
+  const r = await api('/api/distribution/catalog/sync');
+  if (r.error) { el.textContent = r.error; return; }
+  const job = r.job || {status: 'idle'};
+  el.textContent = job.status === 'running' ? `同步中：已读取 ${job.scanned || 0} 条资源` : job.status === 'completed' ? `已同步 ${job.count || 0} 条资源（${job.finished_at || ''}）` : job.status === 'failed' ? `同步失败：${job.error || '供应商读取失败'}` : '尚未同步资源库';
+  clearTimeout(distributionFavoriteMatchTimer);
+  if (job.status === 'running') distributionFavoriteMatchTimer = setTimeout(loadDistributionCatalogStatus, 2000);
+  if (job.status === 'completed') searchDistributionCatalog();
+}
+
+async function startDistributionCatalogSync() {
+  const r = await api('/api/distribution/catalog/sync', 'POST', {});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已开始完整同步资源库');
+  loadDistributionCatalogStatus();
+}
+
+async function searchDistributionCatalog() {
+  const el = document.getElementById('distributionCatalogResults');
+  const query = document.getElementById('distributionCatalogSearch')?.value.trim() || '';
+  if (!el) return;
+  if (!query) { el.textContent = '请先输入名称搜索。'; return; }
+  const r = await api('/api/distribution/catalog?query=' + encodeURIComponent(query));
+  if (r.error) { el.textContent = r.error; return; }
+  el.innerHTML = (r.resources || []).map(x => `<div style="margin-top:6px" class="article-acts"><span style="min-width:180px;font-weight:700">${escHtml(x.name)}</span><span style="color:var(--text2)">${escHtml(distributionResourceTypeLabel(x.resource_type))} · ID ${escHtml(x.resource_id)} · ¥${escHtml(x.price)} · 状态 ${escHtml(x.status)}</span><button class="btn btn-o btn-sm" onclick="addDistributionFavorite('${escHtml(x.resource_id)}','${escHtml(x.resource_type)}')">加入常用平台</button></div>`).join('') || '本地资源库中未找到该名称；如确认是新资源，请完整同步资源库后再试。';
+}
+
+async function addDistributionFavorite(resource_id, resource_type) {
+  const r = await api('/api/distribution/favorites', 'POST', {resource_id, resource_type});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已加入常用发布平台');
+  loadDistributionFavorites();
+  if (currentClientId) loadResourcePage();
+}
+
+async function refreshDistributionFavorites() {
+  const r = await api('/api/distribution/favorites/refresh', 'POST', {});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast(r.failed?.length ? `已更新 ${r.count} 个平台，${r.failed.length} 个失败` : `已更新 ${r.count} 个常用平台`);
+  loadDistributionFavorites();
+  if (currentClientId) loadResourcePage();
+}
+
+// Resource management no longer renders a client-scoped duplicate platform list.
+async function loadResourcePage() {
+  loadDistributionCredentials();
+  loadDistributionFavorites();
+  loadDistributionCatalogStatus();
+  searchDistributionCatalog();
+}
+
+async function createDistributionDraft(articleId) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const r = await api('/api/distribution/drafts', 'POST', {client_id: currentClientId, article_id: articleId});
+  if (r.error) { toast(r.error, 'err'); return; }
+  toast('已创建发布草稿');
+  navTo('publish', document.querySelector("[onclick=\"navTo('publish',this)\"]"));
+}
 let currentBrand = '';
 let currentClientName = '';
 let currentIndustry = '';
@@ -657,7 +915,7 @@ function renderQualityGateArticles(articles) {
       <div class="article-meta">${qualityGateBadge(a)}<span class="badge badge-p">${escHtml(a.article_type || '未标记类型')}</span><span style="font-size:10px;color:var(--text3)">${escHtml(a.created_at || '')}</span></div>
       ${details}
       <div class="article-summary">${escHtml((a.content || '').slice(0, 160))}${(a.content || '').length > 160 ? '...' : ''}</div>
-      <div class="article-acts"><button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button><button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button><button class="btn btn-o btn-sm" onclick="manualEditContentGeneration('${a.id}')">人工编辑</button><button class="btn btn-p btn-sm" onclick="aiModifyContentGeneration('${a.id}')">AI 修改</button></div>
+      <div class="article-acts"><button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button><button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button><button class="btn btn-o btn-sm" onclick="manualEditContentGeneration('${a.id}')">人工编辑</button><button class="btn btn-o btn-sm" onclick="createDistributionDraft('${a.id}')">创建发布草稿</button><button class="btn btn-p btn-sm" onclick="aiModifyContentGeneration('${a.id}')">AI 修改</button></div>
     </div>`;
   }).join('');
 }

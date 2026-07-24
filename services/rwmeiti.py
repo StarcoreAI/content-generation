@@ -20,8 +20,11 @@ class RWMeitiClient:
         self.secret_id = str(secret_id)
         self.secret_key = str(secret_key)
 
-    def list_self_media(self, page=1, limit=200):
-        payload = self._post_form("wmedia_lst", {"page": page, "limit": limit})
+    def list_self_media(self, page=1, limit=200, resource_id=None):
+        params = {"page": page, "limit": limit}
+        if resource_id is not None:
+            params["id"] = resource_id
+        payload = self._read_form("wmedia_lst", params)
         if payload.get("code") != 200:
             raise ValueError(str(payload.get("msg") or "rwmeiti_error"))
         return [
@@ -30,10 +33,45 @@ class RWMeitiClient:
             for item in (payload.get("data") or []) if item.get("id") is not None
         ]
 
+    def list_news_media(self, page=1, limit=200, resource_id=None):
+        params = {"page": page, "limit": limit}
+        if resource_id is not None:
+            params["id"] = resource_id
+        payload = self._read_form("media_lst", params)
+        if payload.get("code") != 200:
+            raise ValueError(str(payload.get("msg") or "rwmeiti_error"))
+        return [
+            {"resource_id": str(item.get("id") or ""), "name": str(item.get("media_name") or ""),
+             "price": float(item.get("price") or 0), "status": str(item.get("status") or ""),
+             "resource_type": "news_media", "raw": item}
+            for item in (payload.get("data") or []) if item.get("id") is not None
+        ]
+
+    def _read_form(self, path, params):
+        last_error = None
+        for _ in range(3):
+            try:
+                return self._post_form(path, params)
+            except (OSError, ConnectionError) as exc:
+                last_error = exc
+        raise last_error
+
+    def get_user_info(self):
+        payload = self._post_form("userInfo", {})
+        if payload.get("code") != 200:
+            raise ValueError(str(payload.get("msg") or "rwmeiti_error"))
+        return payload.get("data") or {}
+
     def create_self_media_order(self, title, content, mid, no, saling_price, account_rule=3):
         return self._post_form("create_wmedia_order", {
             "title": title, "content": content, "mid": mid, "no": no,
             "saling_price": saling_price, "account_rule": account_rule,
+        })
+
+    def create_news_media_order(self, title, content, mid, no, saling_price):
+        return self._post_form("create_media_order", {
+            "title": title, "content": content, "mid": mid, "no": no,
+            "saling_price": saling_price,
         })
 
     def query_self_media_orders(self, order_numbers):

@@ -59,6 +59,24 @@ class PublicationStoreTests(unittest.TestCase):
         resources = self.store.list_resources("client-a")
         self.assertEqual([item["resource_id"] for item in resources], ["8"])
 
+    def test_upsert_resources_keeps_previously_selected_resources(self):
+        self.store.upsert_resources("client-a", [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}], "2026-07-22 10:00:00")
+        self.store.upsert_resources("client-a", [{"resource_id": "8", "name": "账号B", "price": 99, "status": "1", "raw": {}}], "2026-07-22 11:00:00")
+
+        self.assertEqual([item["resource_id"] for item in self.store.list_resources("client-a")], ["7", "8"])
+
+    def test_resources_keep_same_id_when_their_types_differ(self):
+        self.store.upsert_resources("client-a", [
+            {"resource_id": "7", "resource_type": "self_media", "name": "账号A", "price": 88, "status": "1", "raw": {}},
+            {"resource_id": "7", "resource_type": "news_media", "name": "媒体A", "price": 99, "status": "1", "raw": {}},
+        ], "2026-07-24 10:00:00")
+
+        self.assertEqual(self.store.get_resource("client-a", "7", "news_media")["name"], "媒体A")
+        self.assertEqual(
+            {(item["resource_type"], item["resource_id"]) for item in self.store.list_resources("client-a")},
+            {("self_media", "7"), ("news_media", "7")},
+        )
+
     def test_order_status_can_be_updated_and_listed(self):
         draft = self.store.create_draft("client-a", {"id": "a1", "title": "标题", "content": "正文"}, "op")
         order = self.store.create_supplier_order("client-a", draft["id"], "geo-1", "self_media", "7", "账号A", 88)

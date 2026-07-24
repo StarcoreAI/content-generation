@@ -187,14 +187,30 @@ class PublicationStore:
                 conn.rollback()
                 raise
 
+    def upsert_resources(self, client_id, resources, synced_at):
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for item in resources:
+                    conn.execute("""INSERT OR REPLACE INTO supplier_resources VALUES
+                        (?, 'rwmeiti', ?, ?, ?, ?, ?, ?, ?)""", (
+                        client_id, str(item.get("resource_type") or "self_media"), str(item.get("resource_id") or ""), str(item.get("name") or ""),
+                        float(item.get("price") or 0), str(item.get("status") or ""),
+                        json.dumps(item.get("raw") or {}, ensure_ascii=False), synced_at,
+                    ))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
     def list_resources(self, client_id):
         with self._connection() as conn:
-            rows = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND provider = 'rwmeiti' AND resource_type = 'self_media' ORDER BY name", (client_id,))
+            rows = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND provider = 'rwmeiti' ORDER BY resource_type, name", (client_id,))
             return [dict(row) for row in rows]
 
-    def get_resource(self, client_id, resource_id):
+    def get_resource(self, client_id, resource_id, resource_type="self_media"):
         with self._connection() as conn:
-            row = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND resource_id = ?", (client_id, resource_id)).fetchone()
+            row = conn.execute("SELECT * FROM supplier_resources WHERE client_id = ? AND resource_id = ? AND resource_type = ?", (client_id, resource_id, resource_type)).fetchone()
         return dict(row) if row else None
 
     @contextmanager

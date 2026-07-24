@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 import app as geo_app
 from services.auth import authenticate_user, create_user, load_users
@@ -432,6 +432,260 @@ class ContentOwnershipTests(unittest.TestCase):
 
 
 class UserSettingsTests(unittest.TestCase):
+    def test_distribution_credentials_are_per_operator_and_not_returned(self):
+        with isolated_auth_app():
+            create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+            create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+            alice = geo_app.app.test_client()
+            bob = geo_app.app.test_client()
+            login_as(alice, "alice")
+            login_as(bob, "bob")
+
+            saved = alice.post("/api/distribution/credentials", json={
+                "secret_id": "alice-id", "secret_key": "alice-key",
+            })
+            alice_status = alice.get("/api/distribution/credentials").get_json()
+            bob_status = bob.get("/api/distribution/credentials").get_json()
+            settings_status = alice.get("/api/settings").get_json()
+
+            self.assertEqual(saved.status_code, 200)
+            self.assertTrue(alice_status["configured"])
+            self.assertNotIn("secret_id", alice_status)
+            self.assertNotIn("secret_key", alice_status)
+            self.assertNotIn("rwmeiti_secret_id", settings_status)
+            self.assertNotIn("rwmeiti_secret_key", settings_status)
+            self.assertFalse(bob_status["configured"])
+            self.assertEqual(geo_app.load(geo_app.user_settings_path("alice"), {})["rwmeiti_secret_key"], "alice-key")
+
+    def test_catalog_sync_saves_both_resource_types_per_operator(self):
+        class FakeSupplier:
+            def list_self_media(self, page, limit):
+                return [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}] if page == 1 else []
+
+            def list_news_media(self, page, limit):
+                return [{"resource_id": "8", "name": "媒体A", "price": 99, "status": "1", "raw": {}}] if page == 1 else []
+
+        with isolated_auth_app() as tmp:
+            original = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            try:
+                result = geo_app.sync_distribution_catalog("alice", FakeSupplier())
+                catalog = geo_app.load(geo_app.distribution_catalog_path("alice"), [])
+                self.assertEqual(result["count"], 2)
+                self.assertEqual(
+                    [(item["resource_type"], item["resource_id"]) for item in catalog],
+                    [("self_media", "7"), ("news_media", "8")],
+                )
+            finally:
+                if original is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original
+
+    def test_catalog_sync_links_an_existing_unique_name_only_favorite(self):
+        class FakeSupplier:
+            def list_self_media(self, page, limit):
+                return [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}] if page == 1 else []
+
+            def list_news_media(self, page, limit):
+                return []
+
+        with isolated_auth_app() as tmp:
+            original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
+            original_favorites = geo_app.F_DISTRIBUTION_FAVORITES
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            try:
+                geo_app.save(geo_app.distribution_favorites_path("alice"), [{"id": "favorite-a", "name": "账号A", "resource_id": ""}])
+
+                geo_app.sync_distribution_catalog("alice", FakeSupplier())
+
+                favorite = geo_app.load(geo_app.distribution_favorites_path("alice"), [])[0]
+                self.assertEqual(favorite["resource_id"], "7")
+                self.assertEqual(favorite["resource_type"], "self_media")
+            finally:
+                geo_app.F_DISTRIBUTION_FAVORITES = original_favorites
+                if original_catalog is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original_catalog
+
+    def test_favorite_is_added_from_catalog_and_refreshes_by_its_id(self):
+        class FakeSupplier:
+            def __init__(self):
+                self.requests = []
+
+            def list_self_media(self, page, limit, resource_id):
+                self.requests.append((page, limit, resource_id))
+                return [{"resource_id": resource_id, "name": "账号A", "price": 108, "status": "1", "raw": {}}]
+
+        with isolated_auth_app() as tmp:
+            original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
+            original_favorites = geo_app.F_DISTRIBUTION_FAVORITES
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            try:
+                create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+                browser = geo_app.app.test_client()
+                login_as(browser, "alice")
+                geo_app.save(geo_app.distribution_catalog_path("alice"), [{
+                    "resource_id": "7", "resource_type": "self_media", "name": "账号A", "price": 88, "status": "1", "raw": {},
+                }])
+
+                added = browser.post("/api/distribution/favorites", json={"resource_id": "7", "resource_type": "self_media"})
+                supplier = FakeSupplier()
+                with patch.object(geo_app, "rwmeiti_client_from_env", return_value=supplier):
+                    refreshed = browser.post("/api/distribution/favorites/refresh")
+                favorites = browser.get("/api/distribution/favorites").get_json()["favorites"]
+
+                self.assertEqual(added.status_code, 200)
+                self.assertEqual(refreshed.status_code, 200)
+                self.assertEqual(supplier.requests, [(1, 5, "7")])
+                self.assertEqual(favorites[0]["name"], "账号A")
+                self.assertEqual(favorites[0]["price"], 108)
+            finally:
+                geo_app.F_DISTRIBUTION_FAVORITES = original_favorites
+                if original_catalog is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original_catalog
+
+    def test_cannot_add_favorite_not_in_current_operator_catalog(self):
+        with isolated_auth_app() as tmp:
+            original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            try:
+                create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+                browser = geo_app.app.test_client()
+                login_as(browser, "alice")
+
+                response = browser.post("/api/distribution/favorites", json={"resource_id": "7", "resource_type": "self_media"})
+
+                self.assertEqual(response.status_code, 404)
+                self.assertEqual(response.get_json()["error"], "catalog_resource_not_found")
+            finally:
+                if original_catalog is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original_catalog
+
+    def test_match_operator_favorites_keeps_exact_candidates_and_resource_types(self):
+        class FakeSupplier:
+            def list_self_media(self, page, limit):
+                return [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}] if page == 1 else []
+
+            def list_news_media(self, page, limit):
+                return [{"resource_id": "8", "name": "媒体A", "price": 99, "status": "1", "resource_type": "news_media", "raw": {}}] if page == 1 else []
+
+        with isolated_auth_app() as tmp:
+            original_favorites = getattr(geo_app, "F_DISTRIBUTION_FAVORITES", None)
+            original_jobs = getattr(geo_app, "F_DISTRIBUTION_MATCH_JOBS", None)
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            geo_app.F_DISTRIBUTION_MATCH_JOBS = os.path.join(tmp, "distribution_match_jobs")
+            try:
+                geo_app.save(geo_app.distribution_favorites_path("alice"), [
+                    {"id": "a", "name": "账号A", "resource_id": ""},
+                    {"id": "b", "name": "媒体A", "resource_id": ""},
+                    {"id": "c", "name": "不存在", "resource_id": ""},
+                ])
+
+                geo_app.match_operator_favorites("alice", FakeSupplier())
+
+                favorites = geo_app.load(geo_app.distribution_favorites_path("alice"), [])
+                self.assertEqual(favorites[0]["candidates"][0]["resource_type"], "self_media")
+                self.assertEqual(favorites[1]["candidates"][0]["resource_type"], "news_media")
+                self.assertEqual(favorites[2]["candidates"], [])
+            finally:
+                if original_favorites is None:
+                    delattr(geo_app, "F_DISTRIBUTION_FAVORITES")
+                else:
+                    geo_app.F_DISTRIBUTION_FAVORITES = original_favorites
+                if original_jobs is None:
+                    delattr(geo_app, "F_DISTRIBUTION_MATCH_JOBS")
+                else:
+                    geo_app.F_DISTRIBUTION_MATCH_JOBS = original_jobs
+
+    def test_match_operator_favorites_preserves_list_edits_made_while_scanning(self):
+        with isolated_auth_app() as tmp:
+            original_favorites = getattr(geo_app, "F_DISTRIBUTION_FAVORITES", None)
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            try:
+                geo_app.save(geo_app.distribution_favorites_path("alice"), [{"id": "a", "name": "账号A", "resource_id": ""}])
+
+                class FakeSupplier:
+                    def list_self_media(self, page, limit):
+                        if page == 1:
+                            geo_app.save(geo_app.distribution_favorites_path("alice"), [
+                                {"id": "a", "name": "账号A", "resource_id": ""},
+                                {"id": "b", "name": "后来添加", "resource_id": ""},
+                            ])
+                            return [{"resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {}}]
+                        return []
+
+                    def list_news_media(self, page, limit):
+                        return []
+
+                geo_app.match_operator_favorites("alice", FakeSupplier())
+
+                self.assertEqual([item["name"] for item in geo_app.load(geo_app.distribution_favorites_path("alice"), [])], ["账号A", "后来添加"])
+            finally:
+                if original_favorites is None:
+                    delattr(geo_app, "F_DISTRIBUTION_FAVORITES")
+                else:
+                    geo_app.F_DISTRIBUTION_FAVORITES = original_favorites
+
+    def test_distribution_match_status_is_isolated_by_operator(self):
+        with isolated_auth_app() as tmp:
+            original_favorites = getattr(geo_app, "F_DISTRIBUTION_FAVORITES", None)
+            original_jobs = getattr(geo_app, "F_DISTRIBUTION_MATCH_JOBS", None)
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            geo_app.F_DISTRIBUTION_MATCH_JOBS = os.path.join(tmp, "distribution_match_jobs")
+            try:
+                create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+                create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+                alice = geo_app.app.test_client()
+                bob = geo_app.app.test_client()
+                login_as(alice, "alice")
+                login_as(bob, "bob")
+                with patch.object(geo_app, "start_distribution_favorite_match", return_value={"status": "running"}, create=True) as start_match:
+                    started = alice.post("/api/distribution/favorites/match")
+
+                self.assertEqual(started.status_code, 202)
+                start_match.assert_called_once_with("alice", ANY)
+                self.assertEqual(bob.get("/api/distribution/favorites/match").get_json()["job"]["status"], "idle")
+            finally:
+                if original_favorites is None:
+                    delattr(geo_app, "F_DISTRIBUTION_FAVORITES")
+                else:
+                    geo_app.F_DISTRIBUTION_FAVORITES = original_favorites
+                if original_jobs is None:
+                    delattr(geo_app, "F_DISTRIBUTION_MATCH_JOBS")
+                else:
+                    geo_app.F_DISTRIBUTION_MATCH_JOBS = original_jobs
+
+    def test_distribution_favorites_are_isolated_by_operator(self):
+        with isolated_auth_app() as tmp:
+            original = getattr(geo_app, "F_DISTRIBUTION_FAVORITES", None)
+            geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            try:
+                create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
+                create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+                alice = geo_app.app.test_client()
+                bob = geo_app.app.test_client()
+                login_as(alice, "alice")
+                login_as(bob, "bob")
+
+                added = alice.post("/api/distribution/favorites", json={"name": "账号A", "resource_id": "7"})
+
+                self.assertEqual(added.status_code, 200)
+                self.assertEqual([item["name"] for item in alice.get("/api/distribution/favorites").get_json()["favorites"]], ["账号A"])
+                self.assertEqual(bob.get("/api/distribution/favorites").get_json()["favorites"], [])
+            finally:
+                if original is None:
+                    delattr(geo_app, "F_DISTRIBUTION_FAVORITES")
+                else:
+                    geo_app.F_DISTRIBUTION_FAVORITES = original
+
     def test_user_settings_override_global_without_affecting_other_users(self):
         with isolated_auth_app():
             geo_app.save(geo_app.F_SETTINGS, {

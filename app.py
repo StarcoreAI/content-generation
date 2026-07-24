@@ -3,7 +3,7 @@ GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
 import contextvars
-import json, os, re, asyncio, threading, glob, random
+import json, os, re, asyncio, threading, glob, random, uuid
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from pathlib import Path
@@ -89,6 +89,10 @@ F_COMPETITOR_ARTICLE_BODY_HITS = f"{D}/competitor_article_body_hits.json"
 F_CONTENT_GENERATIONS = f"{D}/content_generations.json"
 F_USERS = f"{D}/users.json"
 F_USER_SETTINGS = f"{D}/user_settings"
+F_DISTRIBUTION_FAVORITES = f"{D}/distribution_favorites"
+F_DISTRIBUTION_MATCH_JOBS = f"{D}/distribution_match_jobs"
+F_DISTRIBUTION_CATALOG = f"{D}/distribution_catalog"
+F_DISTRIBUTION_CATALOG_JOBS = f"{D}/distribution_catalog_jobs"
 F_REFERENCE_INTELLIGENCE = f"{D}/reference_intelligence"
 F_CRAWL_JOBS = f"{D}/crawl_jobs.json"
 
@@ -526,6 +530,182 @@ def get_global_settings():
 def user_settings_path(username):
     safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
     return os.path.join(F_USER_SETTINGS, f"{safe or 'user'}.json")
+
+
+def distribution_favorites_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
+    return os.path.join(F_DISTRIBUTION_FAVORITES, f"{safe or 'user'}.json")
+
+
+def distribution_match_job_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
+    return os.path.join(F_DISTRIBUTION_MATCH_JOBS, f"{safe or 'user'}.json")
+
+
+def distribution_catalog_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
+    return os.path.join(F_DISTRIBUTION_CATALOG, f"{safe or 'user'}.json")
+
+
+def distribution_catalog_job_path(username):
+    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
+    return os.path.join(F_DISTRIBUTION_CATALOG_JOBS, f"{safe or 'user'}.json")
+
+
+def current_distribution_favorites():
+    username = str((current_user() or {}).get("username") or "")
+    if not username:
+        return "", []
+    favorites = load(distribution_favorites_path(username), [])
+    return username, favorites if isinstance(favorites, list) else []
+
+
+def current_distribution_catalog():
+    username = str((current_user() or {}).get("username") or "")
+    if not username:
+        return "", []
+    catalog = load(distribution_catalog_path(username), [])
+    return username, catalog if isinstance(catalog, list) else []
+
+
+def sync_distribution_catalog(username, supplier, progress=None):
+    resources, scanned = [], 0
+    for resource_type, list_page in (("self_media", supplier.list_self_media), ("news_media", supplier.list_news_media)):
+        page = 1
+        while True:
+            batch = list_page(page, 200)
+            scanned += len(batch)
+            resources.extend({**item, "resource_type": resource_type, "synced_at": now_str()} for item in batch)
+            if progress:
+                progress({"status": "running", "resource_type": resource_type, "page": page, "scanned": scanned})
+            if len(batch) < 200:
+                break
+            page += 1
+    save(distribution_catalog_path(username), resources)
+    link_name_only_distribution_favorites(username, resources)
+    return {"count": len(resources), "scanned": scanned}
+
+
+def start_distribution_catalog_sync(username, supplier):
+    job = {"status": "running", "started_at": now_str(), "scanned": 0, "count": 0}
+    job_path = distribution_catalog_job_path(username)
+    save(job_path, job)
+
+    def worker():
+        try:
+            result = sync_distribution_catalog(username, supplier, lambda update: save(job_path, {**job, **update}))
+            save(job_path, {**job, **result, "status": "completed", "finished_at": now_str()})
+        except Exception as exc:
+            save(job_path, {**job, "status": "failed", "error": str(exc)[:200], "finished_at": now_str()})
+
+    threading.Thread(target=worker, daemon=True).start()
+    return job
+
+
+def search_distribution_catalog(catalog, query, limit=50):
+    query = normalize_supplier_name(query)
+    matches = [item for item in catalog if not query or query in normalize_supplier_name(item.get("name"))]
+    return matches[:max(1, min(int(limit or 50), 100))]
+
+
+def distribution_catalog_resource(catalog, resource_id, resource_type):
+    return next((item for item in catalog if str(item.get("resource_id")) == str(resource_id)
+                 and str(item.get("resource_type") or "self_media") == str(resource_type)), None)
+
+
+def resolved_distribution_favorites(username):
+    favorites = load(distribution_favorites_path(username), [])
+    catalog = load(distribution_catalog_path(username), [])
+    favorites = favorites if isinstance(favorites, list) else []
+    catalog = catalog if isinstance(catalog, list) else []
+    resolved = []
+    for favorite in favorites:
+        item = dict(favorite)
+        resource_type = str(item.get("resource_type") or "self_media")
+        resource = distribution_catalog_resource(catalog, item.get("resource_id"), resource_type)
+        if resource:
+            item.update({key: resource.get(key) for key in ("name", "price", "status", "synced_at")})
+            item["resource_type"] = resource_type
+        resolved.append(item)
+    return resolved
+
+
+def update_distribution_catalog_resources(username, resources):
+    catalog = load(distribution_catalog_path(username), [])
+    catalog = catalog if isinstance(catalog, list) else []
+    updates = {
+        (str(item.get("resource_type") or "self_media"), str(item.get("resource_id") or "")): item
+        for item in resources
+    }
+    merged = [updates.pop((str(item.get("resource_type") or "self_media"), str(item.get("resource_id") or "")), item)
+              for item in catalog]
+    merged.extend(updates.values())
+    save(distribution_catalog_path(username), merged)
+
+
+def normalize_supplier_name(value):
+    return str(value or "").strip().casefold()
+
+
+def link_name_only_distribution_favorites(username, catalog):
+    favorites = load(distribution_favorites_path(username), [])
+    if not isinstance(favorites, list):
+        return
+    changed = False
+    for favorite in favorites:
+        if str(favorite.get("resource_id") or "").strip() or not normalize_supplier_name(favorite.get("name")):
+            continue
+        candidates = [item for item in catalog if normalize_supplier_name(item.get("name")) == normalize_supplier_name(favorite.get("name"))]
+        if len(candidates) == 1:
+            favorite["resource_id"] = str(candidates[0].get("resource_id") or "")
+            favorite["resource_type"] = str(candidates[0].get("resource_type") or "self_media")
+            changed = True
+    if changed:
+        save(distribution_favorites_path(username), favorites)
+
+
+def match_operator_favorites(username, supplier, progress=None):
+    favorites = load(distribution_favorites_path(username), [])
+    targets = {normalize_supplier_name(item.get("name")) for item in favorites if normalize_supplier_name(item.get("name"))}
+    matches = {target: [] for target in targets}
+    scanned = 0
+    for resource_type, list_page in (("self_media", supplier.list_self_media), ("news_media", supplier.list_news_media)):
+        page = 1
+        while True:
+            batch = list_page(page, 200)
+            scanned += len(batch)
+            for resource in batch:
+                name = normalize_supplier_name(resource.get("name"))
+                if name in matches:
+                    matches[name].append({**resource, "resource_type": resource_type})
+            if progress:
+                progress({"status": "running", "resource_type": resource_type, "page": page, "scanned": scanned})
+            if len(batch) < 200:
+                break
+            page += 1
+    saved_favorites = load(distribution_favorites_path(username), [])
+    for favorite in saved_favorites:
+        name = normalize_supplier_name(favorite.get("name"))
+        if name in matches:
+            favorite["candidates"] = matches[name]
+    save(distribution_favorites_path(username), saved_favorites)
+    return {"scanned": scanned, "matched": sum(bool(item.get("candidates")) for item in saved_favorites)}
+
+
+def start_distribution_favorite_match(username, supplier):
+    job = {"status": "running", "started_at": now_str(), "scanned": 0, "matched": 0}
+    job_path = distribution_match_job_path(username)
+    save(job_path, job)
+
+    def worker():
+        try:
+            result = match_operator_favorites(username, supplier, lambda update: save(job_path, {**job, **update}))
+            save(job_path, {**job, **result, "status": "completed", "finished_at": now_str()})
+        except Exception as exc:
+            save(job_path, {**job, "status": "failed", "error": str(exc)[:200], "finished_at": now_str()})
+
+    threading.Thread(target=worker, daemon=True).start()
+    return job
 
 
 def settings_username():
@@ -2050,7 +2230,13 @@ def publication_store():
 
 
 def rwmeiti_client_from_env():
-    return RWMeitiClient(os.environ.get("RWMEITI_BASE_URL", "http://dr.rwmeiti.com/meijieapi/daili3"), os.environ.get("RWMEITI_SECRET_ID", ""), os.environ.get("RWMEITI_SECRET_KEY", ""))
+    username = settings_username()
+    personal = load(user_settings_path(username), {}) if username else {}
+    return RWMeitiClient(
+        personal.get("rwmeiti_base_url") or "http://dr.rwmeiti.com/meijieapi/daili3",
+        personal.get("rwmeiti_secret_id") or "",
+        personal.get("rwmeiti_secret_key") or "",
+    )
 
 def append_content_generation(cid, article, user_message, assistant_message):
     return content_generation_store().append_generation(cid, article, user_message, assistant_message)
@@ -2167,6 +2353,50 @@ def create_publication_draft_route():
     return jsonify({"ok": True, "draft": draft})
 
 
+def uploaded_publication_article(storage_file):
+    filename = str(storage_file.filename or "").strip()
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".txt", ".md", ".docx"}:
+        raise ValueError("unsupported_file_type")
+    if suffix == ".docx":
+        try:
+            import docx
+            content = "\n\n".join(paragraph.text.strip() for paragraph in docx.Document(storage_file.stream).paragraphs if paragraph.text.strip())
+        except Exception as exc:
+            raise ValueError("invalid_docx") from exc
+    else:
+        content = storage_file.read().decode("utf-8-sig", errors="replace")
+    content = content.replace("\r\n", "\n").strip()
+    if not content:
+        raise ValueError("empty_article")
+    lines = content.split("\n")
+    title_index = next((index for index, line in enumerate(lines) if line.strip()), 0)
+    first_line = lines[title_index].strip()
+    title = first_line.lstrip("#").strip() or Path(filename).stem
+    body = "\n".join(lines[title_index + 1:]).lstrip()
+    if not body:
+        raise ValueError("empty_article_body")
+    return {"id": "upload-" + uuid.uuid4().hex, "title": title, "content": body}
+
+
+@app.route("/api/distribution/drafts/upload", methods=["POST"])
+def upload_publication_drafts_route():
+    cid = str(request.form.get("client_id") or "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    files = [file for file in request.files.getlist("files") if file and file.filename]
+    if not files:
+        return jsonify({"error": "files_required"}), 400
+    drafts, rejected = [], []
+    created_by = (current_user() or {}).get("username", "")
+    for storage_file in files:
+        try:
+            drafts.append(publication_store().create_draft(cid, uploaded_publication_article(storage_file), created_by))
+        except ValueError as exc:
+            rejected.append({"filename": storage_file.filename, "error": str(exc)})
+    return jsonify({"ok": True, "drafts": drafts, "rejected": rejected})
+
+
 @app.route("/api/distribution/drafts", methods=["GET"])
 def list_publication_drafts_route():
     cid = request.args.get("client_id", "")
@@ -2175,21 +2405,176 @@ def list_publication_drafts_route():
     return jsonify({"ok": True, "drafts": publication_store().list_drafts(cid)})
 
 
+@app.route("/api/distribution/credentials", methods=["GET", "POST"])
+def distribution_credentials_route():
+    username = settings_username()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    path = user_settings_path(username)
+    settings = load(path, {})
+    if request.method == "POST":
+        data = request.get_json(silent=True) or {}
+        for input_key, setting_key in (("secret_id", "rwmeiti_secret_id"), ("secret_key", "rwmeiti_secret_key")):
+            value = str(data.get(input_key) or "").strip()
+            if value and value != "***":
+                settings[setting_key] = value
+        base_url = str(data.get("base_url") or "").strip()
+        if base_url:
+            settings["rwmeiti_base_url"] = base_url.rstrip("/")
+        save(path, settings)
+    return jsonify({
+        "ok": True,
+        "configured": bool(settings.get("rwmeiti_secret_id") and settings.get("rwmeiti_secret_key")),
+        "base_url": settings.get("rwmeiti_base_url") or "http://dr.rwmeiti.com/meijieapi/daili3",
+    })
+
+
+@app.route("/api/distribution/catalog/sync", methods=["GET", "POST"])
+def distribution_catalog_sync_route():
+    username, _ = current_distribution_catalog()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    job_path = distribution_catalog_job_path(username)
+    job = load(job_path, {"status": "idle"})
+    if request.method == "GET":
+        return jsonify({"ok": True, "job": job})
+    if job.get("status") == "running":
+        return jsonify({"error": "catalog_sync_already_running", "job": job}), 409
+    return jsonify({"ok": True, "job": start_distribution_catalog_sync(username, rwmeiti_client_from_env())}), 202
+
+
+@app.route("/api/distribution/catalog", methods=["GET"])
+def distribution_catalog_route():
+    username, catalog = current_distribution_catalog()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    query = str(request.args.get("query") or "")
+    return jsonify({"ok": True, "resources": search_distribution_catalog(catalog, query, request.args.get("limit", 50)),
+                    "count": len(catalog)})
+
+
 @app.route("/api/distribution/resources/sync", methods=["POST"])
 def sync_distribution_resources_route():
-    cid = str((request.get_json(silent=True) or {}).get("client_id") or "")
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("client_id") or "")
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
+    raw_resources = data.get("resources")
+    if raw_resources is None:
+        raw_ids = data.get("resource_ids") or []
+        if isinstance(raw_ids, str):
+            raw_ids = raw_ids.replace("，", ",").split(",")
+        raw_resources = [{"resource_id": item, "resource_type": "self_media"} for item in raw_ids]
+    if not isinstance(raw_resources, list):
+        return jsonify({"error": "invalid_resources"}), 400
+    requested_resources = list(dict.fromkeys(
+        (str(item.get("resource_type") or "self_media"), str(item.get("resource_id") or "").strip())
+        for item in raw_resources if isinstance(item, dict) and str(item.get("resource_id") or "").strip()
+    ))
+    if not requested_resources:
+        return jsonify({"error": "resource_ids_required"}), 400
+    if any(resource_type not in {"self_media", "news_media"} or not resource_id.isdigit() or int(resource_id) < 1
+           for resource_type, resource_id in requested_resources):
+        return jsonify({"error": "invalid_resource_ids"}), 400
     client = rwmeiti_client_from_env()
-    resources, page = [], 1
-    while True:
-        batch = client.list_self_media(page, 200)
-        resources.extend(batch)
-        if len(batch) < 200:
-            break
-        page += 1
-    publication_store().save_resources(cid, resources, now_str())
-    return jsonify({"ok": True, "count": len(resources)})
+    resources = []
+    for resource_type, resource_id in requested_resources:
+        list_resource = client.list_news_media if resource_type == "news_media" else client.list_self_media
+        resources.extend(list_resource(1, 5, resource_id=resource_id))
+    publication_store().upsert_resources(cid, resources, now_str())
+    return jsonify({"ok": True, "count": len(resources), "requested_count": len(requested_resources)})
+
+
+@app.route("/api/distribution/favorites", methods=["GET", "POST"])
+def distribution_favorites_route():
+    username, favorites = current_distribution_favorites()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    if request.method == "GET":
+        return jsonify({"ok": True, "favorites": resolved_distribution_favorites(username)})
+    data = request.get_json(silent=True) or {}
+    favorite_id = str(data.get("id") or "")
+    name = str(data.get("name") or "").strip()
+    resource_id = str(data.get("resource_id") or "").strip()
+    resource_type = str(data.get("resource_type") or "self_media")
+    if resource_type not in {"self_media", "news_media"}:
+        return jsonify({"error": "invalid_resource_type"}), 400
+    if resource_id and not name and not favorite_id:
+        _, catalog = current_distribution_catalog()
+        resource = distribution_catalog_resource(catalog, resource_id, resource_type)
+        if not resource:
+            return jsonify({"error": "catalog_resource_not_found"}), 404
+        if any(str(item.get("resource_id")) == resource_id and str(item.get("resource_type") or "self_media") == resource_type
+               for item in favorites):
+            return jsonify({"error": "favorite_resource_exists"}), 409
+        favorite = {"id": uuid.uuid4().hex, "resource_id": resource_id, "resource_type": resource_type}
+        favorites.append(favorite)
+        save(distribution_favorites_path(username), favorites)
+        return jsonify({"ok": True, "favorite": {**favorite, **resource}, "favorites": resolved_distribution_favorites(username)})
+    existing = next((item for item in favorites if item.get("id") == favorite_id), None)
+    if favorite_id and not existing:
+        return jsonify({"error": "favorite_not_found"}), 404
+    if existing:
+        if name:
+            existing["name"] = name
+        existing["resource_id"] = resource_id
+        favorite = existing
+    else:
+        if not name:
+            return jsonify({"error": "favorite_name_required"}), 400
+        if any(item.get("name") == name for item in favorites):
+            return jsonify({"error": "favorite_name_exists"}), 409
+        favorite = {"id": uuid.uuid4().hex, "name": name, "resource_id": resource_id}
+        favorites.append(favorite)
+    save(distribution_favorites_path(username), favorites)
+    return jsonify({"ok": True, "favorite": favorite, "favorites": favorites})
+
+
+@app.route("/api/distribution/favorites/<favorite_id>", methods=["DELETE"])
+def delete_distribution_favorite_route(favorite_id):
+    username, favorites = current_distribution_favorites()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    updated = [item for item in favorites if item.get("id") != favorite_id]
+    if len(updated) == len(favorites):
+        return jsonify({"error": "favorite_not_found"}), 404
+    save(distribution_favorites_path(username), updated)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/distribution/favorites/refresh", methods=["POST"])
+def refresh_distribution_favorites_route():
+    username, favorites = current_distribution_favorites()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    supplier, updated, failures = rwmeiti_client_from_env(), [], []
+    for favorite in favorites:
+        resource_id = str(favorite.get("resource_id") or "")
+        resource_type = str(favorite.get("resource_type") or "self_media")
+        if not resource_id:
+            continue
+        try:
+            list_resource = supplier.list_news_media if resource_type == "news_media" else supplier.list_self_media
+            result = list_resource(1, 5, resource_id=resource_id)
+            updated.extend({**item, "resource_type": resource_type, "synced_at": now_str()} for item in result)
+        except Exception as exc:
+            failures.append({"resource_id": resource_id, "error": str(exc)[:120]})
+    update_distribution_catalog_resources(username, updated)
+    return jsonify({"ok": True, "count": len(updated), "failed": failures})
+
+
+@app.route("/api/distribution/favorites/match", methods=["GET", "POST"])
+def distribution_favorite_match_route():
+    username, _ = current_distribution_favorites()
+    if not username:
+        return jsonify({"error": "operator_not_found"}), 400
+    job_path = distribution_match_job_path(username)
+    job = load(job_path, {"status": "idle"})
+    if request.method == "GET":
+        return jsonify({"ok": True, "job": job})
+    if job.get("status") == "running":
+        return jsonify({"error": "match_already_running", "job": job}), 409
+    return jsonify({"ok": True, "job": start_distribution_favorite_match(username, rwmeiti_client_from_env())}), 202
 
 
 @app.route("/api/distribution/resources", methods=["GET"])
@@ -2197,7 +2582,9 @@ def list_distribution_resources_route():
     cid = request.args.get("client_id", "")
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    return jsonify({"ok": True, "resources": publication_store().list_resources(cid)})
+    username, _ = current_distribution_favorites()
+    resources = resolved_distribution_favorites(username) if username else publication_store().list_resources(cid)
+    return jsonify({"ok": True, "resources": resources})
 
 
 @app.route("/api/distribution/orders", methods=["GET", "POST"])
@@ -2209,26 +2596,36 @@ def distribution_orders_route():
         return jsonify({"ok": True, "orders": publication_store().list_orders(cid)})
     data = request.get_json(silent=True) or {}
     cid, draft_id, resource_id = str(data.get("client_id") or ""), str(data.get("draft_id") or ""), str(data.get("resource_id") or "")
+    resource_type = str(data.get("resource_type") or "self_media")
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    draft, resource = publication_store().get_draft(cid, draft_id), publication_store().get_resource(cid, resource_id)
+    if resource_type not in {"self_media", "news_media"}:
+        return jsonify({"error": "invalid_resource_type"}), 400
+    username, _ = current_distribution_favorites()
+    resources = resolved_distribution_favorites(username) if username else publication_store().list_resources(cid)
+    resource = next((item for item in resources if str(item.get("resource_id")) == resource_id
+                     and str(item.get("resource_type") or "self_media") == resource_type), None)
+    draft = publication_store().get_draft(cid, draft_id)
     if not draft or not resource:
         return jsonify({"error": "draft_or_resource_not_found"}), 404
-    public_base = os.environ.get("GEO_PUBLIC_BASE_URL", "").rstrip("/")
-    if not public_base.startswith("https://"):
-        return jsonify({"error": "public_preview_url_not_configured"}), 400
-    if not os.environ.get("RWMEITI_SECRET_ID") or not os.environ.get("RWMEITI_SECRET_KEY"):
+    personal = load(user_settings_path(settings_username()), {}) if settings_username() else {}
+    if not personal.get("rwmeiti_secret_id") or not personal.get("rwmeiti_secret_key"):
         return jsonify({"error": "rwmeiti_credentials_not_configured"}), 400
+    public_base = os.environ.get("GEO_PUBLIC_BASE_URL", "").rstrip("/")
+    if not public_base.startswith(("http://", "https://")):
+        return jsonify({"error": "public_preview_url_not_configured"}), 400
     order_no = "geo-" + draft_id
     preview_url = public_base + "/public/publications/" + draft["preview_token"]
     supplier_content = '稿件链接：<a href="' + preview_url + '">' + preview_url + "</a>"
+    supplier = rwmeiti_client_from_env()
+    create_order = supplier.create_news_media_order if resource_type == "news_media" else supplier.create_self_media_order
     try:
-        result = rwmeiti_client_from_env().create_self_media_order(draft["article_title"], supplier_content, resource_id, order_no, resource["price"])
+        result = create_order(draft["article_title"], supplier_content, resource_id, order_no, resource["price"])
     except Exception as exc:
-        order = publication_store().create_supplier_order(cid, draft_id, order_no, "self_media", resource_id, resource["name"], resource["price"])
+        order = publication_store().create_supplier_order(cid, draft_id, order_no, resource_type, resource_id, resource["name"], resource["price"])
         publication_store().update_supplier_order(cid, order["id"], "submit_unknown", "", str(exc))
         return jsonify({"ok": True, "order": {**order, "status": "submit_unknown"}}), 202
-    order = publication_store().create_supplier_order(cid, draft_id, order_no, "self_media", resource_id, resource["name"], resource["price"])
+    order = publication_store().create_supplier_order(cid, draft_id, order_no, resource_type, resource_id, resource["name"], resource["price"])
     return jsonify({"ok": True, "order": order, "provider": result})
 
 @app.route("/api/content/generations", methods=["GET"])
@@ -3161,7 +3558,9 @@ def preview_template(cid):
 @app.route("/api/settings", methods=["GET"])
 def api_get_settings():
     s = get_settings()
-    s_safe = {k: v for k, v in s.items() if k not in ("api_key", "tavily_api_key")}
+    s_safe = {k: v for k, v in s.items() if k not in (
+        "api_key", "tavily_api_key", "rwmeiti_secret_id", "rwmeiti_secret_key",
+    )}
     s_safe["has_key"] = bool(s.get("api_key"))
     s_safe["has_tavily_key"] = bool(get_tavily_api_key(s))
     return jsonify(s_safe)
