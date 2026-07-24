@@ -80,6 +80,20 @@ class RWMeitiTests(unittest.TestCase):
         self.assertEqual(client.create_self_media_order("标题", "内容", "7", "geo-1", 88)["price"], "88")
         self.assertEqual(client.query_self_media_orders(["geo-1"])[0]["url"], "https://example.com/a")
 
+    @patch("services.rwmeiti.urlopen")
+    def test_query_news_media_orders_uses_news_order_endpoint(self, mocked):
+        mocked.return_value.__enter__.return_value.read.return_value = (
+            b'{"code":200,"data":[{"status":2,"no3":"geo-1","url":"https://example.com/a"}]}'
+        )
+        client = RWMeitiClient("http://example.test", "sid", "secret")
+
+        orders = client.query_news_media_orders(["geo-1"])
+
+        self.assertEqual(orders[0]["status"], 2)
+        request = mocked.call_args.args[0]
+        self.assertTrue(request.full_url.endswith("/query_media_order"))
+        self.assertIn("nostr=geo-1", request.data.decode("utf-8"))
+
 
 if __name__ == "__main__":
     unittest.main()

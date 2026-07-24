@@ -80,6 +80,12 @@ class RWMeitiClient:
             raise ValueError(str(payload.get("msg") or "rwmeiti_error"))
         return payload.get("data") or []
 
+    def query_news_media_orders(self, order_numbers):
+        payload = self._post_form("query_media_order", {"nostr": ",".join(order_numbers)})
+        if payload.get("code") != 200:
+            raise ValueError(str(payload.get("msg") or "rwmeiti_error"))
+        return payload.get("data") or []
+
     def _post_form(self, path, params):
         signed = {**params, "secret_id": self.secret_id, "timestamp": int(time.time())}
         signed["signature"] = build_signature(signed, self.secret_key)

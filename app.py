@@ -2646,13 +2646,13 @@ def refresh_distribution_order(order_id):
     order = next((item for item in publication_store().list_orders(cid) if item["id"] == order_id), None)
     if not order:
         return jsonify({"error": "order_not_found"}), 404
-    if order["resource_type"] != "self_media":
-        return jsonify({"error": "supplier_news_order_query_not_documented"}), 400
     personal = load(user_settings_path(settings_username()), {}) if settings_username() else {}
     if not personal.get("rwmeiti_secret_id") or not personal.get("rwmeiti_secret_key"):
         return jsonify({"error": "rwmeiti_credentials_not_configured"}), 400
     try:
-        provider_orders = rwmeiti_client_from_env().query_self_media_orders([order["provider_order_no"]])
+        supplier = rwmeiti_client_from_env()
+        query_orders = supplier.query_news_media_orders if order["resource_type"] == "news_media" else supplier.query_self_media_orders
+        provider_orders = query_orders([order["provider_order_no"]])
     except Exception as exc:
         return jsonify({"error": "rwmeiti_order_query_failed", "message": str(exc)}), 502
     provider_order = next((item for item in provider_orders

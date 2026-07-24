@@ -51,9 +51,7 @@ async function loadPublishPage() {
   const actions = d => {
     const order = orderByDraft.get(String(d.id));
     if (order) {
-      const refresh = order.resource_type === 'self_media'
-        ? `<button class="btn btn-o btn-sm" onclick="refreshDistributionOrder('${escHtml(order.id)}')">刷新供应商状态</button>`
-        : '';
+      const refresh = `<button class="btn btn-o btn-sm" onclick="refreshDistributionOrder('${escHtml(order.id)}')">刷新供应商状态</button>`;
       return `${preview(d)}${orderState(order)}${refresh}`;
     }
     return `${preview(d)}<select id="publish-resource-${escHtml(d.id)}"><option value="">选择发布资源</option>${options}</select><button class="btn btn-p btn-sm" onclick="submitDistributionOrder('${escHtml(d.id)}')">确认下单</button>`;
@@ -76,7 +74,7 @@ async function refreshDistributionOrder(orderId) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const r = await api('/api/distribution/orders/' + encodeURIComponent(orderId) + '/refresh', 'POST', {client_id: currentClientId});
   if (r.error) {
-    toast(r.error === 'supplier_news_order_query_not_documented' ? '供应商文档未提供新闻媒体订单查询接口' : (r.message || r.error), 'err');
+    toast(r.message || r.error, 'err');
     return;
   }
   toast(r.order?.status === 'published' ? '供应商已确认发布' : '供应商状态已刷新');

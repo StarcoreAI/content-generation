@@ -90,7 +90,11 @@ class DistributionRouteTests(unittest.TestCase):
             self.assertEqual(response.get_json()["order"]["provider_url"], "https://example.test/published")
             self.assertEqual(geo_app.publication_store().list_publications(client_id)[0]["url"], "https://example.test/published")
 
-    def test_refresh_news_media_order_explains_that_provider_query_is_undocumented(self):
+    def test_refresh_news_media_order_marks_published_and_saves_url(self):
+        class FakeClient:
+            def query_news_media_orders(self, order_numbers):
+                return [{"no3": "geo-order-a", "status": 2, "url": "https://example.test/news-published"}]
+
         with isolated_app_data():
             client_id = "client-a"
             geo_app.save(geo_app.F_CLIENTS, [{"id": client_id, "name": "客户"}])
@@ -100,13 +104,18 @@ class DistributionRouteTests(unittest.TestCase):
             order = geo_app.publication_store().create_supplier_order(
                 client_id, draft["id"], "geo-order-a", "news_media", "7", "媒体A", 88,
             )
+            geo_app.save(geo_app.user_settings_path("operator"), {
+                "rwmeiti_secret_id": "sid", "rwmeiti_secret_key": "key",
+            })
+            with unittest.mock.patch.object(geo_app, "settings_username", return_value="operator"), \
+                 unittest.mock.patch.object(geo_app, "rwmeiti_client_from_env", return_value=FakeClient()):
+                response = geo_app.app.test_client().post(
+                    "/api/distribution/orders/" + order["id"] + "/refresh", json={"client_id": client_id}
+                )
 
-            response = geo_app.app.test_client().post(
-                "/api/distribution/orders/" + order["id"] + "/refresh", json={"client_id": client_id}
-            )
-
-            self.assertEqual(response.status_code, 400)
-            self.assertEqual(response.get_json()["error"], "supplier_news_order_query_not_documented")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.get_json()["order"]["status"], "published")
+            self.assertEqual(response.get_json()["order"]["provider_url"], "https://example.test/news-published")
 
     def test_upload_article_creates_publish_draft_directly(self):
         with isolated_app_data():
