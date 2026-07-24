@@ -2608,6 +2608,10 @@ def distribution_orders_route():
     draft = publication_store().get_draft(cid, draft_id)
     if not draft or not resource:
         return jsonify({"error": "draft_or_resource_not_found"}), 404
+    existing_order = next((order for order in publication_store().list_orders(cid)
+                           if str(order.get("draft_id")) == draft_id), None)
+    if existing_order:
+        return jsonify({"error": "draft_already_has_supplier_order", "order": existing_order}), 409
     personal = load(user_settings_path(settings_username()), {}) if settings_username() else {}
     if not personal.get("rwmeiti_secret_id") or not personal.get("rwmeiti_secret_key"):
         return jsonify({"error": "rwmeiti_credentials_not_configured"}), 400
@@ -2625,8 +2629,50 @@ def distribution_orders_route():
         order = publication_store().create_supplier_order(cid, draft_id, order_no, resource_type, resource_id, resource["name"], resource["price"])
         publication_store().update_supplier_order(cid, order["id"], "submit_unknown", "", str(exc))
         return jsonify({"ok": True, "order": {**order, "status": "submit_unknown"}}), 202
+    provider_result = result if isinstance(result, dict) else {}
+    if str(provider_result.get("code")) != "200":
+        return jsonify({"error": str(provider_result.get("msg") or "rwmeiti_order_rejected"),
+                        "provider_code": provider_result.get("code")}), 400
     order = publication_store().create_supplier_order(cid, draft_id, order_no, resource_type, resource_id, resource["name"], resource["price"])
     return jsonify({"ok": True, "order": order, "provider": result})
+
+
+@app.route("/api/distribution/orders/<order_id>/refresh", methods=["POST"])
+def refresh_distribution_order(order_id):
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("client_id") or "")
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    order = next((item for item in publication_store().list_orders(cid) if item["id"] == order_id), None)
+    if not order:
+        return jsonify({"error": "order_not_found"}), 404
+    if order["resource_type"] != "self_media":
+        return jsonify({"error": "supplier_news_order_query_not_documented"}), 400
+    personal = load(user_settings_path(settings_username()), {}) if settings_username() else {}
+    if not personal.get("rwmeiti_secret_id") or not personal.get("rwmeiti_secret_key"):
+        return jsonify({"error": "rwmeiti_credentials_not_configured"}), 400
+    try:
+        provider_orders = rwmeiti_client_from_env().query_self_media_orders([order["provider_order_no"]])
+    except Exception as exc:
+        return jsonify({"error": "rwmeiti_order_query_failed", "message": str(exc)}), 502
+    provider_order = next((item for item in provider_orders
+                           if str(item.get("no3") or item.get("no") or "") == order["provider_order_no"]), None)
+    if not provider_order:
+        return jsonify({"error": "supplier_order_not_found"}), 404
+    status_map = {"-2": "deleted", "-1": "rejected", "0": "pending", "1": "publishing", "2": "published"}
+    status = status_map.get(str(provider_order.get("status")), "pending")
+    provider_url = str(provider_order.get("url") or "")
+    provider_reason = str(provider_order.get("msg") or provider_order.get("reason") or "")
+    publication_store().update_supplier_order(cid, order_id, status, provider_url, provider_reason)
+    refreshed = next(item for item in publication_store().list_orders(cid) if item["id"] == order_id)
+    if status == "published" and provider_url:
+        draft = publication_store().get_draft(cid, order["draft_id"])
+        if draft:
+            publication_store().record_completed_publication(
+                cid, order_id, order["resource_name"], provider_url, draft["article_title"], now_str()
+            )
+    return jsonify({"ok": True, "order": refreshed, "provider": provider_order})
+
 
 @app.route("/api/content/generations", methods=["GET"])
 def list_content_generations():

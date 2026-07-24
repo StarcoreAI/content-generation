@@ -22,6 +22,12 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn('id="distributionCatalogSearch"', template)
         self.assertIn("/api/distribution/catalog", script)
 
+    def test_resource_status_is_shown_as_operator_friendly_text(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("function distributionResourceStatusLabel", script)
+        self.assertIn("可发布", script)
+        self.assertNotIn("状态 ${escHtml(x.status)}", script)
+
     def test_distribution_ui_selects_and_submits_news_media_type(self):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
@@ -68,6 +74,13 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn('id="publicationFolderUpload"', template)
         self.assertIn("uploadPublicationFiles", script)
         self.assertIn("/api/distribution/drafts/upload", script)
+
+    def test_publish_page_replaces_order_button_with_supplier_processing_status(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("/api/distribution/orders?client_id=", script)
+        self.assertIn("订单已提交，等待供应商处理", script)
+        self.assertIn("orderByDraft", script)
+        self.assertIn("refreshDistributionOrder", script)
 
     def test_quality_gate_can_explicitly_create_publish_draft(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

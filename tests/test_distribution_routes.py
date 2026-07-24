@@ -8,6 +8,106 @@ from tests.test_app_core import isolated_app_data
 
 
 class DistributionRouteTests(unittest.TestCase):
+    def test_order_rejects_supplier_business_error_without_creating_local_order(self):
+        class FakeClient:
+            def create_self_media_order(self, title, content, mid, no, saling_price):
+                return {"code": 201, "msg": "余额不足"}
+
+        with isolated_app_data():
+            client_id = "client-a"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": client_id, "name": "客户"}])
+            draft = geo_app.publication_store().create_draft(client_id, {
+                "id": "article-a", "title": "文章标题", "content": "文章正文",
+            })
+            geo_app.publication_store().upsert_resources(client_id, [{
+                "resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {},
+            }], geo_app.now_str())
+            geo_app.save(geo_app.user_settings_path("operator"), {
+                "rwmeiti_secret_id": "sid", "rwmeiti_secret_key": "key",
+            })
+            with unittest.mock.patch.object(geo_app, "settings_username", return_value="operator"), \
+                 unittest.mock.patch.object(geo_app, "rwmeiti_client_from_env", return_value=FakeClient()), \
+                 unittest.mock.patch.dict(os.environ, {"GEO_PUBLIC_BASE_URL": "http://preview.example.test"}, clear=False):
+                response = geo_app.app.test_client().post("/api/distribution/orders", json={
+                    "client_id": client_id, "draft_id": draft["id"], "resource_id": "7",
+                })
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["error"], "余额不足")
+            self.assertEqual(geo_app.publication_store().list_orders(client_id), [])
+
+    def test_order_does_not_resubmit_a_draft_that_already_has_an_order(self):
+        with isolated_app_data():
+            client_id = "client-a"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": client_id, "name": "客户"}])
+            draft = geo_app.publication_store().create_draft(client_id, {
+                "id": "article-a", "title": "文章标题", "content": "文章正文",
+            })
+            geo_app.publication_store().upsert_resources(client_id, [{
+                "resource_id": "7", "name": "账号A", "price": 88, "status": "1", "raw": {},
+            }], geo_app.now_str())
+            existing = geo_app.publication_store().create_supplier_order(
+                client_id, draft["id"], "geo-" + draft["id"], "self_media", "7", "账号A", 88,
+            )
+
+            response = geo_app.app.test_client().post("/api/distribution/orders", json={
+                "client_id": client_id, "draft_id": draft["id"], "resource_id": "7",
+            })
+
+            self.assertEqual(response.status_code, 409)
+            self.assertEqual(response.get_json()["error"], "draft_already_has_supplier_order")
+            self.assertEqual(response.get_json()["order"]["id"], existing["id"])
+
+    def test_refresh_self_media_order_marks_published_and_saves_url(self):
+        calls = []
+
+        class FakeClient:
+            def query_self_media_orders(self, order_numbers):
+                calls.append(order_numbers)
+                return [{"no3": "geo-order-a", "status": 2, "url": "https://example.test/published"}]
+
+        with isolated_app_data():
+            client_id = "client-a"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": client_id, "name": "客户"}])
+            draft = geo_app.publication_store().create_draft(client_id, {
+                "id": "article-a", "title": "文章标题", "content": "文章正文",
+            })
+            order = geo_app.publication_store().create_supplier_order(
+                client_id, draft["id"], "geo-order-a", "self_media", "7", "账号A", 88,
+            )
+            geo_app.save(geo_app.user_settings_path("operator"), {
+                "rwmeiti_secret_id": "sid", "rwmeiti_secret_key": "key",
+            })
+            with unittest.mock.patch.object(geo_app, "settings_username", return_value="operator"), \
+                 unittest.mock.patch.object(geo_app, "rwmeiti_client_from_env", return_value=FakeClient()):
+                response = geo_app.app.test_client().post(
+                    "/api/distribution/orders/" + order["id"] + "/refresh", json={"client_id": client_id}
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(calls, [["geo-order-a"]])
+            self.assertEqual(response.get_json()["order"]["status"], "published")
+            self.assertEqual(response.get_json()["order"]["provider_url"], "https://example.test/published")
+            self.assertEqual(geo_app.publication_store().list_publications(client_id)[0]["url"], "https://example.test/published")
+
+    def test_refresh_news_media_order_explains_that_provider_query_is_undocumented(self):
+        with isolated_app_data():
+            client_id = "client-a"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": client_id, "name": "客户"}])
+            draft = geo_app.publication_store().create_draft(client_id, {
+                "id": "article-a", "title": "文章标题", "content": "文章正文",
+            })
+            order = geo_app.publication_store().create_supplier_order(
+                client_id, draft["id"], "geo-order-a", "news_media", "7", "媒体A", 88,
+            )
+
+            response = geo_app.app.test_client().post(
+                "/api/distribution/orders/" + order["id"] + "/refresh", json={"client_id": client_id}
+            )
+
+            self.assertEqual(response.status_code, 400)
+            self.assertEqual(response.get_json()["error"], "supplier_news_order_query_not_documented")
+
     def test_upload_article_creates_publish_draft_directly(self):
         with isolated_app_data():
             client_id = "client-a"
