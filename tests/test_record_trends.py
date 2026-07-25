@@ -223,6 +223,18 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("async function loadRecordSourceTrend", script)
         self.assertIn("/api/records/source_trend", script)
 
+    def test_records_library_removes_views_duplicated_by_daily_data(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn('id="platformStatsCard"', template)
+        self.assertNotIn('id="topArticlesList"', template)
+        self.assertNotIn('id="rawRecordList"', template)
+        self.assertNotIn('id="rec-date-filter"', template)
+        self.assertIn("async function loadRecordsLibraryViews", script)
+        self.assertEqual(script.count("async function loadRecordsLibraryViews"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,6 +10,7 @@ function navTo(page, el) {
   if (page === 'publish') loadPublishPage();
   if (page === 'resources') loadResourcePage();
   if (page === 'daily') loadDailyPage();
+  if (page === 'records') loadRecordsLibraryViews();
   if (page === 'reference') loadReferenceIntelligence();
   if (page === 'materials') loadMaterialAnalysis();
   if (page === 'competitors') loadCompetitorAnalysis();
@@ -492,6 +493,9 @@ function onClientChange() {
   // 如果当前在当日整理页面，自动刷新数据+模板
   if (document.getElementById('page-daily')?.classList.contains('on')) {
     loadDailyPage();
+  }
+  if (document.getElementById('page-records')?.classList.contains('on')) {
+    loadRecordsLibraryViews();
   }
   if (document.getElementById('page-content')?.classList.contains('on')) loadContent();
   if (document.getElementById('page-materials')?.classList.contains('on')) loadMaterialAnalysis();
@@ -1532,6 +1536,33 @@ async function loadRawRecords() {
       </div>
     </div>`;
   }).join('');
+}
+
+async function loadRecordsLibraryViews() {
+  const questionSel = document.getElementById('rec-question-filter');
+  if (!currentClientId || !questionSel) return;
+  if (questionSel.dataset.clientId !== currentClientId) {
+    const selectedQuestion = questionSel.value;
+    questionSel.innerHTML = '<option value="">请选择问题</option>';
+    try {
+      const records = await api(`/api/raw_records?client_id=${encodeURIComponent(currentClientId)}`);
+      [...new Set((records || []).map(record => record.question).filter(Boolean))].forEach(question => {
+        const option = document.createElement('option');
+        option.value = question;
+        option.textContent = question.length > 60 ? question.slice(0, 60) + '...' : question;
+        option.title = question;
+        questionSel.appendChild(option);
+      });
+      questionSel.value = [...questionSel.options].some(option => option.value === selectedQuestion)
+        ? selectedQuestion : '';
+    } catch (error) {
+      questionSel.innerHTML = '<option value="">问题加载失败</option>';
+    }
+    questionSel.dataset.clientId = currentClientId;
+  }
+  loadRecordQuestionTrend(questionSel.value);
+  loadRecordArticlePool();
+  loadRecordSourceTrend();
 }
 
 async function loadRecordQuestionTrend(question) {

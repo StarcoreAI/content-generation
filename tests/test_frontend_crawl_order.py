@@ -185,10 +185,10 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("contract_platforms", html)
         self.assertIn("saveClientPlatforms", html)
 
-    def test_batch_task_filters_are_wired_into_records_and_daily_pages(self):
+    def test_batch_task_filters_remain_only_in_daily_data_page(self):
         html = read_frontend_source()
 
-        self.assertIn('id="rec-task-filter"', html)
+        self.assertNotIn('id="rec-task-filter"', html)
         self.assertNotIn('id="dailyTaskFilter"', html)
         self.assertNotIn('id="dailyGroupFilter"', html)
         self.assertIn('data-fixed-scope="daily-group"', html)

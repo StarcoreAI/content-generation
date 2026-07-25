@@ -233,46 +233,17 @@
 <!-- ═══ 爬取记录库 ═══ -->
 <div class="page" id="page-records">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>爬取记录库</em></div><div class="pg-sub">完整原始数据，含豆包回答全文和引用源超链接</div></div>
+    <div><div class="pg-title">✦ <em>爬取记录库</em></div><div class="pg-sub">查看问题提及与引用来源的长期变化</div></div>
   </div>
 
-  <!-- 筛选栏 -->
+  <!-- 问题选择 -->
   <div class="card" style="padding:12px 16px">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <div class="fld" style="margin-bottom:0;flex:1;min-width:140px">
-        <label>问题组</label>
-        <select id="rec-group-filter" onchange="onRecGroupChange()" style="font-size:11px;padding:5px 8px">
-          <option value="">全部问题组</option>
-        </select>
-      </div>
       <div class="fld" style="margin-bottom:0;flex:2;min-width:180px">
-        <label>问题筛选</label>
-        <select id="rec-question-filter" onchange="loadRawRecords()" style="font-size:11px;padding:5px 8px;width:100%">
-          <option value="">全部问题</option>
+        <label>问题</label>
+        <select id="rec-question-filter" onchange="loadRecordsLibraryViews()" style="font-size:11px;padding:5px 8px;width:100%">
+          <option value="">请选择问题</option>
         </select>
-      </div>
-      <div class="fld" style="margin-bottom:0">
-        <label>日期</label>
-        <div style="display:flex;gap:4px;align-items:center">
-          <input type="date" id="rec-date-filter" onchange="onRecDateChange()" style="font-size:11px;padding:5px 8px;width:130px">
-          <button class="btn btn-o btn-sm" id="btnRecDateAll" onclick="clearRecDate()" style="white-space:nowrap">全部</button>
-        </div>
-      </div>
-      <div class="fld" style="margin-bottom:0">
-        <label>只看提及品牌</label>
-        <select id="rec-mentioned-filter" onchange="loadRawRecords()" style="font-size:11px;padding:5px 8px;width:100px">
-          <option value="">全部</option>
-          <option value="1">已提及</option>
-        </select>
-      </div>
-      <div class="fld" style="margin-bottom:0;min-width:180px">
-        <label>任务批次</label>
-        <select id="rec-task-filter" onchange="loadRawRecords()" style="font-size:11px;padding:5px 8px;width:100%">
-          <option value="">全部批次</option>
-        </select>
-      </div>
-      <div style="align-self:flex-end">
-        <button class="btn btn-o btn-sm" onclick="loadRawRecords()">筛选</button>
       </div>
     </div>
   </div>
@@ -280,18 +251,6 @@
   <div class="card">
     <div class="card-hd"><span class="card-title">问题提及变化</span><span style="font-size:11px;color:var(--text3)">复用上方问题筛选，按 AI 平台查看每日提及状态</span></div>
     <div id="recordQuestionTrend"><div style="color:var(--text3);font-size:12px">请先选择一个问题</div></div>
-  </div>
-
-  <!-- 平台权重快览 -->
-  <div class="card" id="platformStatsCard">
-    <div class="card-hd"><span class="card-title">平台引用权重</span><span style="font-size:11px;color:var(--text3)" id="platformStatsNote"></span></div>
-    <div id="platformStatsBars"><div style="color:var(--text3);font-size:12px">请先筛选数据</div></div>
-  </div>
-
-  <!-- 高频文章 -->
-  <div class="card">
-    <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
-    <div id="topArticlesList"><div style="color:var(--text3);font-size:12px">请先筛选数据</div></div>
   </div>
 
   <div class="card">
@@ -305,12 +264,6 @@
   <div class="card">
     <div class="card-hd"><span class="card-title">引用来源站变化</span><span style="font-size:11px;color:var(--text3)">最近 12 个 ISO 周的引用份额</span></div>
     <div id="recordSourceTrend"><div style="color:var(--text3);font-size:12px">加载中...</div></div>
-  </div>
-
-  <!-- 记录明细 -->
-  <div class="card">
-    <div class="card-hd"><span class="card-title">记录明细 <span id="rec-count" style="color:var(--text3);font-size:11px"></span></span></div>
-    <div id="rawRecordList"><div class="empty"><i class="ti ti-database"></i><p>暂无记录</p></div></div>
   </div>
 
 </div>
