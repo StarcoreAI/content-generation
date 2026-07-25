@@ -46,7 +46,7 @@ from services.competitor_materials import (
 from services.record_stats import (
     build_raw_platform_stats,
 )
-from services.record_trends import build_article_pool, build_question_trend, build_source_trend
+from services.record_trends import build_article_pool, build_group_mention_trend, build_question_trend, build_source_trend
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1273,6 +1273,23 @@ def question_trend():
         "question": question,
         "trend": build_question_trend(load_client_records(client_id), question),
     })
+
+
+@app.route("/api/records/group_trend", methods=["GET"])
+def group_trend():
+    client_id = (request.args.get("client_id") or "").strip()
+    group_id = (request.args.get("group_id") or "").strip()
+    if not client_id or not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    group = next((item for item in load(F_GROUPS, {}).get(client_id, []) if item.get("id") == group_id), None)
+    if not group:
+        return jsonify({"error": "group_not_found"}), 404
+    trend = build_group_mention_trend(
+        load_client_records(client_id, group_id=group_id),
+        group.get("questions", []),
+        request.args.get("platform") or "",
+    )
+    return jsonify({"client_id": client_id, "group_id": group_id, **trend})
 
 
 @app.route("/api/records/article_pool", methods=["GET"])

@@ -1170,11 +1170,14 @@ async function loadGroups() {
   if (!currentClientId) return;
   const groups = await api('/api/groups/' + currentClientId);
   const el = document.getElementById('groupList');
-  // 更新记录库筛选下拉
+  // 更新记录库问题组下拉
   const filter = document.getElementById('rec-group-filter');
   if (filter) {
-    filter.innerHTML = '<option value="">全部问题组</option>' +
+    const selectedGroup = filter.value;
+    filter.innerHTML = '<option value="">请选择问题组</option>' +
       groups.map(g => `<option value="${g.id}">${g.name}（${g.questions.length}题）</option>`).join('');
+    filter.value = groups.some(g => g.id === selectedGroup) ? selectedGroup : (groups[0]?.id || '');
+    filter.dataset.clientId = currentClientId;
   }
   if (!groups.length) {
     el.innerHTML = '<div class="empty"><i class="ti ti-folder"></i><p>暂无问题组</p></div>';
@@ -1538,7 +1541,7 @@ async function loadRawRecords() {
   }).join('');
 }
 
-async function loadRecordsLibraryViews() {
+async function loadLegacyRecordQuestionViews() {
   const questionSel = document.getElementById('rec-question-filter');
   if (!currentClientId || !questionSel) return;
   if (questionSel.dataset.clientId !== currentClientId) {
@@ -1563,6 +1566,72 @@ async function loadRecordsLibraryViews() {
   loadRecordQuestionTrend(questionSel.value);
   loadRecordArticlePool();
   loadRecordSourceTrend();
+}
+
+async function loadRecordsLibraryViews() {
+  const groupSel = document.getElementById('rec-group-filter');
+  if (!currentClientId || !groupSel) return;
+  if (groupSel.dataset.clientId !== currentClientId) await loadGroups();
+  loadRecordGroupTrend(groupSel.value);
+  loadRecordArticlePool();
+  loadRecordSourceTrend();
+}
+
+function renderRecordGroupLine(data) {
+  const el = document.getElementById('recordGroupTrend');
+  if (!el) return;
+  if (!data.dates?.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">该问题组暂无采集记录</div>';
+    return;
+  }
+  const width = 640, height = 188, left = 34, right = 10, top = 14, bottom = 34;
+  const ratios = data.overall.map(item => item.total ? item.mentioned / item.total : 0);
+  const xFor = index => data.dates.length === 1 ? (left + width - right) / 2 : left + index * ((width - left - right) / (data.dates.length - 1));
+  const yFor = ratio => top + (1 - ratio) * (height - top - bottom);
+  const points = ratios.map((ratio, index) => `${xFor(index)},${yFor(ratio)}`).join(' ');
+  const dots = ratios.map((ratio, index) => `<circle cx="${xFor(index)}" cy="${yFor(ratio)}" r="4" fill="var(--pri)"><title>${data.dates[index]} ${Math.round(ratio * 100)}%</title></circle>`).join('');
+  const labels = data.dates.map((day, index) => `<text x="${xFor(index)}" y="${height - 12}" text-anchor="middle" fill="var(--text3)" font-size="10">${escHtml(day.slice(5))}</text>`).join('');
+  const details = data.overall.map((item, index) => {
+    const rate = item.total ? Math.round(item.mentioned / item.total * 100) : 0;
+    return `<span style="font-size:11px;color:var(--text2)">${data.dates[index]} <b style="color:var(--pri)">${rate}%</b> (${item.mentioned}/${item.total})</span>`;
+  }).join('<span style="color:var(--border)">·</span>');
+  el.innerHTML = `<div style="font-size:12px;font-weight:800;color:#312e81;margin-bottom:6px">问题组总提及率</div><svg viewBox="0 0 ${width} ${height}" style="display:block;width:100%;min-width:480px;height:188px" aria-label="问题组总提及率折线图"><line x1="${left}" y1="${top}" x2="${left}" y2="${height - bottom}" stroke="var(--border)"/><line x1="${left}" y1="${height - bottom}" x2="${width - right}" y2="${height - bottom}" stroke="var(--border)"/><text x="2" y="${top + 4}" fill="var(--text3)" font-size="10">100%</text><text x="9" y="${height - bottom + 4}" fill="var(--text3)" font-size="10">0%</text><polyline points="${points}" fill="none" stroke="var(--pri)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>${dots}${labels}</svg><div style="display:flex;gap:6px 10px;flex-wrap:wrap;margin-top:4px">${details}</div>`;
+}
+
+function renderRecordGroupQuestionMatrix(data) {
+  const el = document.getElementById('recordGroupQuestionMatrix');
+  if (!el) return;
+  if (!data.dates?.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">该问题组暂无采集记录</div>';
+    return;
+  }
+  const columns = `minmax(160px,1.6fr) repeat(${data.dates.length}, minmax(72px,1fr))`;
+  const header = data.dates.map(day => `<span style="text-align:center">${escHtml(day)}</span>`).join('');
+  const rows = data.questions.map(row => `<div style="display:grid;grid-template-columns:${columns};gap:6px;align-items:center;padding:7px 0;border-top:1px solid var(--border2)"><span style="font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(row.question)}">${escHtml(row.question)}</span>${row.values.map(item => {
+    if (!item.total) return '<span style="font-size:11px;text-align:center;color:var(--text3)">—</span>';
+    const ratio = item.mentioned / item.total;
+    return `<span title="${item.mentioned}/${item.total} 个已采集 AI 平台提及品牌" style="font-size:11px;text-align:center;padding:4px 2px;border-radius:6px;background:rgba(109,92,247,${0.08 + ratio * 0.22});color:${ratio ? '#312e81' : 'var(--text2)'}">${item.mentioned}/${item.total}</span>`;
+  }).join('')}</div>`).join('');
+  el.innerHTML = `<div style="overflow-x:auto"><div style="min-width:620px"><div style="display:grid;grid-template-columns:${columns};gap:6px;padding-bottom:6px;font-size:10px;color:var(--text3)"><span>问题</span>${header}</div>${rows}</div></div><div style="font-size:10px;color:var(--text3);margin-top:8px">单元格为“提及品牌的 AI 平台数 / 当日已采集 AI 平台数”；— 表示当天没有该题的采集记录。</div>`;
+}
+
+async function loadRecordGroupTrend(groupId) {
+  const line = document.getElementById('recordGroupTrend');
+  const matrix = document.getElementById('recordGroupQuestionMatrix');
+  if (!line || !matrix) return;
+  if (!currentClientId || !groupId) {
+    line.innerHTML = '<div style="color:var(--text3);font-size:12px">请先选择一个问题组</div>';
+    matrix.innerHTML = '<div style="color:var(--text3);font-size:12px">请选择问题组后查看</div>';
+    return;
+  }
+  try {
+    const data = await api(`/api/records/group_trend?client_id=${encodeURIComponent(currentClientId)}&group_id=${encodeURIComponent(groupId)}`);
+    renderRecordGroupLine(data);
+    renderRecordGroupQuestionMatrix(data);
+  } catch (error) {
+    line.innerHTML = '<div style="color:var(--text3);font-size:12px">问题组提及变化暂不可用</div>';
+    matrix.innerHTML = '';
+  }
 }
 
 async function loadRecordQuestionTrend(question) {
@@ -1624,7 +1693,7 @@ async function loadRecordArticlePool() {
   }
 }
 
-async function loadRecordSourceTrend() {
+async function loadLegacyRecordSourceTrend() {
   const el = document.getElementById('recordSourceTrend');
   if (!el || !currentClientId) return;
   try {
@@ -1643,6 +1712,27 @@ async function loadRecordSourceTrend() {
       }).join('')}
     </div>`).join('');
     el.innerHTML = `<div style="overflow-x:auto"><div style="min-width:620px"><div style="display:grid;grid-template-columns:${columns};gap:6px;padding-bottom:6px;font-size:10px;color:var(--text3)"><span>来源站</span>${weekHeader}</div>${rows}</div></div>`;
+  } catch (error) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用来源趋势暂不可用</div>';
+  }
+}
+
+async function loadRecordSourceTrend() {
+  const el = document.getElementById('recordSourceTrend');
+  if (!el || !currentClientId) return;
+  try {
+    const sourceTrend = await api(`/api/records/source_trend?client_id=${encodeURIComponent(currentClientId)}`);
+    if (!sourceTrend.dates?.length || !sourceTrend.series?.length) {
+      el.innerHTML = '<div style="color:var(--text3);font-size:12px">暂无引用来源数据</div>';
+      return;
+    }
+    const colors = ['#6d5cf7', '#06b6d4', '#f59e0b', '#22c55e', '#f43f5e', '#94a3b8'];
+    const legend = sourceTrend.series.map((item, index) => `<span style="display:inline-flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)"><i style="width:9px;height:9px;border-radius:3px;background:${colors[index % colors.length]}"></i>${escHtml(item.source)}（${item.total_count}）</span>`).join('');
+    const bars = sourceTrend.dates.map((day, dateIndex) => `<div style="display:grid;grid-template-columns:88px minmax(220px,1fr);gap:10px;align-items:center;padding:8px 0;border-top:1px solid var(--border2)"><span style="font-size:11px;font-weight:800;color:#312e81">${escHtml(day)}</span><div class="record-source-bar" style="display:flex;height:18px;overflow:hidden;border-radius:6px;background:var(--border2)">${sourceTrend.series.map((item, sourceIndex) => {
+      const share = item.shares[dateIndex] || 0;
+      return share ? `<span title="${escHtml(item.source)} ${(share * 100).toFixed(1)}%" style="width:${share * 100}%;background:${colors[sourceIndex % colors.length]}"></span>` : '';
+    }).join('')}</div></div>`).join('');
+    el.innerHTML = `<div style="display:flex;gap:7px 12px;flex-wrap:wrap;margin-bottom:8px">${legend}</div><div>${bars}</div><div style="font-size:10px;color:var(--text3);margin-top:8px">固定显示这 7 个采集日累计被引最多的 5 个来源站，其余合并为“其他”。</div>`;
   } catch (error) {
     el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用来源趋势暂不可用</div>';
   }

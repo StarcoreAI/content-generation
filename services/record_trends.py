@@ -27,53 +27,88 @@ def source_domain(url, platform=""):
     return str(platform or "").strip()
 
 
-def _iso_week(day):
+def _valid_date(day):
     try:
-        iso_year, iso_week, _ = date.fromisoformat(str(day or "")).isocalendar()
+        return date.fromisoformat(str(day or "")).isoformat()
     except (TypeError, ValueError):
         return ""
-    return f"{iso_year}-W{iso_week:02d}"
 
 
 def build_source_trend(records):
-    """Build weekly source-site shares for the latest twelve ISO weeks."""
-    weekly_counts = defaultdict(lambda: defaultdict(int))
+    """Build source-site shares for the latest seven actual capture dates."""
+    daily_counts = defaultdict(lambda: defaultdict(int))
     for record in records or []:
-        week = _iso_week(record.get("today"))
-        if not week:
+        day = _valid_date(record.get("today"))
+        if not day:
             continue
+        daily_counts[day]
         for ref in record.get("refs") or []:
             if not isinstance(ref, dict):
                 continue
             source = source_domain(ref.get("url"), ref.get("platform"))
             if source:
-                weekly_counts[week][source] += 1
+                daily_counts[day][source] += 1
 
-    weeks = sorted(weekly_counts)[-12:]
-    if not weeks:
-        return {"weeks": [], "series": []}
+    dates = sorted(daily_counts)[-7:]
+    if not dates:
+        return {"dates": [], "series": []}
 
     totals = defaultdict(int)
-    for week in weeks:
-        for source, count in weekly_counts[week].items():
+    for day in dates:
+        for source, count in daily_counts[day].items():
             totals[source] += count
-    top_sources = [source for source, _ in sorted(totals.items(), key=lambda item: (-item[1], item[0]))[:10]]
+    top_sources = [source for source, _ in sorted(totals.items(), key=lambda item: (-item[1], item[0]))[:5]]
     other_sources = set(totals) - set(top_sources)
 
     def series_item(source, counts):
         return {
             "source": source,
-            "total_count": sum(counts.get(week, 0) for week in weeks),
-            "shares": [counts.get(week, 0) / sum(weekly_counts[week].values()) for week in weeks],
+            "total_count": sum(counts.get(day, 0) for day in dates),
+            "shares": [
+                counts.get(day, 0) / total if (total := sum(daily_counts[day].values())) else 0
+                for day in dates
+            ],
         }
 
-    series = [series_item(source, {week: weekly_counts[week].get(source, 0) for week in weeks}) for source in top_sources]
+    series = [series_item(source, {day: daily_counts[day].get(source, 0) for day in dates}) for source in top_sources]
     if other_sources:
         series.append(series_item("其他", {
-            week: sum(weekly_counts[week].get(source, 0) for source in other_sources)
-            for week in weeks
+            day: sum(daily_counts[day].get(source, 0) for source in other_sources)
+            for day in dates
         }))
-    return {"weeks": weeks, "series": series}
+    return {"dates": dates, "series": series}
+
+
+def build_group_mention_trend(records, questions, platform=""):
+    """Build daily group mention rates and per-question platform counts."""
+    questions = list(dict.fromkeys(question for question in questions or [] if question))
+    selected_platform = "" if platform == "all" else (platform or "")
+    states = {}
+    for record in records or []:
+        day = _valid_date(record.get("today"))
+        question = record.get("question") or ""
+        source_platform = record.get("source_platform") or "doubao"
+        if not day or question not in questions or (selected_platform and source_platform != selected_platform):
+            continue
+        key = (day, question, source_platform)
+        states[key] = states.get(key, False) or bool(record.get("brand_mentioned"))
+
+    dates = sorted({day for day, _, _ in states})[-7:]
+    overall = []
+    question_rows = []
+    for day in dates:
+        daily_states = [mentioned for (record_day, _, _), mentioned in states.items() if record_day == day]
+        overall.append({"mentioned": sum(daily_states), "total": len(daily_states)})
+    for question in questions:
+        values = []
+        for day in dates:
+            daily_states = [
+                mentioned for (record_day, record_question, _), mentioned in states.items()
+                if record_day == day and record_question == question
+            ]
+            values.append({"mentioned": sum(daily_states), "total": len(daily_states)})
+        question_rows.append({"question": question, "values": values})
+    return {"dates": dates, "overall": overall, "questions": question_rows}
 
 
 def build_question_trend(records, question):

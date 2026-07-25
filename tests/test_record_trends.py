@@ -9,6 +9,7 @@ import app as geo_app
 from services.auth import create_user
 from services.record_trends import (
     build_article_pool,
+    build_group_mention_trend,
     build_question_trend,
     build_source_trend,
     source_domain,
@@ -30,12 +31,14 @@ def record(day, platform, mentioned, refs=None, question="装修公司怎么选"
 def isolated_trend_app():
     original = {
         "F_CLIENTS": geo_app.F_CLIENTS,
+        "F_GROUPS": geo_app.F_GROUPS,
         "F_RAW_RECORDS": geo_app.F_RAW_RECORDS,
         "F_USERS": geo_app.F_USERS,
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
     }
     with tempfile.TemporaryDirectory() as tmp:
         geo_app.F_CLIENTS = os.path.join(tmp, "clients.json")
+        geo_app.F_GROUPS = os.path.join(tmp, "probe_groups.json")
         geo_app.F_RAW_RECORDS = os.path.join(tmp, "raw_records.json")
         geo_app.F_USERS = os.path.join(tmp, "users.json")
         geo_app.app.config["AUTH_DISABLED"] = False
@@ -43,6 +46,7 @@ def isolated_trend_app():
             yield tmp
         finally:
             geo_app.F_CLIENTS = original["F_CLIENTS"]
+            geo_app.F_GROUPS = original["F_GROUPS"]
             geo_app.F_RAW_RECORDS = original["F_RAW_RECORDS"]
             geo_app.F_USERS = original["F_USERS"]
             if original["AUTH_DISABLED"] is None:
@@ -118,44 +122,90 @@ class RecordTrendTests(unittest.TestCase):
         self.assertEqual(source_domain("http://[bad", "中文站名"), "中文站名")
         self.assertEqual(source_domain("", "中文站名"), "中文站名")
 
-    def test_source_trend_uses_iso_weeks_and_merges_non_top_ten_into_other(self):
+    def test_source_trend_uses_actual_capture_dates_and_merges_non_top_five_into_other(self):
         records = [
-            record("2025-12-29", "deepseek", False, [
-                {"url": "https://alpha.com/first", "platform": "Alpha"},
-                {"url": "https://www.alpha.com/second", "platform": "Alpha"},
-            ]),
-            record("2026-01-05", "qwen", False, [
-                {"url": "https://alpha.com/third", "platform": "Alpha"},
-                *[
-                    {"url": f"https://site{index:02}.com/article", "platform": f"站点{index}"}
-                    for index in range(1, 11)
-                ],
-            ]),
+            record("2026-07-01", "deepseek", False, [{"url": "https://legacy.com/a", "platform": "Legacy"}]),
+            *[
+                record(
+                    f"2026-07-{day:02}",
+                    "deepseek",
+                    False,
+                    [{"url": "https://alpha.com/a", "platform": "Alpha"}]
+                    + ([
+                        {"url": f"https://{source}.com/a", "platform": source}
+                        for source in ["bravo", "charlie", "delta", "echo", "foxtrot"]
+                    ] if day == 8 else []),
+                )
+                for day in range(2, 9)
+            ],
         ]
 
         trend = build_source_trend(records)
         sources = {item["source"]: item for item in trend["series"]}
 
-        self.assertEqual(trend["weeks"], ["2026-W01", "2026-W02"])
-        self.assertEqual(len(trend["series"]), 11)
-        self.assertEqual(sources["alpha.com"]["shares"], [1.0, 1 / 11])
+        self.assertEqual(trend["dates"], [f"2026-07-{day:02}" for day in range(2, 9)])
+        self.assertEqual(len(trend["series"]), 6)
+        self.assertEqual(sources["alpha.com"]["shares"], [1.0] * 6 + [1 / 6])
         self.assertEqual(sources["其他"]["total_count"], 1)
-        self.assertEqual(sources["其他"]["shares"], [0, 1 / 11])
-        self.assertAlmostEqual(sum(item["shares"][1] for item in trend["series"]), 1.0)
+        self.assertEqual(sources["其他"]["shares"], [0] * 6 + [1 / 6])
+        self.assertAlmostEqual(sum(item["shares"][-1] for item in trend["series"]), 1.0)
 
-    def test_source_trend_limits_output_to_latest_twelve_weeks_and_handles_empty_data(self):
+    def test_source_trend_limits_output_to_latest_seven_capture_dates_and_handles_empty_data(self):
         records = [
             record(
-                date.fromisocalendar(2026, week, 1).isoformat(),
+                f"2026-07-{day:02}",
                 "deepseek",
                 False,
                 [{"url": "https://alpha.com/article", "platform": "Alpha"}],
             )
-            for week in range(1, 14)
+            for day in range(1, 10)
         ]
 
-        self.assertEqual(build_source_trend(records)["weeks"], [f"2026-W{week:02}" for week in range(2, 14)])
-        self.assertEqual(build_source_trend([]), {"weeks": [], "series": []})
+        self.assertEqual(build_source_trend(records)["dates"], [f"2026-07-{day:02}" for day in range(3, 10)])
+        self.assertEqual(build_source_trend([]), {"dates": [], "series": []})
+
+    def test_source_trend_keeps_capture_dates_without_citations(self):
+        trend = build_source_trend([
+            record("2026-07-20", "deepseek", False, [{"url": "https://alpha.com/a", "platform": "Alpha"}]),
+            record("2026-07-21", "deepseek", False, []),
+        ])
+
+        self.assertEqual(trend["dates"], ["2026-07-20", "2026-07-21"])
+        self.assertEqual(trend["series"], [{
+            "source": "alpha.com",
+            "total_count": 1,
+            "shares": [1.0, 0],
+        }])
+
+    def test_group_mention_trend_collapses_rounds_and_keeps_each_question_visible(self):
+        question_one = "问题一"
+        question_two = "问题二"
+        question_without_records = "问题三"
+        records = [
+            record("2026-07-20", "deepseek", False, question=question_one),
+            record("2026-07-20", "deepseek", True, question=question_one, round_num=2),
+            record("2026-07-20", "qwen", False, question=question_one),
+            record("2026-07-20", "deepseek", False, question=question_two),
+            record("2026-07-21", "deepseek", False, question=question_one),
+            record("2026-07-21", "deepseek", True, question=question_two),
+            record("2026-07-21", "qwen", True, question=question_two),
+        ]
+
+        trend = build_group_mention_trend(records, [question_one, question_two, question_without_records])
+
+        self.assertEqual(trend["dates"], ["2026-07-20", "2026-07-21"])
+        self.assertEqual(trend["overall"], [
+            {"mentioned": 1, "total": 3},
+            {"mentioned": 2, "total": 3},
+        ])
+        self.assertEqual(trend["questions"], [
+            {"question": question_one, "values": [{"mentioned": 1, "total": 2}, {"mentioned": 0, "total": 1}]},
+            {"question": question_two, "values": [{"mentioned": 0, "total": 1}, {"mentioned": 2, "total": 2}]},
+            {"question": question_without_records, "values": [{"mentioned": 0, "total": 0}, {"mentioned": 0, "total": 0}]},
+        ])
+
+        selected_platform = build_group_mention_trend(records, [question_one, question_two], platform="deepseek")
+        self.assertEqual(selected_platform["overall"], [{"mentioned": 1, "total": 2}, {"mentioned": 1, "total": 2}])
 
 
 class RecordTrendRouteTests(unittest.TestCase):
@@ -167,6 +217,9 @@ class RecordTrendRouteTests(unittest.TestCase):
                 {"id": "alice-client", "owner_username": "alice"},
                 {"id": "bob-client", "owner_username": "bob"},
             ])
+            geo_app.save(geo_app.F_GROUPS, {
+                "alice-client": [{"id": "group-1", "questions": ["装修公司怎么选"]}],
+            })
             records = [
                 record("2026-07-20", "deepseek", True, [
                     {"url": "https://example.com/article", "platform": "示例站"},
@@ -175,6 +228,7 @@ class RecordTrendRouteTests(unittest.TestCase):
             ]
             for item in records:
                 item["client_id"] = "alice-client"
+                item["group_id"] = "group-1"
             geo_app.save(geo_app.F_RAW_RECORDS, records)
 
             alice = geo_app.app.test_client()
@@ -189,6 +243,9 @@ class RecordTrendRouteTests(unittest.TestCase):
             source_trend = alice.get("/api/records/source_trend?client_id=alice-client")
             self.assertEqual(source_trend.status_code, 200)
             self.assertEqual(source_trend.get_json()["series"][0]["source"], "example.com")
+            group_trend = alice.get("/api/records/group_trend?client_id=alice-client&group_id=group-1")
+            self.assertEqual(group_trend.status_code, 200)
+            self.assertEqual(group_trend.get_json()["overall"][0], {"mentioned": 1, "total": 1})
 
             bob = geo_app.app.test_client()
             self.assertEqual(
@@ -200,28 +257,36 @@ class RecordTrendRouteTests(unittest.TestCase):
                 404,
             )
             self.assertEqual(bob.get("/api/records/source_trend?client_id=alice-client").status_code, 404)
+            self.assertEqual(
+                bob.get("/api/records/group_trend?client_id=alice-client&group_id=group-1").status_code,
+                404,
+            )
 
 
 class RecordTrendUiTests(unittest.TestCase):
-    def test_records_library_wires_question_and_article_pool_views(self):
+    def test_records_library_wires_group_trend_and_article_pool_views(self):
         root = Path(__file__).resolve().parents[1]
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")
         script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("问题提及变化", template)
-        self.assertIn('id="recordQuestionTrend"', template)
+        self.assertIn("问题组提及变化", template)
+        self.assertIn('id="rec-group-filter"', template)
+        self.assertIn('id="recordGroupTrend"', template)
+        self.assertIn('id="recordGroupQuestionMatrix"', template)
         self.assertIn("引用文章池", template)
         self.assertIn('id="recordArticlePoolDate"', template)
         self.assertIn('id="recordArticlePool"', template)
-        self.assertIn("async function loadRecordQuestionTrend", script)
+        self.assertIn("async function loadRecordGroupTrend", script)
         self.assertIn("async function loadRecordArticlePool", script)
-        self.assertIn("/api/records/question_trend", script)
+        self.assertIn("/api/records/group_trend", script)
         self.assertIn("/api/records/article_pool", script)
         self.assertIn("已留存 ${article.retained_days} 天", script)
         self.assertIn("引用来源站变化", template)
         self.assertIn('id="recordSourceTrend"', template)
         self.assertIn("async function loadRecordSourceTrend", script)
         self.assertIn("/api/records/source_trend", script)
+        self.assertIn("sourceTrend.dates", script)
+        self.assertIn("record-source-bar", script)
 
     def test_records_library_removes_views_duplicated_by_daily_data(self):
         root = Path(__file__).resolve().parents[1]
