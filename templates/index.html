@@ -277,6 +277,11 @@
     </div>
   </div>
 
+  <div class="card">
+    <div class="card-hd"><span class="card-title">问题提及变化</span><span style="font-size:11px;color:var(--text3)">复用上方问题筛选，按 AI 平台查看每日提及状态</span></div>
+    <div id="recordQuestionTrend"><div style="color:var(--text3);font-size:12px">请先选择一个问题</div></div>
+  </div>
+
   <!-- 平台权重快览 -->
   <div class="card" id="platformStatsCard">
     <div class="card-hd"><span class="card-title">平台引用权重</span><span style="font-size:11px;color:var(--text3)" id="platformStatsNote"></span></div>
@@ -287,6 +292,14 @@
   <div class="card">
     <div class="card-hd"><span class="card-title">高频引用文章 Top20</span></div>
     <div id="topArticlesList"><div style="color:var(--text3);font-size:12px">请先筛选数据</div></div>
+  </div>
+
+  <div class="card">
+    <div class="card-hd">
+      <span class="card-title">引用文章池</span>
+      <input type="date" id="recordArticlePoolDate" onchange="loadRecordArticlePool()" style="font-size:11px;padding:5px 8px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
+    </div>
+    <div id="recordArticlePool"><div style="color:var(--text3);font-size:12px">加载中...</div></div>
   </div>
 
   <!-- 记录明细 -->

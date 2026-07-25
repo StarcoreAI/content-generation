@@ -46,6 +46,7 @@ from services.competitor_materials import (
 from services.record_stats import (
     build_raw_platform_stats,
 )
+from services.record_trends import build_article_pool, build_question_trend
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1260,6 +1261,28 @@ def queue_entity_normalize_task(client_id, date_str, task_id, task_report_path, 
     )
     thread.start()
     return status
+
+@app.route("/api/records/question_trend", methods=["GET"])
+def question_trend():
+    client_id = (request.args.get("client_id") or "").strip()
+    if not client_id or not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    question = request.args.get("question") or ""
+    return jsonify({
+        "client_id": client_id,
+        "question": question,
+        "trend": build_question_trend(load_client_records(client_id), question),
+    })
+
+
+@app.route("/api/records/article_pool", methods=["GET"])
+def article_pool():
+    client_id = (request.args.get("client_id") or "").strip()
+    if not client_id or not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    pool = build_article_pool(load_client_records(client_id), request.args.get("date") or None)
+    return jsonify({"client_id": client_id, **pool})
+
 
 @app.route("/api/raw_records", methods=["GET"])
 def get_raw_records():

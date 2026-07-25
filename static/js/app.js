@@ -1502,6 +1502,8 @@ async function loadRawRecords() {
   if (taskId) statsUrl += `&task_id=${encodeURIComponent(taskId)}`;
   const stats = await api(statsUrl);
   renderPlatformStats(stats);
+  loadRecordQuestionTrend(question_filter);
+  loadRecordArticlePool();
 
   const el = document.getElementById('rawRecordList');
   if (!records.length) {
@@ -1529,6 +1531,65 @@ async function loadRawRecords() {
       </div>
     </div>`;
   }).join('');
+}
+
+async function loadRecordQuestionTrend(question) {
+  const el = document.getElementById('recordQuestionTrend');
+  if (!el) return;
+  if (!currentClientId || !question) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">请先选择一个问题</div>';
+    return;
+  }
+  try {
+    const data = await api(`/api/records/question_trend?client_id=${encodeURIComponent(currentClientId)}&question=${encodeURIComponent(question)}`);
+    const rows = Object.entries(data.trend || {});
+    if (!rows.length) {
+      el.innerHTML = '<div style="color:var(--text3);font-size:12px">该问题暂无记录</div>';
+      return;
+    }
+    el.innerHTML = rows.map(([platform, items]) => `
+      <div style="display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px solid var(--border2)">
+        <span style="font-size:12px;font-weight:800;color:#312e81;min-width:70px">${escHtml(CRAWL_PLATFORM_NAMES[platform] || platform)}</span>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${items.map(item =>
+          `<span title="${item.records} 条记录" style="font-size:11px;padding:3px 7px;border-radius:8px;background:${item.mentioned ? 'rgba(52,211,153,.12)' : 'rgba(244,114,182,.10)'};color:${item.mentioned ? '#047857' : '#be123c'}">${item.date} ${item.mentioned ? '✓' : '✕'}</span>`
+        ).join('')}</div>
+      </div>`).join('');
+  } catch (error) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">提及变化暂不可用</div>';
+  }
+}
+
+function renderRecordPoolItem(article, retained) {
+  const title = escHtml(article.title || '未命名文章');
+  const articleTitle = article.url
+    ? `<a href="${escHtml(article.url)}" target="_blank" rel="noopener" style="color:#312e81;text-decoration:none">${title}</a>`
+    : title;
+  return `<div style="padding:8px 0;border-bottom:1px solid var(--border2)">
+    <div style="font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${articleTitle}</div>
+    <div style="font-size:11px;color:var(--text3);margin-top:4px">当日被引 ${article.today_count} 次 · 累计 ${article.total_count} 次 · 首次 ${article.first_seen_date}${retained ? ` · 已留存 ${article.retained_days} 天` : ''}</div>
+    <div style="font-size:10px;color:var(--text3);margin-top:3px">涉及 AI：${article.ai_platforms.map(platform => escHtml(CRAWL_PLATFORM_NAMES[platform] || platform)).join('、')}</div>
+  </div>`;
+}
+
+async function loadRecordArticlePool() {
+  const el = document.getElementById('recordArticlePool');
+  const input = document.getElementById('recordArticlePoolDate');
+  if (!el || !currentClientId) return;
+  try {
+    const selectedDate = input?.value || '';
+    const data = await api(`/api/records/article_pool?client_id=${encodeURIComponent(currentClientId)}${selectedDate ? `&date=${selectedDate}` : ''}`);
+    if (input && data.date) input.value = data.date;
+    if (!data.new_entries?.length && !data.retained?.length) {
+      el.innerHTML = '<div style="color:var(--text3);font-size:12px">该日期暂无引用文章</div>';
+      return;
+    }
+    el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px">
+      <div><div style="font-size:12px;font-weight:800;color:var(--pri)">新进</div>${data.new_entries.length ? data.new_entries.map(article => renderRecordPoolItem(article, false)).join('') : '<div style="color:var(--text3);font-size:12px;margin-top:8px">无新进文章</div>'}</div>
+      <div><div style="font-size:12px;font-weight:800;color:#047857">留存</div>${data.retained.length ? data.retained.map(article => renderRecordPoolItem(article, true)).join('') : '<div style="color:var(--text3);font-size:12px;margin-top:8px">无留存文章</div>'}</div>
+    </div>`;
+  } catch (error) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用文章池暂不可用</div>';
+  }
 }
 
 function renderPlatformStats(stats) {
