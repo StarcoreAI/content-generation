@@ -98,6 +98,73 @@ class ReferenceArticleFetchTests(unittest.TestCase):
         self.assertEqual(calls[0]["url"], "https://example.com/article")
         self.assertIn("Browser extracted", result["content"])
 
+    def test_fetch_article_text_detects_meta_charset_before_utf8_fallback(self):
+        from services.article_fetcher import fetch_article_text
+
+        class Headers:
+            def get_content_charset(self):
+                return None
+
+            def get(self, _name, _default=None):
+                return None
+
+        class Response:
+            headers = Headers()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _size):
+                return (
+                    '<html><head><meta charset="gbk"><title>中文标题</title></head>'
+                    '<body><p>' + "这是一段用于验证 GBK 编码探测不会乱码的正文内容。" * 20 + "</p></body></html>"
+                ).encode("gbk")
+
+        with patch("services.article_fetcher.urlopen", return_value=Response()):
+            result = fetch_article_text("https://example.com/gbk", include_html=True)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["charset"], "gbk")
+        self.assertEqual(result["title"], "中文标题")
+        self.assertIn("GBK 编码探测", result["html"])
+
+    def test_selection_fetch_keeps_short_static_page_with_title_or_meta(self):
+        from services.article_fetcher import fetch_article_text
+
+        class Headers:
+            def get_content_charset(self):
+                return "utf-8"
+
+        class Response:
+            headers = Headers()
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+            def read(self, _size):
+                return b'<html><head><title>Surface title</title><meta name="description" content="Surface meta"></head><body></body></html>'
+
+        browser_calls = []
+        with patch("services.article_fetcher.urlopen", return_value=Response()):
+            result = fetch_article_text(
+                "https://example.com/surface",
+                browser_fallback=True,
+                browser_fetch_fn=lambda *_args, **_kwargs: browser_calls.append(True),
+                include_html=True,
+                accept_metadata=True,
+            )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["metadata_only"])
+        self.assertEqual(result["fetch_method"], "static")
+        self.assertEqual(browser_calls, [])
+
     def test_dev_fetch_reference_articles_writes_deduped_daily_output(self):
         from scripts.dev_fetch_reference_articles import run_fetch_reference_articles
 

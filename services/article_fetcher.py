@@ -79,6 +79,43 @@ def _dedupe_blocks(blocks):
     return result
 
 
+def _detected_charsets(raw, headers):
+    """Return declared encodings before safe UTF-8/GBK fallbacks."""
+    declared = []
+    try:
+        header_charset = headers.get_content_charset()
+    except (AttributeError, TypeError):
+        header_charset = ""
+    if header_charset:
+        declared.append(str(header_charset).strip())
+
+    head = bytes(raw or b"")[:8192]
+    patterns = (
+        br"<meta\b[^>]*\bcharset\s*=\s*['\"]?\s*([a-zA-Z0-9_.-]+)",
+        br"<meta\b[^>]*\bcontent\s*=\s*['\"][^'\"]*?charset\s*=\s*([a-zA-Z0-9_.-]+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, head, re.IGNORECASE)
+        if match:
+            declared.append(match.group(1).decode("ascii", errors="ignore").strip())
+
+    candidates = []
+    for charset in declared + ["utf-8", "gb18030"]:
+        charset = str(charset or "").strip().lower()
+        if charset and charset not in candidates:
+            candidates.append(charset)
+    return candidates
+
+
+def _decode_html(raw, headers):
+    for charset in _detected_charsets(raw, headers):
+        try:
+            return raw.decode(charset), charset
+        except (LookupError, UnicodeDecodeError):
+            continue
+    return raw.decode("utf-8", errors="replace"), "utf-8-replacement"
+
+
 def extract_article_text_from_html(html_text, url="", max_chars=12000, min_chars=200):
     parser = ArticleHTMLParser()
     parser.feed(str(html_text or ""))
@@ -161,7 +198,7 @@ def fetch_article_text_with_browser(url, timeout=25, max_chars=12000, min_chars=
 
 
 def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False, browser_fetch_fn=None,
-                       include_html=False):
+                       include_html=False, accept_metadata=False):
     url = str(url or "").strip()
     if not re.match(r"^https?://", url):
         return {"ok": False, "url": url, "title": "", "description": "", "content": "", "error": "invalid_url", "fetch_method": "static"}
@@ -172,7 +209,7 @@ def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False,
         })
         with urlopen(req, timeout=timeout) as resp:
             raw = resp.read(max_chars * 8)
-            charset = resp.headers.get_content_charset() or "utf-8"
+            text, charset = _decode_html(raw, resp.headers)
     except (HTTPError, URLError, TimeoutError, OSError) as exc:
         result = {"ok": False, "url": url, "title": "", "description": "", "content": "", "error": str(exc), "fetch_method": "static"}
         if browser_fallback:
@@ -180,14 +217,19 @@ def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False,
             browser_result.setdefault("static_error", result["error"])
             return browser_result
         return result
-    text = raw.decode(charset, errors="ignore")
     result = extract_article_text_from_html(text, url=url, max_chars=max_chars)
     if include_html:
         result["html"] = text
     result["fetch_method"] = "static"
+    result["charset"] = charset
     if not result["ok"]:
-        result["error"] = "empty_content"
-        if browser_fallback:
+        if accept_metadata and (result["title"] or result["description"]):
+            result["ok"] = True
+            result["error"] = ""
+            result["metadata_only"] = True
+        else:
+            result["error"] = "empty_content"
+        if not result["ok"] and browser_fallback:
             browser_result = (browser_fetch_fn or fetch_article_text_with_browser)(url, timeout=timeout, max_chars=max_chars)
             browser_result.setdefault("static_error", result["error"])
             return browser_result

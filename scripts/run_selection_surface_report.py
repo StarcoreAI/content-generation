@@ -1,5 +1,7 @@
 import argparse
+import re
 import sys
+import time
 from datetime import date
 from pathlib import Path
 
@@ -16,6 +18,8 @@ from services.selection_surface import (
     build_selection_features,
     extract_selection_surface,
     first_content_block,
+    group_selection_articles_by_question,
+    grouped_surface_similarity,
 )
 from services.storage import load_json
 
@@ -24,11 +28,14 @@ def default_data_dir():
     return ROOT / "data"
 
 
-def _client_brand(data_dir, client_id):
+def _client_info(data_dir, client_id):
     for client in load_json(data_dir / "clients.json", []):
         if isinstance(client, dict) and client.get("id") == client_id:
-            return str(client.get("brand") or "").strip()
-    return ""
+            return (
+                str(client.get("name") or client.get("brand") or "").strip(),
+                str(client.get("brand") or "").strip(),
+            )
+    return "", ""
 
 
 def _surface_from_fetch(fetched, article):
@@ -45,6 +52,93 @@ def _surface_from_fetch(fetched, article):
 
 def _percent(numerator, denominator):
     return f"{(numerator / denominator * 100) if denominator else 0:.1f}%"
+
+
+def _similarity_value(value):
+    return f"{value * 100:.1f}%" if value is not None else "无可比样本"
+
+
+def _render_similarity(lines, label, comparison):
+    within = comparison["within"]
+    cross = comparison["cross"]
+    lines.extend([
+        f"- {label}：",
+        f"  - 同一问题内：均值 {_similarity_value(within['mean'])}；中位数 {_similarity_value(within['median'])}；{within['pair_count']} 对",
+        f"  - 跨问题：均值 {_similarity_value(cross['mean'])}；中位数 {_similarity_value(cross['median'])}；{cross['pair_count']} 对",
+        f"  - 均值差（组内 - 组间）：{_similarity_value(comparison['mean_difference'])}",
+    ])
+
+
+def _render_grouped_report(client_id, client_name, brand, run_date, date_from, date_to, top,
+                           groups, stats, similarities):
+    lines = [
+        "# 高频引用文章选择层表面报告（按问题分组）",
+        "",
+        "## 运行参数",
+        "",
+        f"- 客户：{client_name or client_id}",
+        f"- 客户 ID：{client_id}",
+        f"- 客户品牌：{brand or MISSING}",
+        f"- 日期范围：{date_from or '全部'} 至 {date_to or '全部'}",
+        f"- 全局高频文章 Top N：{top}",
+        f"- 运行日期：{run_date}",
+        "",
+        "## 结论：同一问题内 vs 跨问题相似度",
+        "",
+        "同一 URL 不参与与自身的比较；每一对不同文章若共同出现在至少一个问题中，计入“同一问题内”，否则计入“跨问题”。",
+    ]
+    _render_similarity(lines, "Meta description 相似度（字符 3-gram Jaccard）", similarities["meta"])
+    _render_similarity(lines, "Title 相似度（字符 3-gram Jaccard）", similarities["title"])
+    lines.extend([
+        "",
+        "## 汇总统计",
+        "",
+        f"- 高频文章数：{stats['total_articles']}",
+        f"- 有 meta description：{stats['has_meta_description']}（{_percent(stats['has_meta_description'], stats['total_articles'])}）",
+        f"- 标题含年份：{stats['title_has_year']}（{_percent(stats['title_has_year'], stats['total_articles'])}）",
+        f"- 标题含决策词：{stats['title_has_decision_word']}（{_percent(stats['title_has_decision_word'], stats['total_articles'])}）",
+        f"- 品牌出现在表面的篇数：{stats['brand_on_surface']}",
+        f"- 抓取成功数：{stats['fetch_succeeded']}",
+        f"- 抓取失败数：{stats['fetch_failed']}",
+        f"- 抓取成功率：{_percent(stats['fetch_succeeded'], stats['total_articles'])}",
+    ])
+    for group in groups:
+        lines.extend(["", f"## 问题：{group['question']}"])
+        for index, article in enumerate(group["articles"], 1):
+            surface = article.get("surface") or {}
+            lines.extend([
+                "",
+                f"### {index}. {surface.get('title') or article.get('title') or MISSING}",
+                "",
+                f"- 此问题被引次数：{article['question_citation_count']}",
+                f"- 出现平台：{'、'.join(article['question_ai_platforms']) or MISSING}",
+                f"- 共 {article['referenced_question_count']} 个问题引用此文",
+                f"- URL：{article['url'] or MISSING}",
+                f"- 域名：{article_domain(article['url'])}",
+                f"- 抓取状态：{article.get('fetch_status') or '失败'}",
+            ])
+            if article.get("fetch_error"):
+                lines.append(f"- 失败原因：{article['fetch_error']}")
+                continue
+            features = article["features"]
+            lines.extend([
+                f"- 标题：{surface['title']}",
+                f"- Meta description：{surface['meta_description']}",
+                f"- H1：{surface['h1']}",
+                f"- 首段（前 200 字）：{surface['first_paragraph'][:200]}",
+                "",
+                "#### 特征标记",
+                "",
+                f"- 标题含年份：{'是' if features['title_has_year'] else '否'}",
+                f"- 标题含决策词：{'是' if features['title_has_decision_word'] else '否'}",
+                f"- 标题长度：{features['title_length']}",
+                f"- 品牌在标题 / meta / 首段：{'是' if features['brand_in_title'] else '否'} / {'是' if features['brand_in_meta_description'] else '否'} / {'是' if features['brand_in_first_paragraph'] else '否'}",
+            ])
+    return "\n".join(lines) + "\n"
+
+
+def _safe_filename_part(value):
+    return re.sub(r'[\\/:*?"<>|\x00-\x1f]+', "_", str(value or "")).strip(". ")
 
 
 def _render_report(client_id, brand, run_date, date_from, date_to, top, articles, stats):
@@ -111,6 +205,7 @@ def run_selection_surface_report(
     data_dir=None,
     fetch_fn=fetch_article_text,
     run_date=None,
+    sleep_fn=time.sleep,
 ):
     top = int(top)
     if top < 1:
@@ -118,27 +213,35 @@ def run_selection_surface_report(
     data_dir = Path(data_dir or default_data_dir())
     records = load_client_records(data_dir / "raw_records.json", client_id)
     articles = aggregate_selection_articles(records, date_from=date_from, date_to=date_to, top=top)
-    brand = _client_brand(data_dir, client_id)
+    client_name, brand = _client_info(data_dir, client_id)
     stats = {
         "total_articles": len(articles),
         "has_meta_description": 0,
         "title_has_year": 0,
         "title_has_decision_word": 0,
         "brand_on_surface": 0,
+        "fetch_succeeded": 0,
         "fetch_failed": 0,
     }
-    for article in articles:
+    for index, article in enumerate(articles):
+        if index:
+            sleep_fn(1)
         try:
             fetched = fetch_fn(
                 article["url"], timeout=25, max_chars=12000,
-                browser_fallback=True, include_html=True,
+                browser_fallback=True, include_html=True, accept_metadata=True,
             )
             if not isinstance(fetched, dict) or not fetched.get("ok"):
                 raise RuntimeError(str((fetched or {}).get("error") or "抓取失败"))
             article["surface"] = _surface_from_fetch(fetched, article)
             article["features"] = build_selection_features(article["surface"], brand)
+            fetch_method = str(fetched.get("fetch_method") or "unknown")
+            charset = str(fetched.get("charset") or "").strip()
+            article["fetch_status"] = f"成功（{fetch_method}{'；' + charset if charset else ''}）"
+            stats["fetch_succeeded"] += 1
         except Exception as exc:
             article["fetch_error"] = str(exc) or "抓取失败"
+            article["fetch_status"] = "失败"
             stats["fetch_failed"] += 1
             continue
         features = article["features"]
@@ -148,10 +251,19 @@ def run_selection_surface_report(
         stats["brand_on_surface"] += features["brand_on_surface"]
 
     run_date = run_date or date.today().isoformat()
-    output_path = data_dir / "selection_surface_reports" / client_id / f"{run_date}_selection_surface.md"
+    groups = group_selection_articles_by_question(articles)
+    similarities = {
+        "meta": grouped_surface_similarity(articles, "meta_description"),
+        "title": grouped_surface_similarity(articles, "title"),
+    }
+    output_name = _safe_filename_part(client_name or client_id) or client_id
+    output_path = data_dir / "selection_surface_reports" / client_id / f"{run_date}_{output_name}_selection_surface.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
-        _render_report(client_id, brand, run_date, date_from, date_to, top, articles, stats),
+        _render_grouped_report(
+            client_id, client_name, brand, run_date, date_from, date_to, top,
+            groups, stats, similarities,
+        ),
         encoding="utf-8",
     )
     return {**stats, "output_path": str(output_path)}

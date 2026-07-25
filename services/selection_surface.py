@@ -1,5 +1,6 @@
 import html
 import re
+from statistics import mean, median
 from html.parser import HTMLParser
 from urllib.parse import urlparse
 
@@ -7,7 +8,10 @@ from services.ref_articles import canonical_article_key
 
 
 MISSING = "无"
-DECISION_WORDS = ("推荐", "排名", "哪家", "怎么选", "避坑", "测评", "对比", "靠谱", "攻略")
+DECISION_WORDS = (
+    "推荐", "排名", "哪家", "怎么选", "避坑", "测评", "对比", "靠谱", "攻略",
+    "怎么样", "好不好", "靠谱吗", "口碑", "坑不坑",
+)
 
 
 def _clean_text(value):
@@ -132,10 +136,13 @@ def aggregate_selection_articles(records, date_from=None, date_to=None, top=30):
             if not key:
                 continue
             article = articles.setdefault(key, {
+                "canonical_key": key,
                 "title": title,
                 "url": url,
                 "citation_count": 0,
                 "ai_platforms": set(),
+                "question_citations": {},
+                "question_ai_platforms": {},
                 "first_cited_date": cited_date,
                 "last_cited_date": cited_date,
                 "_index": record_index,
@@ -143,6 +150,14 @@ def aggregate_selection_articles(records, date_from=None, date_to=None, top=30):
             article["citation_count"] += 1
             if ai_platform:
                 article["ai_platforms"].add(ai_platform)
+            question = str(record.get("question") or "").strip()
+            if question:
+                article["question_citations"][question] = (
+                    article["question_citations"].get(question, 0) + 1
+                )
+                article["question_ai_platforms"].setdefault(question, set())
+                if ai_platform:
+                    article["question_ai_platforms"][question].add(ai_platform)
             if cited_date and (not article["first_cited_date"] or cited_date < article["first_cited_date"]):
                 article["first_cited_date"] = cited_date
             if cited_date and (not article["last_cited_date"] or cited_date > article["last_cited_date"]):
@@ -152,8 +167,113 @@ def aggregate_selection_articles(records, date_from=None, date_to=None, top=30):
     result.sort(key=lambda item: (-item["citation_count"], item["_index"]))
     for article in result:
         article["ai_platforms"] = sorted(article["ai_platforms"])
+        article["question_citations"] = dict(sorted(article["question_citations"].items()))
+        article["question_ai_platforms"] = {
+            question: sorted(platforms)
+            for question, platforms in sorted(article["question_ai_platforms"].items())
+        }
+        article["referenced_question_count"] = len(article["question_citations"])
         article.pop("_index", None)
     return result[:max(0, int(top or 0))]
+
+
+def group_selection_articles_by_question(articles):
+    """Expand selected global Top-N articles into their concrete question groups."""
+    groups = {}
+    for article in articles or []:
+        if not isinstance(article, dict):
+            continue
+        question_citations = article.get("question_citations") or {}
+        question_platforms = article.get("question_ai_platforms") or {}
+        for question, citation_count in question_citations.items():
+            question = str(question or "").strip()
+            if not question or not citation_count:
+                continue
+            grouped_article = dict(article)
+            grouped_article["question_citation_count"] = int(citation_count)
+            grouped_article["question_ai_platforms"] = list(question_platforms.get(question) or [])
+            groups.setdefault(question, []).append(grouped_article)
+
+    result = []
+    for question, grouped_articles in groups.items():
+        grouped_articles.sort(
+            key=lambda item: (-item["question_citation_count"], item.get("canonical_key") or "")
+        )
+        result.append({"question": question, "articles": grouped_articles})
+    result.sort(
+        key=lambda group: (-sum(item["question_citation_count"] for item in group["articles"]), group["question"])
+    )
+    return result
+
+
+def _char_shingles(value, size=3):
+    text = re.sub(r"\s+", "", str(value or "").lower())
+    if not text:
+        return set()
+    if len(text) < size:
+        return {text}
+    return {text[index:index + size] for index in range(len(text) - size + 1)}
+
+
+def _jaccard_similarity(left, right):
+    left_shingles = _char_shingles(left)
+    right_shingles = _char_shingles(right)
+    if not left_shingles or not right_shingles:
+        return None
+    return len(left_shingles & right_shingles) / len(left_shingles | right_shingles)
+
+
+def _similarity_summary(scores):
+    scores = list(scores)
+    return {
+        "pair_count": len(scores),
+        "mean": mean(scores) if scores else None,
+        "median": median(scores) if scores else None,
+    }
+
+
+def grouped_surface_similarity(articles, field):
+    """Compare distinct article surfaces within a shared question and across questions."""
+    unique_articles = {}
+    for index, article in enumerate(articles or []):
+        if not isinstance(article, dict):
+            continue
+        key = str(article.get("canonical_key") or "").strip()
+        if not key:
+            key = canonical_article_key(article.get("title"), article.get("url")) or f"index:{index}"
+        entry = unique_articles.setdefault(key, {"questions": set(), "text": ""})
+        entry["questions"].update(
+            str(question).strip()
+            for question in (article.get("question_citations") or {})
+            if str(question).strip()
+        )
+        candidate = str((article.get("surface") or {}).get(field) or "").strip()
+        if candidate and candidate != MISSING and not entry["text"]:
+            entry["text"] = candidate
+
+    entries = [entry for entry in unique_articles.values() if entry["questions"] and entry["text"]]
+    within_scores = []
+    cross_scores = []
+    for left_index, left in enumerate(entries):
+        for right in entries[left_index + 1:]:
+            score = _jaccard_similarity(left["text"], right["text"])
+            if score is None:
+                continue
+            if left["questions"] & right["questions"]:
+                within_scores.append(score)
+            else:
+                cross_scores.append(score)
+
+    within = _similarity_summary(within_scores)
+    cross = _similarity_summary(cross_scores)
+    return {
+        "within": within,
+        "cross": cross,
+        "mean_difference": (
+            within["mean"] - cross["mean"]
+            if within["mean"] is not None and cross["mean"] is not None else None
+        ),
+    }
 
 
 def article_domain(url):
