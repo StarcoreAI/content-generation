@@ -46,7 +46,7 @@ from services.competitor_materials import (
 from services.record_stats import (
     build_raw_platform_stats,
 )
-from services.record_trends import build_article_pool, build_question_trend
+from services.record_trends import build_article_pool, build_question_trend, build_source_trend
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1282,6 +1282,14 @@ def article_pool():
         return jsonify({"error": "client_not_found"}), 404
     pool = build_article_pool(load_client_records(client_id), request.args.get("date") or None)
     return jsonify({"client_id": client_id, **pool})
+
+
+@app.route("/api/records/source_trend", methods=["GET"])
+def source_trend():
+    client_id = (request.args.get("client_id") or "").strip()
+    if not client_id or not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({"client_id": client_id, **build_source_trend(load_client_records(client_id))})
 
 
 @app.route("/api/raw_records", methods=["GET"])

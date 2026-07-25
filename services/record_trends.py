@@ -1,7 +1,79 @@
 from collections import defaultdict
 from datetime import date
+import re
+from urllib.parse import urlparse
 
 from services.ref_articles import canonical_article_key
+
+
+MULTI_PART_SUFFIXES = {
+    "ac.uk", "co.jp", "co.uk", "com.au", "com.cn", "edu.cn", "gov.cn",
+    "net.au", "net.cn", "org.au", "org.cn",
+}
+
+
+def source_domain(url, platform=""):
+    """Return a normalized registrable domain, or the source-site label as fallback."""
+    value = str(url or "").strip()
+    try:
+        parsed = urlparse(value if "://" in value or value.startswith("//") else f"//{value}")
+        host = (parsed.hostname or "").lower().rstrip(".")
+    except ValueError:
+        host = ""
+    if re.fullmatch(r"[a-z0-9-]+(?:\.[a-z0-9-]+)+", host):
+        labels = host.split(".")
+        suffix = ".".join(labels[-2:])
+        return ".".join(labels[-3:]) if suffix in MULTI_PART_SUFFIXES and len(labels) >= 3 else suffix
+    return str(platform or "").strip()
+
+
+def _iso_week(day):
+    try:
+        iso_year, iso_week, _ = date.fromisoformat(str(day or "")).isocalendar()
+    except (TypeError, ValueError):
+        return ""
+    return f"{iso_year}-W{iso_week:02d}"
+
+
+def build_source_trend(records):
+    """Build weekly source-site shares for the latest twelve ISO weeks."""
+    weekly_counts = defaultdict(lambda: defaultdict(int))
+    for record in records or []:
+        week = _iso_week(record.get("today"))
+        if not week:
+            continue
+        for ref in record.get("refs") or []:
+            if not isinstance(ref, dict):
+                continue
+            source = source_domain(ref.get("url"), ref.get("platform"))
+            if source:
+                weekly_counts[week][source] += 1
+
+    weeks = sorted(weekly_counts)[-12:]
+    if not weeks:
+        return {"weeks": [], "series": []}
+
+    totals = defaultdict(int)
+    for week in weeks:
+        for source, count in weekly_counts[week].items():
+            totals[source] += count
+    top_sources = [source for source, _ in sorted(totals.items(), key=lambda item: (-item[1], item[0]))[:10]]
+    other_sources = set(totals) - set(top_sources)
+
+    def series_item(source, counts):
+        return {
+            "source": source,
+            "total_count": sum(counts.get(week, 0) for week in weeks),
+            "shares": [counts.get(week, 0) / sum(weekly_counts[week].values()) for week in weeks],
+        }
+
+    series = [series_item(source, {week: weekly_counts[week].get(source, 0) for week in weeks}) for source in top_sources]
+    if other_sources:
+        series.append(series_item("其他", {
+            week: sum(weekly_counts[week].get(source, 0) for source in other_sources)
+            for week in weeks
+        }))
+    return {"weeks": weeks, "series": series}
 
 
 def build_question_trend(records, question):

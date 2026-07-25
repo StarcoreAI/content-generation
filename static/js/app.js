@@ -1504,6 +1504,7 @@ async function loadRawRecords() {
   renderPlatformStats(stats);
   loadRecordQuestionTrend(question_filter);
   loadRecordArticlePool();
+  loadRecordSourceTrend();
 
   const el = document.getElementById('rawRecordList');
   if (!records.length) {
@@ -1589,6 +1590,30 @@ async function loadRecordArticlePool() {
     </div>`;
   } catch (error) {
     el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用文章池暂不可用</div>';
+  }
+}
+
+async function loadRecordSourceTrend() {
+  const el = document.getElementById('recordSourceTrend');
+  if (!el || !currentClientId) return;
+  try {
+    const sourceTrend = await api(`/api/records/source_trend?client_id=${encodeURIComponent(currentClientId)}`);
+    if (!sourceTrend.weeks?.length || !sourceTrend.series?.length) {
+      el.innerHTML = '<div style="color:var(--text3);font-size:12px">暂无引用来源数据</div>';
+      return;
+    }
+    const columns = `minmax(90px,1.2fr) repeat(${sourceTrend.weeks.length},minmax(48px,1fr))`;
+    const weekHeader = sourceTrend.weeks.map(week => `<span style="text-align:center">${escHtml(week)}</span>`).join('');
+    const rows = sourceTrend.series.map(item => `<div style="display:grid;grid-template-columns:${columns};gap:6px;align-items:center;padding:7px 0;border-top:1px solid var(--border2)">
+      <span style="font-size:11px;font-weight:800;color:${item.source === '其他' ? 'var(--text2)' : '#312e81'};overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="累计被引 ${item.total_count} 次">${escHtml(item.source)}</span>
+      ${item.shares.map(share => {
+        const pct = Math.round(share * 100);
+        return `<div title="${(share * 100).toFixed(1)}%" style="font-size:10px;text-align:center"><div style="height:5px;background:var(--pri-ll);border-radius:4px;overflow:hidden"><div style="width:${pct}%;height:100%;background:var(--pri)"></div></div><span>${pct}%</span></div>`;
+      }).join('')}
+    </div>`).join('');
+    el.innerHTML = `<div style="overflow-x:auto"><div style="min-width:620px"><div style="display:grid;grid-template-columns:${columns};gap:6px;padding-bottom:6px;font-size:10px;color:var(--text3)"><span>来源站</span>${weekHeader}</div>${rows}</div></div>`;
+  } catch (error) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用来源趋势暂不可用</div>';
   }
 }
 

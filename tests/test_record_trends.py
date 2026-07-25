@@ -2,11 +2,17 @@ import os
 import tempfile
 import unittest
 from contextlib import contextmanager
+from datetime import date
 from pathlib import Path
 
 import app as geo_app
 from services.auth import create_user
-from services.record_trends import build_article_pool, build_question_trend
+from services.record_trends import (
+    build_article_pool,
+    build_question_trend,
+    build_source_trend,
+    source_domain,
+)
 
 
 def record(day, platform, mentioned, refs=None, question="装修公司怎么选", round_num=1):
@@ -104,6 +110,53 @@ class RecordTrendTests(unittest.TestCase):
             "retained": [],
         })
 
+    def test_source_domain_normalizes_urls_and_falls_back_to_platform(self):
+        self.assertEqual(source_domain("https://www.news.example.com/path/", "媒体"), "example.com")
+        self.assertEqual(source_domain("http://example.com/", "媒体"), "example.com")
+        self.assertEqual(source_domain("www.example.com/path", "媒体"), "example.com")
+        self.assertEqual(source_domain("not a url", "中文站名"), "中文站名")
+        self.assertEqual(source_domain("http://[bad", "中文站名"), "中文站名")
+        self.assertEqual(source_domain("", "中文站名"), "中文站名")
+
+    def test_source_trend_uses_iso_weeks_and_merges_non_top_ten_into_other(self):
+        records = [
+            record("2025-12-29", "deepseek", False, [
+                {"url": "https://alpha.com/first", "platform": "Alpha"},
+                {"url": "https://www.alpha.com/second", "platform": "Alpha"},
+            ]),
+            record("2026-01-05", "qwen", False, [
+                {"url": "https://alpha.com/third", "platform": "Alpha"},
+                *[
+                    {"url": f"https://site{index:02}.com/article", "platform": f"站点{index}"}
+                    for index in range(1, 11)
+                ],
+            ]),
+        ]
+
+        trend = build_source_trend(records)
+        sources = {item["source"]: item for item in trend["series"]}
+
+        self.assertEqual(trend["weeks"], ["2026-W01", "2026-W02"])
+        self.assertEqual(len(trend["series"]), 11)
+        self.assertEqual(sources["alpha.com"]["shares"], [1.0, 1 / 11])
+        self.assertEqual(sources["其他"]["total_count"], 1)
+        self.assertEqual(sources["其他"]["shares"], [0, 1 / 11])
+        self.assertAlmostEqual(sum(item["shares"][1] for item in trend["series"]), 1.0)
+
+    def test_source_trend_limits_output_to_latest_twelve_weeks_and_handles_empty_data(self):
+        records = [
+            record(
+                date.fromisocalendar(2026, week, 1).isoformat(),
+                "deepseek",
+                False,
+                [{"url": "https://alpha.com/article", "platform": "Alpha"}],
+            )
+            for week in range(1, 14)
+        ]
+
+        self.assertEqual(build_source_trend(records)["weeks"], [f"2026-W{week:02}" for week in range(2, 14)])
+        self.assertEqual(build_source_trend([]), {"weeks": [], "series": []})
+
 
 class RecordTrendRouteTests(unittest.TestCase):
     def test_trend_routes_return_client_records_and_hide_other_clients(self):
@@ -115,7 +168,9 @@ class RecordTrendRouteTests(unittest.TestCase):
                 {"id": "bob-client", "owner_username": "bob"},
             ])
             records = [
-                record("2026-07-20", "deepseek", True, question="装修公司怎么选"),
+                record("2026-07-20", "deepseek", True, [
+                    {"url": "https://example.com/article", "platform": "示例站"},
+                ], question="装修公司怎么选"),
                 record("2026-07-21", "qwen", False, question="装修公司怎么选"),
             ]
             for item in records:
@@ -131,6 +186,9 @@ class RecordTrendRouteTests(unittest.TestCase):
             self.assertEqual(trend.status_code, 200)
             self.assertEqual(trend.get_json()["trend"]["deepseek"][0]["mentioned"], True)
             self.assertEqual(alice.get("/api/records/article_pool?client_id=alice-client").status_code, 200)
+            source_trend = alice.get("/api/records/source_trend?client_id=alice-client")
+            self.assertEqual(source_trend.status_code, 200)
+            self.assertEqual(source_trend.get_json()["series"][0]["source"], "example.com")
 
             bob = geo_app.app.test_client()
             self.assertEqual(
@@ -141,6 +199,7 @@ class RecordTrendRouteTests(unittest.TestCase):
                 bob.get("/api/records/question_trend?client_id=alice-client&question=装修公司怎么选").status_code,
                 404,
             )
+            self.assertEqual(bob.get("/api/records/source_trend?client_id=alice-client").status_code, 404)
 
 
 class RecordTrendUiTests(unittest.TestCase):
@@ -159,6 +218,10 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("/api/records/question_trend", script)
         self.assertIn("/api/records/article_pool", script)
         self.assertIn("已留存 ${article.retained_days} 天", script)
+        self.assertIn("引用来源站变化", template)
+        self.assertIn('id="recordSourceTrend"', template)
+        self.assertIn("async function loadRecordSourceTrend", script)
+        self.assertIn("/api/records/source_trend", script)
 
 
 if __name__ == "__main__":
