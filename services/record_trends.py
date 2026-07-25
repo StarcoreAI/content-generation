@@ -80,30 +80,31 @@ def build_source_trend(records):
 
 
 def build_group_mention_trend(records, questions, platform=""):
-    """Build daily group mention rates and per-question platform counts."""
+    """Build daily group mention rates from distinct crawl-task results."""
     questions = list(dict.fromkeys(question for question in questions or [] if question))
     selected_platform = "" if platform == "all" else (platform or "")
     states = {}
-    for record in records or []:
+    for index, record in enumerate(records or []):
         day = _valid_date(record.get("today"))
         question = record.get("question") or ""
         source_platform = record.get("source_platform") or "doubao"
         if not day or question not in questions or (selected_platform and source_platform != selected_platform):
             continue
-        key = (day, question, source_platform)
+        task_key = record.get("task_id") or record.get("id") or f"record-{index}"
+        key = (day, question, source_platform, task_key)
         states[key] = states.get(key, False) or bool(record.get("brand_mentioned"))
 
-    dates = sorted({day for day, _, _ in states})[-7:]
+    dates = sorted({day for day, _, _, _ in states})[-7:]
     overall = []
     question_rows = []
     for day in dates:
-        daily_states = [mentioned for (record_day, _, _), mentioned in states.items() if record_day == day]
+        daily_states = [mentioned for (record_day, _, _, _), mentioned in states.items() if record_day == day]
         overall.append({"mentioned": sum(daily_states), "total": len(daily_states)})
     for question in questions:
         values = []
         for day in dates:
             daily_states = [
-                mentioned for (record_day, record_question, _), mentioned in states.items()
+                mentioned for (record_day, record_question, _, _), mentioned in states.items()
                 if record_day == day and record_question == question
             ]
             values.append({"mentioned": sum(daily_states), "total": len(daily_states)})

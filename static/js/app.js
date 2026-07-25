@@ -1610,9 +1610,9 @@ function renderRecordGroupQuestionMatrix(data) {
   const rows = data.questions.map(row => `<div style="display:grid;grid-template-columns:${columns};gap:6px;align-items:center;padding:7px 0;border-top:1px solid var(--border2)"><span style="font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${escHtml(row.question)}">${escHtml(row.question)}</span>${row.values.map(item => {
     if (!item.total) return '<span style="font-size:11px;text-align:center;color:var(--text3)">—</span>';
     const ratio = item.mentioned / item.total;
-    return `<span title="${item.mentioned}/${item.total} 个已采集 AI 平台提及品牌" style="font-size:11px;text-align:center;padding:4px 2px;border-radius:6px;background:rgba(109,92,247,${0.08 + ratio * 0.22});color:${ratio ? '#312e81' : 'var(--text2)'}">${item.mentioned}/${item.total}</span>`;
+    return `<span title="${item.mentioned}/${item.total} 次实际爬取提及品牌" style="font-size:11px;text-align:center;padding:4px 2px;border-radius:6px;background:rgba(109,92,247,${0.08 + ratio * 0.22});color:${ratio ? '#312e81' : 'var(--text2)'}">${item.mentioned}/${item.total}</span>`;
   }).join('')}</div>`).join('');
-  el.innerHTML = `<div style="overflow-x:auto"><div style="min-width:620px"><div style="display:grid;grid-template-columns:${columns};gap:6px;padding-bottom:6px;font-size:10px;color:var(--text3)"><span>问题</span>${header}</div>${rows}</div></div><div style="font-size:10px;color:var(--text3);margin-top:8px">单元格为“提及品牌的 AI 平台数 / 当日已采集 AI 平台数”；— 表示当天没有该题的采集记录。</div>`;
+  el.innerHTML = `<div style="overflow-x:auto"><div style="min-width:620px"><div style="display:grid;grid-template-columns:${columns};gap:6px;padding-bottom:6px;font-size:10px;color:var(--text3)"><span>问题</span>${header}</div>${rows}</div></div><div style="font-size:10px;color:var(--text3);margin-top:8px">单元格为“提及品牌的实际爬取次数 / 当日实际爬取次数”；— 表示当天没有该题的采集记录。</div>`;
 }
 
 async function loadRecordGroupTrend(groupId) {

@@ -16,13 +16,14 @@ from services.record_trends import (
 )
 
 
-def record(day, platform, mentioned, refs=None, question="装修公司怎么选", round_num=1):
+def record(day, platform, mentioned, refs=None, question="装修公司怎么选", round_num=1, task_id=""):
     return {
         "today": day,
         "source_platform": platform,
         "brand_mentioned": mentioned,
         "question": question,
         "round": round_num,
+        "task_id": task_id,
         "refs": refs or [],
     }
 
@@ -177,7 +178,7 @@ class RecordTrendTests(unittest.TestCase):
             "shares": [1.0, 0],
         }])
 
-    def test_group_mention_trend_collapses_rounds_and_keeps_each_question_visible(self):
+    def test_group_mention_trend_keeps_each_crawl_record_and_question_visible(self):
         question_one = "问题一"
         question_two = "问题二"
         question_without_records = "问题三"
@@ -195,17 +196,33 @@ class RecordTrendTests(unittest.TestCase):
 
         self.assertEqual(trend["dates"], ["2026-07-20", "2026-07-21"])
         self.assertEqual(trend["overall"], [
-            {"mentioned": 1, "total": 3},
+            {"mentioned": 1, "total": 4},
             {"mentioned": 2, "total": 3},
         ])
         self.assertEqual(trend["questions"], [
-            {"question": question_one, "values": [{"mentioned": 1, "total": 2}, {"mentioned": 0, "total": 1}]},
+            {"question": question_one, "values": [{"mentioned": 1, "total": 3}, {"mentioned": 0, "total": 1}]},
             {"question": question_two, "values": [{"mentioned": 0, "total": 1}, {"mentioned": 2, "total": 2}]},
             {"question": question_without_records, "values": [{"mentioned": 0, "total": 0}, {"mentioned": 0, "total": 0}]},
         ])
 
         selected_platform = build_group_mention_trend(records, [question_one, question_two], platform="deepseek")
-        self.assertEqual(selected_platform["overall"], [{"mentioned": 1, "total": 2}, {"mentioned": 1, "total": 2}])
+        self.assertEqual(selected_platform["overall"], [{"mentioned": 1, "total": 3}, {"mentioned": 1, "total": 2}])
+
+    def test_group_mention_trend_counts_distinct_tasks_without_collapsing_them(self):
+        records = [
+            record("2026-07-24", "doubao", True, task_id="task-one"),
+            record("2026-07-24", "doubao", False, task_id="task-two"),
+            record("2026-07-24", "doubao", False, task_id="task-three"),
+            record("2026-07-24", "doubao", False, task_id="task-one"),
+        ]
+
+        trend = build_group_mention_trend(records, ["装修公司怎么选"])
+
+        self.assertEqual(trend["overall"], [{"mentioned": 1, "total": 3}])
+        self.assertEqual(trend["questions"], [{
+            "question": "装修公司怎么选",
+            "values": [{"mentioned": 1, "total": 3}],
+        }])
 
 
 class RecordTrendRouteTests(unittest.TestCase):
@@ -287,6 +304,7 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("/api/records/source_trend", script)
         self.assertIn("sourceTrend.dates", script)
         self.assertIn("record-source-bar", script)
+        self.assertIn("实际爬取次数", script)
 
     def test_records_library_removes_views_duplicated_by_daily_data(self):
         root = Path(__file__).resolve().parents[1]
