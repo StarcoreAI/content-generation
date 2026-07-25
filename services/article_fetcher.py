@@ -160,7 +160,8 @@ def fetch_article_text_with_browser(url, timeout=25, max_chars=12000, min_chars=
     }
 
 
-def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False, browser_fetch_fn=None):
+def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False, browser_fetch_fn=None,
+                       include_html=False):
     url = str(url or "").strip()
     if not re.match(r"^https?://", url):
         return {"ok": False, "url": url, "title": "", "description": "", "content": "", "error": "invalid_url", "fetch_method": "static"}
@@ -181,6 +182,8 @@ def fetch_article_text(url, timeout=10, max_chars=12000, browser_fallback=False,
         return result
     text = raw.decode(charset, errors="ignore")
     result = extract_article_text_from_html(text, url=url, max_chars=max_chars)
+    if include_html:
+        result["html"] = text
     result["fetch_method"] = "static"
     if not result["ok"]:
         result["error"] = "empty_content"
