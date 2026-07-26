@@ -289,6 +289,7 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("问题组场景词提示", template)
         self.assertIn('id="btnRefreshQueryScenes"', template)
         self.assertIn('id="querySceneRows"', template)
+        self.assertNotIn('id="btnDryRunQueryScenes"', template)
         self.assertIn("async function loadQueryScenes", script)
         self.assertIn("async function refreshQueryScenes", script)
         self.assertIn("/api/records/selection-evidence/", script)
