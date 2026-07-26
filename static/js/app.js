@@ -1575,6 +1575,43 @@ async function loadRecordsLibraryViews() {
   loadRecordGroupTrend(groupSel.value);
   loadRecordArticlePool();
   loadRecordSourceTrend();
+  loadQueryScenes();
+}
+
+function renderQuerySceneRows(rows) {
+  const el = document.getElementById('querySceneRows');
+  if (!el) return;
+  if (!rows?.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">请先提取场景词</div>';
+    return;
+  }
+  const body = rows.map(row => `<tr><td>${escHtml(row.group_name || '未命名问题组')}</td><td>${escHtml(row.query || '')}</td><td>${escHtml((row.scene_terms || []).join('、') || '未识别具体场景词')}</td></tr>`).join('');
+  el.innerHTML = `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:12px"><thead><tr><th>问题组</th><th>Query</th><th>场景词</th></tr></thead><tbody>${body}</tbody></table></div>`;
+}
+
+async function loadQueryScenes() {
+  if (!currentClientId) return;
+  try {
+    const data = await api(`/api/records/selection-evidence/${encodeURIComponent(currentClientId)}`);
+    renderQuerySceneRows(data.rows || []);
+  } catch (error) {
+    renderQuerySceneRows([]);
+  }
+}
+
+async function refreshQueryScenes(dryRun=false) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  disableBtn('btnRefreshQueryScenes', true);
+  disableBtn('btnDryRunQueryScenes', true);
+  try {
+    const data = await api(`/api/records/selection-evidence/${encodeURIComponent(currentClientId)}/refresh`, 'POST', {dry_run: dryRun});
+    if (data.error) { toast(data.error, 'err'); return; }
+    renderQuerySceneRows(data.rows || []);
+    toast(dryRun ? '试运行完成，结果未保存' : (data.updated ? `已更新 ${data.updated} 条场景词` : '场景词已是最新'));
+  } finally {
+    disableBtn('btnRefreshQueryScenes', false);
+    disableBtn('btnDryRunQueryScenes', false);
+  }
 }
 
 function renderRecordGroupLine(data) {

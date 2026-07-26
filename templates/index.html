@@ -249,6 +249,17 @@
   </div>
 
   <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">问题组场景词提示</span><div class="card-sub">基于 Query 与高引用文章表面提取；仅作运营写作提示</div></div>
+      <div class="acts">
+        <button class="btn btn-o btn-sm" id="btnDryRunQueryScenes" onclick="refreshQueryScenes(true)">试运行（不保存）</button>
+        <button class="btn btn-p btn-sm" id="btnRefreshQueryScenes" onclick="refreshQueryScenes(false)">提取 / 更新场景词</button>
+      </div>
+    </div>
+    <div id="querySceneRows"><div style="color:var(--text3);font-size:12px">请先提取场景词</div></div>
+  </div>
+
+  <div class="card">
     <div class="card-hd"><span class="card-title">问题组提及变化</span><span style="font-size:11px;color:var(--text3)">最近 7 个实际采集日；总提及率与逐题提及平台数</span></div>
     <div id="recordGroupTrend"><div style="color:var(--text3);font-size:12px">请先选择一个问题组</div></div>
     <div style="font-size:12px;font-weight:800;color:#312e81;margin:18px 0 8px">逐题提及矩阵</div>

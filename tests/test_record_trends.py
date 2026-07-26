@@ -281,6 +281,19 @@ class RecordTrendRouteTests(unittest.TestCase):
 
 
 class RecordTrendUiTests(unittest.TestCase):
+    def test_records_library_wires_minimal_query_scene_table(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("问题组场景词提示", template)
+        self.assertIn('id="btnRefreshQueryScenes"', template)
+        self.assertIn('id="querySceneRows"', template)
+        self.assertIn("async function loadQueryScenes", script)
+        self.assertIn("async function refreshQueryScenes", script)
+        self.assertIn("/api/records/selection-evidence/", script)
+        self.assertIn("问题组</th><th>Query</th><th>场景词", script)
+
     def test_records_library_wires_group_trend_and_article_pool_views(self):
         root = Path(__file__).resolve().parents[1]
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")

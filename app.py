@@ -47,6 +47,7 @@ from services.record_stats import (
     build_raw_platform_stats,
 )
 from services.record_trends import build_article_pool, build_group_mention_trend, build_question_trend, build_source_trend
+from services.selection_evidence import SelectionEvidenceService
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1307,6 +1308,39 @@ def source_trend():
     if not client_id or not require_client_access(client_id):
         return jsonify({"error": "client_not_found"}), 404
     return jsonify({"client_id": client_id, **build_source_trend(load_client_records(client_id))})
+
+
+def selection_evidence_service():
+    return SelectionEvidenceService(Path(D) / "selection_evidence", fetch_article=fetch_article_text)
+
+
+@app.route("/api/records/selection-evidence/<cid>", methods=["GET"])
+def get_selection_evidence(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({"client_id": cid, "rows": selection_evidence_service().load_query_scene_rows(
+        cid, load(F_GROUPS, {}).get(cid, []),
+    )})
+
+
+@app.route("/api/records/selection-evidence/<cid>/refresh", methods=["POST"])
+def refresh_selection_evidence(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    payload = request.get_json(silent=True) or {}
+    all_records = load_client_records(cid)
+    source_date = str(payload.get("date") or "").strip()
+    if not source_date:
+        source_date = max((str(record.get("today") or "").strip() for record in all_records), default="")
+    records = [record for record in all_records if not source_date or record.get("today") == source_date]
+    result = selection_evidence_service().refresh_query_scenes(
+        cid,
+        load(F_GROUPS, {}).get(cid, []),
+        records,
+        ai_json,
+        dry_run=bool(payload.get("dry_run")),
+    )
+    return jsonify({"client_id": cid, "source_date": source_date, **result})
 
 
 @app.route("/api/raw_records", methods=["GET"])
