@@ -1,4 +1,5 @@
 import html
+import random
 import re
 from statistics import mean, median
 from html.parser import HTMLParser
@@ -174,7 +175,22 @@ def aggregate_selection_articles(records, date_from=None, date_to=None, top=30):
         }
         article["referenced_question_count"] = len(article["question_citations"])
         article.pop("_index", None)
+    if top is None:
+        return result
     return result[:max(0, int(top or 0))]
+
+
+def sample_low_frequency_selection_articles(records, date_from=None, date_to=None, top=30,
+                                            random_seed=None):
+    """Randomly choose from the lowest cited article tier after date filtering."""
+    articles = aggregate_selection_articles(
+        records, date_from=date_from, date_to=date_to, top=None,
+    )
+    if not articles:
+        return []
+    lowest_count = min(article["citation_count"] for article in articles)
+    candidates = [article for article in articles if article["citation_count"] == lowest_count]
+    return random.Random(random_seed).sample(candidates, min(max(0, int(top or 0)), len(candidates)))
 
 
 def group_selection_articles_by_question(articles):

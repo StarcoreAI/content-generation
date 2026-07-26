@@ -20,6 +20,7 @@ from services.selection_surface import (
     first_content_block,
     group_selection_articles_by_question,
     grouped_surface_similarity,
+    sample_low_frequency_selection_articles,
 )
 from services.storage import load_json
 
@@ -70,7 +71,7 @@ def _render_similarity(lines, label, comparison):
 
 
 def _render_grouped_report(client_id, client_name, brand, run_date, date_from, date_to, top,
-                           groups, stats, similarities):
+                           selection_mode, groups, stats, similarities):
     lines = [
         "# 高频引用文章选择层表面报告（按问题分组）",
         "",
@@ -80,7 +81,7 @@ def _render_grouped_report(client_id, client_name, brand, run_date, date_from, d
         f"- 客户 ID：{client_id}",
         f"- 客户品牌：{brand or MISSING}",
         f"- 日期范围：{date_from or '全部'} 至 {date_to or '全部'}",
-        f"- 全局高频文章 Top N：{top}",
+        f"- 文章选择：{'全局高频 Top N' if selection_mode == 'high-frequency' else '最低被引次数档随机样本'}（{top} 篇）",
         f"- 运行日期：{run_date}",
         "",
         "## 结论：同一问题内 vs 跨问题相似度",
@@ -206,13 +207,22 @@ def run_selection_surface_report(
     fetch_fn=fetch_article_text,
     run_date=None,
     sleep_fn=time.sleep,
+    selection_mode="high-frequency",
+    random_seed=None,
 ):
     top = int(top)
     if top < 1:
         raise ValueError("top must be at least 1")
     data_dir = Path(data_dir or default_data_dir())
     records = load_client_records(data_dir / "raw_records.json", client_id)
-    articles = aggregate_selection_articles(records, date_from=date_from, date_to=date_to, top=top)
+    if selection_mode == "high-frequency":
+        articles = aggregate_selection_articles(records, date_from=date_from, date_to=date_to, top=top)
+    elif selection_mode == "low-frequency-random":
+        articles = sample_low_frequency_selection_articles(
+            records, date_from=date_from, date_to=date_to, top=top, random_seed=random_seed,
+        )
+    else:
+        raise ValueError("selection_mode must be high-frequency or low-frequency-random")
     client_name, brand = _client_info(data_dir, client_id)
     stats = {
         "total_articles": len(articles),
@@ -257,16 +267,17 @@ def run_selection_surface_report(
         "title": grouped_surface_similarity(articles, "title"),
     }
     output_name = _safe_filename_part(client_name or client_id) or client_id
-    output_path = data_dir / "selection_surface_reports" / client_id / f"{run_date}_{output_name}_selection_surface.md"
+    mode_suffix = "" if selection_mode == "high-frequency" else "_low_frequency_random"
+    output_path = data_dir / "selection_surface_reports" / client_id / f"{run_date}_{output_name}{mode_suffix}_selection_surface.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(
         _render_grouped_report(
-            client_id, client_name, brand, run_date, date_from, date_to, top,
+            client_id, client_name, brand, run_date, date_from, date_to, top, selection_mode,
             groups, stats, similarities,
         ),
         encoding="utf-8",
     )
-    return {**stats, "output_path": str(output_path)}
+    return {**stats, "selection_mode": selection_mode, "output_path": str(output_path)}
 
 
 def main(argv=None):
@@ -275,6 +286,11 @@ def main(argv=None):
     parser.add_argument("--date-from")
     parser.add_argument("--date-to")
     parser.add_argument("--top", type=int, default=30)
+    parser.add_argument(
+        "--selection-mode", choices=("high-frequency", "low-frequency-random"),
+        default="high-frequency",
+    )
+    parser.add_argument("--random-seed", type=int)
     args = parser.parse_args(argv)
     if args.top < 1:
         parser.error("--top must be at least 1")
@@ -283,6 +299,8 @@ def main(argv=None):
         date_from=args.date_from,
         date_to=args.date_to,
         top=args.top,
+        selection_mode=args.selection_mode,
+        random_seed=args.random_seed,
     )
     print(f"[GEO] report: {result['output_path']}")
     print(f"[GEO] articles={result['total_articles']} fetch_failed={result['fetch_failed']}")

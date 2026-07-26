@@ -175,6 +175,72 @@ class SelectionSurfaceTests(unittest.TestCase):
 
         self.assertTrue(features["title_has_decision_word"])
 
+    def test_low_frequency_sample_uses_only_lowest_citation_tier_and_seed(self):
+        from services.selection_surface import sample_low_frequency_selection_articles
+
+        records = [
+            {"today": "2026-07-01", "question": "问题一", "refs": [
+                {"title": "文章 A", "url": "https://example.com/a"},
+                {"title": "文章 B", "url": "https://example.com/b"},
+                {"title": "文章 C", "url": "https://example.com/c"},
+            ]},
+            {"today": "2026-07-02", "question": "问题二", "refs": [
+                {"title": "文章 A", "url": "https://example.com/a"},
+            ]},
+            {"today": "2026-07-03", "question": "问题三", "refs": [
+                {"title": "文章 A", "url": "https://example.com/a"},
+            ]},
+            {"today": "2026-07-04", "question": "问题四", "refs": [
+                {"title": "文章 D", "url": "https://example.com/d"},
+            ]},
+            {"today": "2026-07-05", "question": "问题五", "refs": [
+                {"title": "文章 D", "url": "https://example.com/d"},
+            ]},
+        ]
+
+        first = sample_low_frequency_selection_articles(records, top=2, random_seed=7)
+        second = sample_low_frequency_selection_articles(records, top=2, random_seed=7)
+
+        self.assertEqual([article["url"] for article in first], [article["url"] for article in second])
+        self.assertEqual({article["url"] for article in first}, {
+            "https://example.com/b", "https://example.com/c",
+        })
+        self.assertTrue(all(article["citation_count"] == 1 for article in first))
+
+    def test_low_frequency_report_uses_distinct_filename(self):
+        from scripts.run_selection_surface_report import run_selection_surface_report
+
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            data_dir.mkdir()
+            (data_dir / "clients.json").write_text(json.dumps([
+                {"id": "client-1", "name": "客户甲", "brand": "品牌甲"},
+            ], ensure_ascii=False), encoding="utf-8")
+            (data_dir / "raw_records.json").write_text(json.dumps([
+                {"client_id": "client-1", "today": "2026-07-01", "question": "问题一", "refs": [
+                    {"title": "高频文章", "url": "https://example.com/high"},
+                    {"title": "低频文章", "url": "https://example.com/low"},
+                ]},
+                {"client_id": "client-1", "today": "2026-07-02", "question": "问题二", "refs": [
+                    {"title": "高频文章", "url": "https://example.com/high"},
+                ]},
+            ], ensure_ascii=False), encoding="utf-8")
+
+            result = run_selection_surface_report(
+                client_id="client-1", data_dir=data_dir, top=1,
+                selection_mode="low-frequency-random", random_seed=7,
+                fetch_fn=lambda url, **_kwargs: {
+                    "ok": True, "url": url,
+                    "html": "<title>低频页面</title><meta name='description' content='摘要'><p>这是足够长的首段内容，用来验证低频样本报告仍复用同一份选择层表面处理逻辑。</p>",
+                },
+                run_date="2026-07-26", sleep_fn=lambda _seconds: None,
+            )
+
+            self.assertEqual(result["total_articles"], 1)
+            self.assertTrue(result["output_path"].endswith(
+                "2026-07-26_客户甲_low_frequency_random_selection_surface.md"
+            ))
+
     def test_report_continues_after_fetch_failure_and_writes_expected_summary(self):
         from scripts.run_selection_surface_report import run_selection_surface_report
 
