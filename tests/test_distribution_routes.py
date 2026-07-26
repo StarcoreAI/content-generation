@@ -137,7 +137,7 @@ class DistributionRouteTests(unittest.TestCase):
         with isolated_app_data() as tmp:
             original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
             original_favorites = geo_app.F_DISTRIBUTION_FAVORITES
-            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
             try:
                 client_id = "client-a"

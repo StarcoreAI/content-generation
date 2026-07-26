@@ -93,7 +93,7 @@ F_USERS = f"{D}/users.json"
 F_USER_SETTINGS = f"{D}/user_settings"
 F_DISTRIBUTION_FAVORITES = f"{D}/distribution_favorites"
 F_DISTRIBUTION_MATCH_JOBS = f"{D}/distribution_match_jobs"
-F_DISTRIBUTION_CATALOG = f"{D}/distribution_catalog"
+F_DISTRIBUTION_CATALOG = f"{D}/distribution_catalog/rwmeiti_catalog.json"
 F_DISTRIBUTION_CATALOG_JOBS = f"{D}/distribution_catalog_jobs"
 F_REFERENCE_INTELLIGENCE = f"{D}/reference_intelligence"
 F_CRAWL_JOBS = f"{D}/crawl_jobs.json"
@@ -544,9 +544,8 @@ def distribution_match_job_path(username):
     return os.path.join(F_DISTRIBUTION_MATCH_JOBS, f"{safe or 'user'}.json")
 
 
-def distribution_catalog_path(username):
-    safe = re.sub(r"[^A-Za-z0-9_.@-]", "_", str(username or "").strip()).strip("._")
-    return os.path.join(F_DISTRIBUTION_CATALOG, f"{safe or 'user'}.json")
+def distribution_catalog_path(_username=None):
+    return F_DISTRIBUTION_CATALOG
 
 
 def distribution_catalog_job_path(username):

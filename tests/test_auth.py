@@ -457,6 +457,19 @@ class UserSettingsTests(unittest.TestCase):
             self.assertFalse(bob_status["configured"])
             self.assertEqual(geo_app.load(geo_app.user_settings_path("alice"), {})["rwmeiti_secret_key"], "alice-key")
 
+    def test_catalog_path_is_global_not_operator_named(self):
+        with isolated_auth_app() as tmp:
+            original = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
+            try:
+                self.assertEqual(geo_app.distribution_catalog_path("alice"), geo_app.F_DISTRIBUTION_CATALOG)
+                self.assertEqual(geo_app.distribution_catalog_path("bob"), geo_app.F_DISTRIBUTION_CATALOG)
+            finally:
+                if original is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original
+
     def test_catalog_sync_saves_both_resource_types_per_operator(self):
         class FakeSupplier:
             def list_self_media(self, page, limit):
@@ -467,7 +480,7 @@ class UserSettingsTests(unittest.TestCase):
 
         with isolated_auth_app() as tmp:
             original = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
-            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             try:
                 result = geo_app.sync_distribution_catalog("alice", FakeSupplier())
                 catalog = geo_app.load(geo_app.distribution_catalog_path("alice"), [])
@@ -493,7 +506,7 @@ class UserSettingsTests(unittest.TestCase):
         with isolated_auth_app() as tmp:
             original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
             original_favorites = geo_app.F_DISTRIBUTION_FAVORITES
-            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
             try:
                 geo_app.save(geo_app.distribution_favorites_path("alice"), [{"id": "favorite-a", "name": "账号A", "resource_id": ""}])
@@ -522,7 +535,7 @@ class UserSettingsTests(unittest.TestCase):
         with isolated_auth_app() as tmp:
             original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
             original_favorites = geo_app.F_DISTRIBUTION_FAVORITES
-            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
             try:
                 create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
@@ -553,7 +566,7 @@ class UserSettingsTests(unittest.TestCase):
     def test_cannot_add_favorite_not_in_current_operator_catalog(self):
         with isolated_auth_app() as tmp:
             original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
-            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "distribution_catalog")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             try:
                 create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
                 browser = geo_app.app.test_client()
@@ -666,7 +679,9 @@ class UserSettingsTests(unittest.TestCase):
     def test_distribution_favorites_are_isolated_by_operator(self):
         with isolated_auth_app() as tmp:
             original = getattr(geo_app, "F_DISTRIBUTION_FAVORITES", None)
+            original_catalog = getattr(geo_app, "F_DISTRIBUTION_CATALOG", None)
             geo_app.F_DISTRIBUTION_FAVORITES = os.path.join(tmp, "distribution_favorites")
+            geo_app.F_DISTRIBUTION_CATALOG = os.path.join(tmp, "rwmeiti_catalog.json")
             try:
                 create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
                 create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
@@ -685,6 +700,10 @@ class UserSettingsTests(unittest.TestCase):
                     delattr(geo_app, "F_DISTRIBUTION_FAVORITES")
                 else:
                     geo_app.F_DISTRIBUTION_FAVORITES = original
+                if original_catalog is None:
+                    delattr(geo_app, "F_DISTRIBUTION_CATALOG")
+                else:
+                    geo_app.F_DISTRIBUTION_CATALOG = original_catalog
 
     def test_user_settings_override_global_without_affecting_other_users(self):
         with isolated_auth_app():
