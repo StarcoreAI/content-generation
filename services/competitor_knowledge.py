@@ -1,6 +1,7 @@
 """Build an editable competitor master from already collected local material."""
 import re
 
+from services.knowledge_base import clean_knowledge_markdown
 from services.reference_intelligence import collect_reference_articles
 
 
@@ -12,14 +13,15 @@ def _real_name(value):
 
 
 def _upload_sections(markdown):
-    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", str(markdown or "")))
+    markdown = clean_knowledge_markdown(markdown)
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", markdown))
     sections = {}
     for index, match in enumerate(matches):
         name = _real_name(match.group(1))
         if not name:
             continue
         end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
-        body = str(markdown)[match.end():end].strip()
+        body = markdown[match.end():end].strip()
         if body:
             sections[name] = body
     return sections

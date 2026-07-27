@@ -8,7 +8,46 @@ from pathlib import Path
 from services.storage import load_json, save_json
 
 
+_SOURCE_FIELD_RE = re.compile(
+    r"^\s*(?:[-*]\s*)?(?:\*\*)?\s*"
+    r"(?:来源\s*(?:URL|网址|链接|性质|依据)|出处性质|时间锚点|地区锚点)"
+    r"\s*[：:]\s*(?:\*\*)?\s*.*$",
+    re.IGNORECASE,
+)
+_SOURCE_SECTION_RE = re.compile(r"^\s*#{1,6}\s*(?:来源清单|来源列表|来源索引)\s*$")
+
+
+def clean_knowledge_markdown(content):
+    """Remove traceability metadata while keeping usable facts and restrictions."""
+    lines = str(content or "").splitlines()
+    cleaned = []
+    skipping_source_section = False
+    source_section_level = 0
+    for raw_line in lines:
+        heading = re.match(r"^\s*(#{1,6})\s+", raw_line)
+        if _SOURCE_SECTION_RE.match(raw_line):
+            skipping_source_section = True
+            source_section_level = len(heading.group(1)) if heading else 1
+            continue
+        if skipping_source_section:
+            if heading and len(heading.group(1)) <= source_section_level:
+                skipping_source_section = False
+            else:
+                continue
+        if _SOURCE_FIELD_RE.match(raw_line):
+            continue
+        line = re.sub(r"[（(]\s*来源\s*[：:][^）)]*[）)]", "", raw_line).rstrip()
+        if line:
+            cleaned.append(line)
+        elif cleaned and cleaned[-1]:
+            cleaned.append("")
+    while cleaned and not cleaned[-1]:
+        cleaned.pop()
+    return "\n".join(cleaned).strip()
+
+
 class KnowledgeBaseService:
+    MASTER_FORMAT_VERSION = 2
     CUSTOMER_SECTIONS = (
         "品牌基础",
         "产品/服务",
@@ -111,18 +150,18 @@ class KnowledgeBaseService:
         for filename, label in self.CUSTOMER_SOURCES:
             content = self._read_source(Path(package_dir) / filename)
             hashes[filename] = self._digest(content)
-            values.append((label, self._split_source(content)))
+            values.append((label, self._split_source(clean_knowledge_markdown(content))))
         return values, hashes
 
     def _build_customer_master(self, source_material):
-        chunks = ["# 客户总资料", "", "以下内容按来源整理；人工编辑后不会被上游资料自动覆盖。"]
+        chunks = ["# 客户总资料", "", "以下内容供模型生产和人工维护；人工编辑后不会被上游资料自动覆盖。"]
         for section in self.CUSTOMER_SECTIONS:
             chunks.extend(["", f"## {section}"])
             has_content = False
-            for label, source_sections in source_material:
+            for _label, source_sections in source_material:
                 entries = source_sections[section]
                 if entries:
-                    chunks.extend(["", f"[{label}]", "\n\n".join(entries)])
+                    chunks.extend(["", "\n\n".join(entries)])
                     has_content = True
             if not has_content:
                 chunks.extend(["", "暂无资料。"])
@@ -142,7 +181,10 @@ class KnowledgeBaseService:
         path = self._master_path(client_id)
         state = self._load_state(client_id)
         current = self._read_master(path)
-        source_changed = source_hashes != state.get("source_hashes", {})
+        source_changed = (
+            source_hashes != state.get("source_hashes", {})
+            or state.get("master_format_version") != self.MASTER_FORMAT_VERSION
+        )
         if current and state.get("edited_at") and source_changed and not overwrite:
             state["source_update_available"] = True
             self._save_state(client_id, state)
@@ -156,12 +198,13 @@ class KnowledgeBaseService:
                 "edited_at": "",
                 "source_update_available": False,
                 "synced_at": self.now_fn(),
+                "master_format_version": self.MASTER_FORMAT_VERSION,
             }
             self._save_state(client_id, state)
         return self.load_customer_master(client_id)
 
     def save_customer_master(self, client_id, content):
-        content = str(content or "").strip()
+        content = clean_knowledge_markdown(content)
         if not content:
             raise ValueError("knowledge_content_required")
         path = self._master_path(client_id)
@@ -186,7 +229,7 @@ class KnowledgeBaseService:
         }
 
     def sync_competitor_master(self, client_id, content, overwrite=False):
-        content = str(content or "").strip()
+        content = clean_knowledge_markdown(content)
         path = self._competitor_master_path(client_id)
         state = self._load_competitor_state(client_id)
         current = self._read_master(path)
@@ -208,7 +251,7 @@ class KnowledgeBaseService:
         return self.load_competitor_master(client_id)
 
     def save_competitor_master(self, client_id, content):
-        content = str(content or "").strip()
+        content = clean_knowledge_markdown(content)
         if not content:
             raise ValueError("knowledge_content_required")
         path = self._competitor_master_path(client_id)

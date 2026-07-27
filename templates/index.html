@@ -407,7 +407,7 @@
   <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">保存已确认口径</button></div>
-    <div class="fld" style="margin-bottom:0"><textarea id="knowledgeCustomerContent" rows="24" placeholder="整理现有资料后，在这里维护运营备注和已确认口径"></textarea></div>
+    <div id="knowledgeCustomerSections" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:12px"></div>
   </div>
 </div>
 

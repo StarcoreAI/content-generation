@@ -1918,20 +1918,20 @@ function setCustomerKnowledgeStatus(text) {
 }
 
 async function loadCustomerKnowledge() {
-  const editor = document.getElementById('knowledgeCustomerContent');
-  if (!editor) return;
+  const sections = document.getElementById('knowledgeCustomerSections');
+  if (!sections) return;
   if (!currentClientId) {
-    editor.value = '';
+    renderCustomerKnowledgeSections('');
     setCustomerKnowledgeStatus('请选择客户后查看');
     return;
   }
   const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId));
   if (result?.error) {
-    editor.value = '';
+    renderCustomerKnowledgeSections('');
     setCustomerKnowledgeStatus('尚未整理客户资料');
     return;
   }
-  editor.value = result.content || '';
+  renderCustomerKnowledgeSections(result.content || '');
   setCustomerKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '可直接编辑并保存已确认口径');
 }
 
@@ -1944,18 +1944,81 @@ async function syncCustomerKnowledge(overwrite=false) {
     if (!confirm('上游资料已更新。是否用最新来源覆盖当前人工版本？')) return;
     return syncCustomerKnowledge(true);
   }
-  document.getElementById('knowledgeCustomerContent').value = result.content || '';
+  renderCustomerKnowledgeSections(result.content || '');
   setCustomerKnowledgeStatus(overwrite ? '已使用最新来源重新整理' : '已整理现有资料，可继续编辑确认口径');
   toast('客户知识库已更新');
 }
 
 async function saveCustomerKnowledge() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const content = document.getElementById('knowledgeCustomerContent')?.value || '';
+  const content = buildCustomerKnowledgeContent();
   const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId), 'PUT', {content});
   if (result?.error) { toast(result.error, 'err'); return; }
   setCustomerKnowledgeStatus('已保存人工确认口径');
   toast('客户知识库已保存');
+}
+
+const CUSTOMER_KNOWLEDGE_SECTIONS = ['品牌基础', '产品/服务', '优势', '目标人群/痛点', '价格', '信任', '合规风险', '公开背景', '运营备注与已确认口径'];
+let customerKnowledgePreamble = '# 客户总资料';
+
+function parseCustomerKnowledge(content) {
+  const lines = String(content || '').split('\n');
+  const sections = {};
+  let preamble = [];
+  let current = null;
+  lines.forEach(line => {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    if (match) {
+      current = match[1].trim();
+      sections[current] = [];
+    } else if (current) {
+      sections[current].push(line);
+    } else {
+      preamble.push(line);
+    }
+  });
+  return {preamble: preamble.join('\n').trim() || '# 客户总资料', sections};
+}
+
+function renderCustomerKnowledgeSections(content) {
+  const el = document.getElementById('knowledgeCustomerSections');
+  if (!el) return;
+  const parsed = parseCustomerKnowledge(content);
+  customerKnowledgePreamble = parsed.preamble;
+  el.replaceChildren();
+  CUSTOMER_KNOWLEDGE_SECTIONS.forEach(name => appendCustomerKnowledgeSection(name, (parsed.sections[name] || []).join('\n').trim()));
+  Object.entries(parsed.sections).forEach(([name, lines]) => {
+    if (!CUSTOMER_KNOWLEDGE_SECTIONS.includes(name)) appendCustomerKnowledgeSection(name, lines.join('\n').trim());
+  });
+}
+
+function appendCustomerKnowledgeSection(name, body='') {
+  const el = document.getElementById('knowledgeCustomerSections');
+  if (!el) return;
+  const card = document.createElement('section');
+  card.className = 'card';
+  card.dataset.customerKnowledgeSection = name;
+  card.style.cssText = 'margin:0;padding:14px;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(248,247,255,.8))';
+  const title = document.createElement('div');
+  title.style.cssText = 'font-weight:800;color:var(--text);margin-bottom:8px';
+  title.textContent = name;
+  const editor = document.createElement('textarea');
+  editor.rows = 9;
+  editor.value = body;
+  editor.placeholder = '暂无资料，可补充已确认口径';
+  editor.style.cssText = 'width:100%;min-height:150px;margin:0';
+  card.append(title, editor);
+  el.appendChild(card);
+}
+
+function buildCustomerKnowledgeContent() {
+  const chunks = [customerKnowledgePreamble || '# 客户总资料'];
+  document.querySelectorAll('[data-customer-knowledge-section]').forEach(card => {
+    const name = card.dataset.customerKnowledgeSection;
+    const body = card.querySelector('textarea')?.value.trim() || '暂无资料。';
+    chunks.push('', `## ${name}`, '', body);
+  });
+  return chunks.join('\n').trim() + '\n';
 }
 
 let competitorKnowledgePreamble = '# 竞品总资料';

@@ -44,7 +44,7 @@ def isolated_knowledge_app():
 
 
 class CustomerMasterTests(unittest.TestCase):
-    def test_sync_builds_structured_master_with_both_source_labels(self):
+    def test_sync_builds_clean_structured_master_for_model_use(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             package_dir = root / "material_packages" / "client-a"
@@ -58,7 +58,12 @@ class CustomerMasterTests(unittest.TestCase):
             )
             (package_dir / "latest_web_supplement.md").write_text(
                 "# 客户资料联网补充\n\n"
-                "## 公开背景\n2026 年报名规则以官方通知为准。\n\n"
+                "## 公开背景\n2026 年报名规则以官方通知为准。\n"
+                "来源 URL：https://example.com/info\n"
+                "来源性质：官方科普。\n"
+                "时间锚点：网页未明确。\n"
+                "地区锚点：网页未明确。\n"
+                "使用限制：具体报名要求以当年通知为准。\n\n"
                 "## 信任\n公开页面列有办学许可信息。\n",
                 encoding="utf-8",
             )
@@ -69,8 +74,16 @@ class CustomerMasterTests(unittest.TestCase):
             content = result["content"]
             for heading in service.CUSTOMER_SECTIONS:
                 self.assertIn(f"## {heading}", content)
-            self.assertIn("[客户资料解析]\n客户品牌为星河教育。", content)
-            self.assertIn("[AI 联网补充]\n2026 年报名规则以官方通知为准。", content)
+            self.assertIn("客户品牌为星河教育。", content)
+            self.assertIn("2026 年报名规则以官方通知为准。", content)
+            self.assertIn("使用限制：具体报名要求以当年通知为准。", content)
+            self.assertNotIn("[客户资料解析]", content)
+            self.assertNotIn("[AI 联网补充]", content)
+            self.assertNotIn("来源 URL", content)
+            self.assertNotIn("来源性质", content)
+            self.assertNotIn("时间锚点", content)
+            self.assertNotIn("地区锚点", content)
+            self.assertNotIn("https://", content)
             self.assertEqual(
                 (root / "knowledge_base" / "client-a" / "customer_master.md").read_text(encoding="utf-8"),
                 content,
@@ -241,10 +254,10 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             body = response.get_json()
             self.assertNotIn("citation_summary", body)
-            self.assertIn("[客户资料解析]", body["content"])
             self.assertIn("解析得到的品牌资料。", body["content"])
-            self.assertIn("[AI 联网补充]", body["content"])
             self.assertIn("联网补充的公开资料。", body["content"])
+            self.assertNotIn("[客户资料解析]", body["content"])
+            self.assertNotIn("[AI 联网补充]", body["content"])
 
     def test_owner_can_sync_save_and_read_customer_master(self):
         with isolated_knowledge_app() as root:
@@ -304,10 +317,12 @@ class CustomerMasterApiTests(unittest.TestCase):
             package_dir = root / "competitor_material_packages" / "client-a"
             package_dir.mkdir(parents=True)
             (package_dir / "latest_upload_competitors.md").write_text(
-                "# 竞品上传资料\n\n## 竞品乙\n乙机构提供线上答疑。", encoding="utf-8"
+                "# 竞品上传资料\n\n## 竞品乙\n乙机构提供线上答疑。\n"
+                "来源依据：上传资料。\n来源 URL：https://example.com/b。\n", encoding="utf-8"
             )
             (package_dir / "latest_web_competitors.md").write_text(
-                "# 竞品联网扩展\n\n## 竞品丙\n丙机构公开提供免费线下体验。", encoding="utf-8"
+                "# 竞品联网扩展\n\n## 竞品丙\n丙机构公开提供免费线下体验。\n"
+                "来源性质：机构官方科普。\n使用限制：以实际服务为准。", encoding="utf-8"
             )
             client = geo_app.app.test_client()
             client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
@@ -322,6 +337,36 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertIn("乙机构提供线上答疑。", content)
             self.assertIn("## 竞品丙", content)
             self.assertIn("丙机构公开提供免费线下体验。", content)
+            self.assertIn("使用限制：以实际服务为准。", content)
+            self.assertNotIn("来源依据", content)
+            self.assertNotIn("来源 URL", content)
+            self.assertNotIn("来源性质", content)
+            self.assertNotIn("https://", content)
+
+    def test_competitor_knowledge_get_initializes_from_existing_materials(self):
+        with isolated_knowledge_app() as root:
+            create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "owner_username": "owner"}])
+            package_dir = root / "competitor_material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_upload_competitors.md").write_text(
+                "# 竞品上传资料\n\n## 竞品甲\n上传解析得到的资料。", encoding="utf-8"
+            )
+            (package_dir / "latest_web_competitors.md").write_text(
+                "# 竞品联网扩展\n\n## 竞品乙\n联网扩展得到的资料。\n"
+                "来源 URL：https://example.com/b。", encoding="utf-8"
+            )
+            client = geo_app.app.test_client()
+            client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
+
+            response = client.get("/api/knowledge/competitors/client-a")
+
+            self.assertEqual(response.status_code, 200)
+            content = response.get_json()["content"]
+            self.assertIn("上传解析得到的资料。", content)
+            self.assertIn("联网扩展得到的资料。", content)
+            self.assertNotIn("来源 URL", content)
+            self.assertNotIn("https://", content)
 
 
 class CustomerKnowledgeUiTests(unittest.TestCase):
@@ -335,11 +380,13 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertIn("function openKnowledge", script)
         self.assertNotIn("客户知识库</div>", template.split('<div class="sidebar">', 1)[1].split('<div class="s-nav" onclick="navTo(\'content\'', 1)[0])
         self.assertIn('id="page-knowledge-customer"', template)
-        self.assertIn('id="knowledgeCustomerContent"', template)
+        self.assertIn('id="knowledgeCustomerSections"', template)
+        self.assertNotIn('id="knowledgeCustomerContent"', template)
         self.assertIn('id="page-knowledge-quality"', template)
         self.assertIn('id="qualityCommonBanned"', template)
         self.assertNotIn('id="knowledgeCitationSummary"', template)
         self.assertIn("function loadCustomerKnowledge()", script)
+        self.assertIn("function renderCustomerKnowledgeSections(", script)
         self.assertNotIn("function renderKnowledgeCitationSummary(", script)
         self.assertIn("navTo('knowledge-' + section, null)", script)
         self.assertIn("function syncCustomerKnowledge(", script)

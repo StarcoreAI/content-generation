@@ -1504,7 +1504,7 @@ def knowledge_base_service():
 def competitor_knowledge_article_cache_path(cid):
     return Path(D) / "knowledge_base" / cid / "competitor_article_sources.json"
 
-def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True):
+def competitor_knowledge_context(cid):
     all_records = load_client_records(cid)
     source_date = max((str(record.get("today") or "").strip() for record in all_records), default="")
     records = [record for record in all_records if record.get("today") == source_date] if source_date else []
@@ -1521,6 +1521,10 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
         ),
         web_path.read_text(encoding="utf-8", errors="ignore") if web_path.exists() else "",
     )
+    return source_date, records, entities, fallback
+
+def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True):
+    source_date, records, entities, fallback = competitor_knowledge_context(cid)
     if not records:
         return fallback
 
@@ -1958,7 +1962,12 @@ def save_customer_knowledge_master(cid):
 def get_competitor_knowledge_master(cid):
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    return jsonify({"ok": True, **knowledge_base_service().load_competitor_master(cid)})
+    service = knowledge_base_service()
+    result = service.load_competitor_master(cid)
+    if not result["content"]:
+        _source_date, _records, _entities, existing_materials = competitor_knowledge_context(cid)
+        result = service.sync_competitor_master(cid, existing_materials)
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/knowledge/competitors/<cid>/sync", methods=["POST"])
