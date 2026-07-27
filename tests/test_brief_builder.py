@@ -152,9 +152,9 @@ class BriefBuilderTests(unittest.TestCase):
             prompt = build_planning_brief_prompt(self.sample(library))
 
         self.assertIn('"展开来源"', prompt)
-        self.assertIn("只能指向输入资料中真实存在的小节名/机构名", prompt)
+        self.assertIn("只能指向输入资料中真实存在的小节名/对比对象名称", prompt)
         self.assertIn("写成连贯的大段陈述而非条目罗列", prompt)
-        self.assertIn("其他机构在资料允许时充分展开", prompt)
+        self.assertIn("其他机构或个人在资料允许时充分展开", prompt)
         self.assertIn("不用于限制成文篇幅", prompt)
         self.assertNotIn("500 字", prompt)
         self.assertNotIn("200-400 字", prompt)
@@ -395,7 +395,7 @@ class BriefBuilderTests(unittest.TestCase):
             prompt = build_planning_brief_prompt(self.sample(library))
 
             self.assertIn("客户/竞品是内部称谓，不得出现在成文", prompt)
-            self.assertIn("涉及机构时一律使用机构名称", prompt)
+            self.assertIn("涉及对比对象时一律使用真实对象名称", prompt)
 
     def test_comparison_prompt_requires_multi_organization_block_without_affecting_intro(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -418,11 +418,11 @@ class BriefBuilderTests(unittest.TestCase):
             generate_planning_brief(self.sample(library, parent_type="介绍型"), ai_json_fn=fake_ai_json)
             comparison_prompt, intro_prompt = calls
 
-            self.assertIn("多机构对比块必须存在", comparison_prompt)
+            self.assertIn("多对比对象块必须存在", comparison_prompt)
             self.assertIn("本次品牌第一个介绍、不强行推荐", comparison_prompt)
             self.assertIn("不得使用推荐等级词汇和分档标签", comparison_prompt)
             self.assertIn("组的呈现顺序不代表排名", comparison_prompt)
-            self.assertNotIn("多机构对比块必须存在", intro_prompt)
+            self.assertNotIn("多对比对象块必须存在", intro_prompt)
             self.assertNotIn("本次品牌第一个介绍、不强行推荐", intro_prompt)
 
 

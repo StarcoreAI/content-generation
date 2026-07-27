@@ -1711,8 +1711,11 @@ async function loadQueryScenes() {
 
 async function refreshQueryScenes(dryRun=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const refreshButton = document.getElementById('btnRefreshQueryScenes');
+  const originalLabel = refreshButton?.textContent || '';
   disableBtn('btnRefreshQueryScenes', true);
   disableBtn('btnDryRunQueryScenes', true);
+  if (refreshButton) refreshButton.textContent = '正在提取场景词...';
   try {
     const data = await api(`/api/records/selection-evidence/${encodeURIComponent(currentClientId)}/refresh`, 'POST', {dry_run: dryRun});
     if (data.error) { toast(data.error, 'err'); return; }
@@ -1721,6 +1724,7 @@ async function refreshQueryScenes(dryRun=false) {
   } finally {
     disableBtn('btnRefreshQueryScenes', false);
     disableBtn('btnDryRunQueryScenes', false);
+    if (refreshButton) refreshButton.textContent = originalLabel;
   }
 }
 
