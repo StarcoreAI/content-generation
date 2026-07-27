@@ -774,7 +774,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertGreaterEqual(gate_llm.call_args.args[1], 4000)
             self.assertEqual(geo_app.load_content_session(cid)["articles"][0]["gate_report"], article["gate_report"])
 
-    def test_content_generate_persists_blocked_brand_title(self):
+    def test_content_generate_persists_brand_title_as_warning(self):
         with isolated_content_app_data():
             cid = "client-gate-blocked"
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "翼升学", "brand": "翼升学"}])
@@ -786,8 +786,8 @@ class CoreFunctionTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             article = response.get_json()["article"]
-            self.assertEqual(article["generation_status"], "门禁拦截")
-            self.assertEqual(article["gate_report"]["verdict"], "blocked")
+            self.assertNotIn("generation_status", article)
+            self.assertEqual(article["gate_report"]["verdict"], "warn")
             self.assertEqual(len(geo_app.load_content_session(cid)["articles"]), 1)
 
     def test_quality_gate_competitor_names_skips_generic_markdown_header(self):

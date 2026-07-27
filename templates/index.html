@@ -508,6 +508,16 @@
     <button class="btn btn-o btn-sm" onclick="loadQualityGateArticles()">刷新</button>
   </div>
   <div class="card">
+    <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；保存前会要求确认。</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">保存通用规则</button></div>
+    <div class="form-row col2"><div class="fld"><label>违禁词（每行一个）</label><textarea id="qualityCommonBanned" rows="6"></textarea></div><div class="fld"><label>必须做（每行一条）</label><textarea id="qualityCommonMustDo" rows="6"></textarea></div></div>
+    <div class="form-row col2"><div class="fld"><label>不能做（每行一条）</label><textarea id="qualityCommonMustNot" rows="6"></textarea></div><div class="fld"><label>审核要求</label><textarea id="qualityCommonPrompt" rows="6"></textarea></div></div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">当前行业审核规则</span><div class="card-sub" id="qualityIndustryHint">请先选择客户；行业规则影响该行业的所有客户。</div></div><button class="btn btn-p btn-sm" onclick="saveIndustryQualityPolicy()">保存行业规则</button></div>
+    <div class="form-row col2"><div class="fld"><label>行业违禁词（每行一个）</label><textarea id="qualityIndustryBanned" rows="5"></textarea></div><div class="fld"><label>行业必须做（每行一条）</label><textarea id="qualityIndustryMustDo" rows="5"></textarea></div></div>
+    <div class="form-row col2"><div class="fld"><label>行业不能做（每行一条）</label><textarea id="qualityIndustryMustNot" rows="5"></textarea></div><div class="fld"><label>行业审核要求</label><textarea id="qualityIndustryPrompt" rows="5"></textarea></div></div>
+  </div>
+  <div class="card">
     <div class="card-hd"><span class="card-title">文章审核列表 <span id="quality-article-count" style="color:var(--text3);font-size:11px"></span></span></div>
     <div id="qualityArticleList"><div class="empty"><i class="ti ti-shield-check"></i><p>请选择客户后查看全部文章</p></div></div>
   </div>

@@ -20,7 +20,14 @@ from services.content_generations import ContentGenerationStore
 from services.publications import PublicationStore
 from services.rwmeiti import RWMeitiClient
 from services.batch_generation import BatchGenerationJobs
-from services.quality_gate import run_quality_gate, quality_gate_competitor_names
+from services.quality_gate import (
+    effective_quality_policy,
+    load_quality_policy,
+    quality_gate_competitor_names,
+    quality_policy_industry_key,
+    run_quality_gate,
+    save_quality_policy,
+)
 from services.content_choices import (
     active_choice_texts,
     choice_state,
@@ -991,6 +998,47 @@ def health_check():
 @app.route("/api/clients", methods=["GET"])
 def get_clients(): return jsonify(visible_clients())
 
+
+@app.route("/api/quality-policy", methods=["GET"])
+def get_quality_policy():
+    cid = str(request.args.get("client_id") or "").strip()
+    client = require_client_access(cid) if cid else None
+    if cid and not client:
+        return jsonify({"error": "client_not_found"}), 404
+    policy = load_quality_policy(quality_policy_path())
+    industry = str((client or {}).get("industry") or "").strip()
+    key = quality_policy_industry_key(industry)
+    return jsonify({
+        "ok": True,
+        "common": policy["common"],
+        "industry": {"name": industry, "key": key, "policy": policy["industries"].get(key, {})},
+    })
+
+
+@app.route("/api/quality-policy/common", methods=["PUT"])
+def save_common_quality_policy():
+    payload = request.get_json(silent=True) or {}
+    if not payload.get("confirmed_global"):
+        return jsonify({"error": "global_policy_confirmation_required"}), 400
+    policy = load_quality_policy(quality_policy_path())
+    policy["common"] = payload.get("policy") or {}
+    saved = save_quality_policy(quality_policy_path(), policy)
+    return jsonify({"ok": True, "common": saved["common"]})
+
+
+@app.route("/api/quality-policy/industry/<cid>", methods=["PUT"])
+def save_industry_quality_policy(cid):
+    client = require_client_access(cid)
+    if not client:
+        return jsonify({"error": "client_not_found"}), 404
+    key = quality_policy_industry_key(client.get("industry", ""))
+    if not key:
+        return jsonify({"error": "client_industry_required"}), 400
+    policy = load_quality_policy(quality_policy_path())
+    policy["industries"][key] = (request.get_json(silent=True) or {}).get("policy") or {}
+    saved = save_quality_policy(quality_policy_path(), policy)
+    return jsonify({"ok": True, "industry": {"name": client.get("industry", ""), "key": key, "policy": saved["industries"][key]}})
+
 @app.route("/api/clients", methods=["POST"])
 def add_client():
     clients = load(F_CLIENTS, [])
@@ -1442,6 +1490,13 @@ def material_package_output_dir(cid):
 
 def competitor_package_output_dir(cid):
     return Path(D) / "competitor_material_packages" / cid
+
+def quality_policy_path():
+    return Path(D) / "quality_gate" / "policy.json"
+
+def client_quality_policy(cid):
+    client = next((item for item in load(F_CLIENTS, []) if item.get("id") == cid), {})
+    return effective_quality_policy(load_quality_policy(quality_policy_path()), client.get("industry", ""))
 
 def knowledge_base_service():
     return KnowledgeBaseService(Path(D) / "knowledge_base")
@@ -2379,6 +2434,7 @@ def _run_content_generation(payload, audience_angles=None, created_by="", batch_
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
         industry=client.get("industry", ""),
+        policy=client_quality_policy(cid),
     )
     article = {
         "id": uid(),
@@ -2506,6 +2562,7 @@ def content_article_gate_report(cid, article, ai_json_fn=None):
         customer_material_text=sources["customer_material_text"],
         content_upload_text=sources["content_upload_text"],
         industry=client.get("industry", ""),
+        policy=client_quality_policy(cid),
     )
 
 

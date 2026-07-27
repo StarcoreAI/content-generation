@@ -7,7 +7,9 @@ from services.quality_gate import (
     check_banned_words,
     check_meta_discourse,
     check_title_brand,
+    effective_quality_policy,
     load_banned_words,
+    load_quality_policy,
     run_quality_gate,
 )
 
@@ -36,13 +38,39 @@ class QualityGateTests(unittest.TestCase):
         self.assertEqual("warn", report["verdict"])
         self.assertEqual("passed", report["llm_layer_status"])
 
-    def test_banned_words_promotional_context_remains_blocking(self):
+    def test_promotional_banned_words_only_warn_and_still_run_llm_review(self):
         for text in ("我们承诺包过", "报名即可包过"):
             with self.subTest(text=text):
                 check = check_banned_words(text)
                 self.assertFalse(check["passed"])
-                self.assertEqual("block", check["severity"])
+                self.assertEqual("warn", check["severity"])
                 self.assertFalse(check.get("cautionary_context"))
+                report = run_quality_gate(
+                    "中性标题", text, {}, {}, client_brand="", competitor_names=[],
+                    competitor_markdown="", recent_articles=[],
+                    ai_json_fn=lambda _prompt, _max_tokens: {"checks": []},
+                )
+                self.assertEqual("passed", report["llm_layer_status"])
+                self.assertEqual("warn", report["verdict"])
+
+    def test_effective_policy_merges_common_and_matching_industry_rules(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            policy = load_quality_policy(path)
+            policy["common"]["banned_words"] = ["通用词"]
+            policy["industries"]["装修"] = {
+                "banned_words": ["行业词"],
+                "must_do": ["说明价格依据"],
+                "must_not_do": ["承诺零增项"],
+                "review_requirements": "检查报价表述。",
+            }
+
+            effective = effective_quality_policy(policy, "装修·昆山本地")
+
+            self.assertEqual(effective["banned_words"], ["通用词", "行业词"])
+            self.assertIn("说明价格依据", effective["must_do"])
+            self.assertIn("承诺零增项", effective["must_not_do"])
+            self.assertIn("检查报价表述", effective["review_requirements"])
 
     def test_industry_banned_words_are_limited_to_the_matching_industry(self):
         self.assertFalse(check_banned_words("治疗后100%有效", industry="医疗")["passed"])

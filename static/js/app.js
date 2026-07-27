@@ -6,7 +6,7 @@ function navTo(page, el) {
   if (el) el.classList.add('on');
   // page-specific load
   if (page === 'content') loadContent();
-  if (page === 'quality') loadQualityGateArticles();
+  if (page === 'quality') { loadQualityGateArticles(); loadQualityPolicy(); }
   if (page === 'publish') loadPublishPage();
   if (page === 'resources') loadResourcePage();
   if (page === 'daily') loadDailyPage();
@@ -870,6 +870,40 @@ async function loadQualityGateArticles() {
   if (r.error) { toast(r.error, 'err'); return; }
   renderQualityGateArticles(r.articles || []);
 }
+function qualityPolicyLines(id) {
+  return (document.getElementById(id)?.value || '').split('\n').map(item => item.trim()).filter(Boolean);
+}
+function setQualityPolicyFields(prefix, policy) {
+  policy = policy || {};
+  document.getElementById(prefix + 'Banned').value = (policy.banned_words || []).join('\n');
+  document.getElementById(prefix + 'MustDo').value = (policy.must_do || []).join('\n');
+  document.getElementById(prefix + 'MustNot').value = (policy.must_not_do || []).join('\n');
+  document.getElementById(prefix + 'Prompt').value = policy.review_requirements || '';
+}
+function qualityPolicyPayload(prefix) {
+  return {banned_words:qualityPolicyLines(prefix + 'Banned'), must_do:qualityPolicyLines(prefix + 'MustDo'), must_not_do:qualityPolicyLines(prefix + 'MustNot'), review_requirements:(document.getElementById(prefix + 'Prompt')?.value || '').trim()};
+}
+async function loadQualityPolicy() {
+  const query = currentClientId ? '?client_id=' + encodeURIComponent(currentClientId) : '';
+  const result = await api('/api/quality-policy' + query);
+  if (result.error) { toast(result.error, 'err'); return; }
+  setQualityPolicyFields('qualityCommon', result.common);
+  setQualityPolicyFields('qualityIndustry', result.industry?.policy);
+  const hint = document.getElementById('qualityIndustryHint');
+  if (hint) hint.textContent = result.industry?.name ? '行业：' + result.industry.name + '；保存会影响该行业的所有客户。' : '请先选择客户；行业规则影响该行业的所有客户。';
+}
+async function saveCommonQualityPolicy() {
+  if (!confirm('保存通用审核规则会影响全部客户，确认继续吗？')) return;
+  const result = await api('/api/quality-policy/common', 'PUT', {policy:qualityPolicyPayload('qualityCommon'), confirmed_global:true});
+  if (result.error) { toast(result.error, 'err'); return; }
+  toast('通用审核规则已保存', 'ok');
+}
+async function saveIndustryQualityPolicy() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const result = await api('/api/quality-policy/industry/' + encodeURIComponent(currentClientId), 'PUT', {policy:qualityPolicyPayload('qualityIndustry')});
+  if (result.error) { toast(result.error, 'err'); return; }
+  toast('行业审核规则已保存', 'ok');
+}
 function qualityGateFailedChecks(article) {
   const report = article?.gate_report || {};
   return [...(report.code_layer || []), ...(report.llm_layer || [])].filter(item => item && item.passed === false);
@@ -898,7 +932,7 @@ function qualityGateBadge(article) {
   if (article?.generation_status === '人工已编辑') return '<span class="badge badge-p">人工已编辑</span>';
   const verdict = article?.gate_report?.verdict;
   if (verdict === 'pass') return '<span class="badge badge-g">已审核 · 可发布</span>';
-  if (verdict === 'blocked') return `<span class="badge badge-r">审核不通过：${escHtml(qualityGateReason(article))} · 建议修改后再用</span>`;
+  if (verdict === 'blocked') return `<span class="badge badge-a">审核提示：${escHtml(qualityGateReason(article))} · 人工判断</span>`;
   if (verdict === 'warn') return `<span class="badge badge-a">审核提示：${escHtml(qualityGateReason(article))} · 人工判断</span>`;
   return '<span class="badge badge-a">未审核</span>';
 }
@@ -961,7 +995,7 @@ function renderQualityGateArticles(articles) {
   el.innerHTML = articles.map(a => {
     const checks = qualityGateFailedChecks(a);
     const details = checks.length
-      ? `<div class="quality-gate-details">${checks.map(item => `<span class="badge ${item.severity === 'block' ? 'badge-r' : 'badge-a'}">${escHtml(item.check_id)}（${escHtml(qualityGateCheckDescription(item.check_id))}）：${escHtml((item.evidence || []).join('；') || '未通过')}</span>`).join('')}</div>`
+      ? `<div class="quality-gate-details">${checks.map(item => `<span class="badge badge-a">${escHtml(item.check_id)}（${escHtml(qualityGateCheckDescription(item.check_id))}）：${escHtml((item.evidence || []).join('；') || '未通过')}</span>`).join('')}</div>`
       : '<div class="quality-gate-details"><span style="font-size:11px;color:var(--text3)">无未通过检查项</span></div>';
     return `<div class="article-card">
       <div class="article-title">${escHtml(a.title || '未命名文章')}</div>

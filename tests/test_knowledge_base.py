@@ -97,6 +97,30 @@ class CustomerMasterTests(unittest.TestCase):
 
 
 class CustomerMasterApiTests(unittest.TestCase):
+    def test_quality_policy_edits_common_and_industry_without_client_policy(self):
+        with isolated_knowledge_app():
+            create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
+            create_user(geo_app.F_USERS, "other", "secret-pass", role="operator")
+            geo_app.save(geo_app.F_CLIENTS, [{
+                "id": "client-a", "owner_username": "owner", "industry": "装修·昆山本地",
+            }])
+            owner = geo_app.app.test_client()
+            other = geo_app.app.test_client()
+            owner.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
+            other.post("/api/auth/login", json={"username": "other", "password": "secret-pass"})
+
+            self.assertEqual(owner.put("/api/quality-policy/common", json={"policy": {}}).status_code, 400)
+            common = {"banned_words": ["通用词"], "must_do": ["说明依据"], "must_not_do": [], "review_requirements": "检查通用口径。"}
+            self.assertEqual(owner.put("/api/quality-policy/common", json={"policy": common, "confirmed_global": True}).status_code, 200)
+            industry = {"banned_words": ["装修词"], "must_do": [], "must_not_do": ["承诺零增项"], "review_requirements": "检查装修口径。"}
+            self.assertEqual(owner.put("/api/quality-policy/industry/client-a", json={"policy": industry}).status_code, 200)
+            self.assertEqual(other.put("/api/quality-policy/industry/client-a", json={"policy": industry}).status_code, 404)
+
+            loaded = owner.get("/api/quality-policy?client_id=client-a").get_json()
+            self.assertEqual(loaded["common"]["banned_words"], ["通用词"])
+            self.assertEqual(loaded["industry"]["key"], "装修")
+            self.assertEqual(loaded["industry"]["policy"]["banned_words"], ["装修词"])
+
     def test_competitor_cli_experiment_requests_no_cache_write(self):
         from scripts.run_competitor_knowledge_experiment import run_experiment
 
