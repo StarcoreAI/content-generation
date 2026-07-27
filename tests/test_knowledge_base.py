@@ -72,8 +72,9 @@ class CustomerMasterTests(unittest.TestCase):
             result = service.sync_customer_master("client-a", package_dir)
 
             content = result["content"]
-            for heading in service.CUSTOMER_SECTIONS:
+            for heading in ("品牌基础", "产品/服务", "优势", "信任", "公开背景"):
                 self.assertIn(f"## {heading}", content)
+            self.assertNotIn("## 目标人群/痛点", content)
             self.assertIn("客户品牌为星河教育。", content)
             self.assertIn("2026 年报名规则以官方通知为准。", content)
             self.assertIn("使用限制：具体报名要求以当年通知为准。", content)
@@ -88,6 +89,27 @@ class CustomerMasterTests(unittest.TestCase):
                 (root / "knowledge_base" / "client-a" / "customer_master.md").read_text(encoding="utf-8"),
                 content,
             )
+
+    def test_sync_omits_empty_and_operational_customer_sections(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_injection.md").write_text(
+                "# 客户资料解析\n\n"
+                "## 品牌基础\n客户品牌为星河教育。\n\n"
+                "## 优势\n暂无资料。\n\n"
+                "## 运营备注与已确认口径\n暂无资料。\n",
+                encoding="utf-8",
+            )
+
+            content = KnowledgeBaseService(root / "knowledge_base").sync_customer_master(
+                "client-a", package_dir,
+            )["content"]
+
+            self.assertIn("## 品牌基础", content)
+            self.assertNotIn("## 优势", content)
+            self.assertNotIn("## 运营备注与已确认口径", content)
 
     def test_changed_source_does_not_overwrite_manually_saved_master_without_confirmation(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -368,6 +390,26 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertNotIn("来源 URL", content)
             self.assertNotIn("https://", content)
 
+    def test_competitor_master_omits_short_placeholder_sections(self):
+        with isolated_knowledge_app() as root:
+            create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "owner_username": "owner"}])
+            package_dir = root / "competitor_material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_upload_competitors.md").write_text(
+                "# 竞品上传资料\n\n## 竞品甲\n暂无可合并资料。\n\n"
+                "## 竞品乙\n乙机构提供线上答疑。",
+                encoding="utf-8",
+            )
+
+            client = geo_app.app.test_client()
+            client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
+            response = client.get("/api/knowledge/competitors/client-a")
+
+            content = response.get_json()["content"]
+            self.assertNotIn("## 竞品甲", content)
+            self.assertIn("## 竞品乙", content)
+
 
 class CustomerKnowledgeUiTests(unittest.TestCase):
     def test_customer_knowledge_page_only_uses_knowledge_api(self):
@@ -381,12 +423,15 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertNotIn("客户知识库</div>", template.split('<div class="sidebar">', 1)[1].split('<div class="s-nav" onclick="navTo(\'content\'', 1)[0])
         self.assertIn('id="page-knowledge-customer"', template)
         self.assertIn('id="knowledgeCustomerSections"', template)
+        self.assertIn('id="knowledgeCustomerSections" style="display:grid;grid-template-columns:1fr', template)
         self.assertNotIn('id="knowledgeCustomerContent"', template)
         self.assertIn('id="page-knowledge-quality"', template)
         self.assertIn('id="qualityCommonBanned"', template)
         self.assertNotIn('id="knowledgeCitationSummary"', template)
         self.assertIn("function loadCustomerKnowledge()", script)
         self.assertIn("function renderCustomerKnowledgeSections(", script)
+        self.assertIn("function fitKnowledgeEditorHeight(", script)
+        self.assertIn("function shouldHideKnowledgeSection(", script)
         self.assertNotIn("function renderKnowledgeCitationSummary(", script)
         self.assertIn("navTo('knowledge-' + section, null)", script)
         self.assertIn("function syncCustomerKnowledge(", script)

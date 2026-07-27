@@ -1958,8 +1958,13 @@ async function saveCustomerKnowledge() {
   toast('客户知识库已保存');
 }
 
-const CUSTOMER_KNOWLEDGE_SECTIONS = ['品牌基础', '产品/服务', '优势', '目标人群/痛点', '价格', '信任', '合规风险', '公开背景', '运营备注与已确认口径'];
+const CUSTOMER_KNOWLEDGE_SECTIONS = ['品牌基础', '产品/服务', '优势', '目标人群/痛点', '价格', '信任', '合规风险', '公开背景'];
 let customerKnowledgePreamble = '# 客户总资料';
+
+function shouldHideKnowledgeSection(body) {
+  const text = String(body || '').replace(/\s+/g, '');
+  return !text || (text.length < 50 && /暂无(?:可)?(?:合并)?资料/.test(text));
+}
 
 function parseCustomerKnowledge(content) {
   const lines = String(content || '').split('\n');
@@ -1986,10 +1991,21 @@ function renderCustomerKnowledgeSections(content) {
   const parsed = parseCustomerKnowledge(content);
   customerKnowledgePreamble = parsed.preamble;
   el.replaceChildren();
-  CUSTOMER_KNOWLEDGE_SECTIONS.forEach(name => appendCustomerKnowledgeSection(name, (parsed.sections[name] || []).join('\n').trim()));
-  Object.entries(parsed.sections).forEach(([name, lines]) => {
-    if (!CUSTOMER_KNOWLEDGE_SECTIONS.includes(name)) appendCustomerKnowledgeSection(name, lines.join('\n').trim());
+  CUSTOMER_KNOWLEDGE_SECTIONS.forEach(name => {
+    const body = (parsed.sections[name] || []).join('\n').trim();
+    if (!shouldHideKnowledgeSection(body)) appendCustomerKnowledgeSection(name, body);
   });
+  Object.entries(parsed.sections).forEach(([name, lines]) => {
+    const body = lines.join('\n').trim();
+    if (name !== '运营备注与已确认口径' && !CUSTOMER_KNOWLEDGE_SECTIONS.includes(name) && !shouldHideKnowledgeSection(body)) {
+      appendCustomerKnowledgeSection(name, body);
+    }
+  });
+}
+
+function fitKnowledgeEditorHeight(editor) {
+  editor.style.height = 'auto';
+  editor.style.height = editor.scrollHeight + 'px';
 }
 
 function appendCustomerKnowledgeSection(name, body='') {
@@ -2003,12 +2019,14 @@ function appendCustomerKnowledgeSection(name, body='') {
   title.style.cssText = 'font-weight:800;color:var(--text);margin-bottom:8px';
   title.textContent = name;
   const editor = document.createElement('textarea');
-  editor.rows = 9;
+  editor.rows = 1;
   editor.value = body;
   editor.placeholder = '暂无资料，可补充已确认口径';
-  editor.style.cssText = 'width:100%;min-height:150px;margin:0';
+  editor.style.cssText = 'width:100%;min-height:150px;margin:0;overflow-y:hidden;resize:vertical';
+  editor.addEventListener('input', () => fitKnowledgeEditorHeight(editor));
   card.append(title, editor);
   el.appendChild(card);
+  fitKnowledgeEditorHeight(editor);
 }
 
 function buildCustomerKnowledgeContent() {
@@ -2053,14 +2071,15 @@ function renderCompetitorKnowledgeSections(content) {
   const parsed = parseCompetitorKnowledge(content);
   competitorKnowledgePreamble = parsed.preamble;
   el.replaceChildren();
-  if (!parsed.sections.length) {
+  const sections = parsed.sections.filter(section => !shouldHideKnowledgeSection(section.lines.join('\n').trim()));
+  if (!sections.length) {
     const empty = document.createElement('div');
     empty.style.cssText = 'font-size:12px;color:var(--text3)';
     empty.textContent = '暂无竞品资料；可先整理现有资料，或手动新增真实竞品名称。';
     el.appendChild(empty);
     return;
   }
-  parsed.sections.forEach(section => appendCompetitorKnowledgeSection(section.name, section.lines.join('\n').trim()));
+  sections.forEach(section => appendCompetitorKnowledgeSection(section.name, section.lines.join('\n').trim()));
 }
 
 function appendCompetitorKnowledgeSection(name, body='') {

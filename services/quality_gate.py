@@ -13,8 +13,8 @@ DEFAULT_BANNED_WORDS = {
     "marketing": ["逆龄", "冻龄", "秒变", "神器", "秒杀", "立省", "限时抢"],
 }
 INDUSTRY_BANNED_WORDS = {
-    "medical": ["100%", "零风险", "永久", "根治", "逆龄", "年轻十岁", "无副作用"],
-    "education": ["保证录取", "100%上岸", "必中", "内部渠道", "保送", "第一名", "最强师资", "王牌老师", "全国第一"],
+    "medical": ["100%", "零风险", "永久", "治愈", "根治", "逆龄", "冻龄", "年轻十岁", "无副作用"],
+    "education": ["包过", "保录取", "保过", "保证通过", "保证录取", "100%上岸", "必中", "内部渠道", "保送", "第一名", "最强师资", "王牌老师"],
     "finance": ["稳赚", "无风险", "保本", "高收益", "稳赚不赔", "内幕消息", "保证盈利"],
 }
 INDUSTRY_ALIASES = {
@@ -81,18 +81,45 @@ def _policy_section(value=None):
     }
 
 
+def _default_industry_sections():
+    sections = {
+        key: {"banned_words": list(words), "must_do": [], "must_not_do": [], "review_requirements": ""}
+        for key, words in INDUSTRY_BANNED_WORDS.items()
+    }
+    for key, section in sections.items():
+        for word in BANNED_WORDS.get(key, []):
+            if word not in section["banned_words"]:
+                section["banned_words"].append(word)
+    return sections
+
+
+def _move_industry_words_out_of_common(common, industries):
+    common = _policy_section(common)
+    industries = {str(key): _policy_section(value) for key, value in (industries or {}).items()}
+    remaining = []
+    for word in common["banned_words"]:
+        targets = [key for key, words in INDUSTRY_BANNED_WORDS.items() if word in words]
+        if not targets:
+            remaining.append(word)
+            continue
+        for key in targets:
+            section = industries.setdefault(key, _policy_section())
+            if word not in section["banned_words"]:
+                section["banned_words"].append(word)
+    common["banned_words"] = remaining
+    return common, industries
+
+
 def default_quality_policy():
+    industry_words = {word for words in INDUSTRY_BANNED_WORDS.values() for word in words}
     return {
         "common": {
-            "banned_words": _words_from_groups(BANNED_WORDS),
+            "banned_words": [word for word in _words_from_groups(BANNED_WORDS) if word not in industry_words],
             "must_do": [],
             "must_not_do": [],
             "review_requirements": DEFAULT_REVIEW_REQUIREMENTS,
         },
-        "industries": {
-            key: {"banned_words": list(words), "must_do": [], "must_not_do": [], "review_requirements": ""}
-            for key, words in INDUSTRY_BANNED_WORDS.items()
-        },
+        "industries": _default_industry_sections(),
     }
 
 
@@ -110,15 +137,21 @@ def load_quality_policy(path):
         key = str(name or "").strip()
         if key:
             policy["industries"][key] = _policy_section(section)
+    policy["common"], policy["industries"] = _move_industry_words_out_of_common(
+        policy["common"], policy["industries"],
+    )
     return policy
 
 
 def save_quality_policy(path, policy):
+    common, industries = _move_industry_words_out_of_common(
+        (policy or {}).get("common"), (policy or {}).get("industries"),
+    )
     normalized = {
-        "common": _policy_section((policy or {}).get("common")),
+        "common": common,
         "industries": {
             str(name).strip(): _policy_section(section)
-            for name, section in ((policy or {}).get("industries") or {}).items()
+            for name, section in industries.items()
             if str(name or "").strip()
         },
     }
@@ -145,6 +178,10 @@ def effective_quality_policy(policy, industry=""):
     result = deepcopy(common)
     for field in ("banned_words", "must_do", "must_not_do"):
         result[field] = list(dict.fromkeys(common[field] + industry_section[field]))
+    if not key:
+        result["banned_words"] = list(dict.fromkeys(
+            result["banned_words"] + [word for words in INDUSTRY_BANNED_WORDS.values() for word in words]
+        ))
     result["review_requirements"] = "\n".join(
         item for item in (common["review_requirements"], industry_section["review_requirements"]) if item
     )
@@ -196,7 +233,8 @@ def _industry_banned_words(industry):
 def check_banned_words(article_content, banned_words=None, industry=""):
     text = str(article_content or "")
     if banned_words is None:
-        phrases = effective_quality_policy(default_quality_policy(), industry)["banned_words"]
+        phrases = _words_from_groups(BANNED_WORDS)
+        phrases.extend(word for word in _industry_banned_words(industry) if word not in phrases)
     elif isinstance(banned_words, dict):
         phrases = _words_from_groups(banned_words)
     else:

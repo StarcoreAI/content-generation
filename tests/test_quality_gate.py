@@ -7,6 +7,7 @@ from services.quality_gate import (
     check_banned_words,
     check_meta_discourse,
     check_title_brand,
+    default_quality_policy,
     effective_quality_policy,
     load_banned_words,
     load_quality_policy,
@@ -15,6 +16,25 @@ from services.quality_gate import (
 
 
 class QualityGateTests(unittest.TestCase):
+    def test_default_policy_keeps_industry_words_out_of_common_editor(self):
+        policy = default_quality_policy()
+
+        self.assertNotIn("保证录取", policy["common"]["banned_words"])
+        self.assertIn("保证录取", policy["industries"]["education"]["banned_words"])
+        self.assertNotIn("治愈", policy["common"]["banned_words"])
+        self.assertIn("治愈", policy["industries"]["medical"]["banned_words"])
+
+    def test_loaded_policy_moves_legacy_industry_words_out_of_common(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "policy.json"
+            path.write_text(json.dumps({"common": {"banned_words": ["通用词", "保证录取", "治愈"]}}, ensure_ascii=False), encoding="utf-8")
+
+            policy = load_quality_policy(path)
+
+            self.assertEqual(["通用词"], policy["common"]["banned_words"])
+            self.assertIn("保证录取", policy["industries"]["education"]["banned_words"])
+            self.assertIn("治愈", policy["industries"]["medical"]["banned_words"])
+
     def test_banned_words_block_and_clean_text_passes(self):
         self.assertFalse(check_banned_words("报名即可包过")['passed'])
         self.assertTrue(check_banned_words("请结合自身情况核验资料")['passed'])

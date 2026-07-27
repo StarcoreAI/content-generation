@@ -1,7 +1,7 @@
 """Build an editable competitor master from already collected local material."""
 import re
 
-from services.knowledge_base import clean_knowledge_markdown
+from services.knowledge_base import clean_knowledge_markdown, is_short_placeholder_section
 from services.reference_intelligence import collect_reference_articles
 
 
@@ -22,7 +22,7 @@ def _upload_sections(markdown):
             continue
         end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
         body = markdown[match.end():end].strip()
-        if body:
+        if body and not is_short_placeholder_section(body):
             sections[name] = body
     return sections
 
@@ -103,7 +103,6 @@ def merge_competitor_master_markdown(*documents):
                 sections[name].append(body)
     chunks = ["# 竞品总资料", "", "按真实竞品名称汇总，支持运营直接编辑。"]
     for name in order:
-        chunks.extend(["", f"## {name}"])
         # ponytail: 只去掉完全相同的行，语义近似的事实留给运营人工判断。
         unique_lines = []
         seen = set()
@@ -115,7 +114,9 @@ def merge_competitor_master_markdown(*documents):
                 if normalized:
                     seen.add(normalized)
                 unique_lines.append(line)
-        chunks.extend(["", "\n".join(unique_lines).strip() or "暂无可合并资料。"])
+        body = "\n".join(unique_lines).strip()
+        if body and not is_short_placeholder_section(body):
+            chunks.extend(["", f"## {name}", "", body])
     return "\n".join(chunks).strip() + "\n"
 
 
@@ -144,11 +145,12 @@ def build_competitor_master_input(entity_names, body_hits, upload_markdown):
 
     chunks = ["# 竞品总资料", "", "按真实竞品名称汇总，支持运营直接编辑。"]
     for name in names:
-        chunks.extend(["", f"## {name}"])
+        entries = []
         if uploads.get(name):
-            chunks.extend(["", uploads[name]])
+            entries.append(uploads[name])
         for line in evidence_by_name[name]:
-            chunks.extend(["", f"- {line}"])
-        if not uploads.get(name) and not evidence_by_name[name]:
-            chunks.extend(["", "暂无可合并资料。"])
+            entries.append(f"- {line}")
+        body = "\n".join(entries).strip()
+        if body and not is_short_placeholder_section(body):
+            chunks.extend(["", f"## {name}", "", body])
     return "\n".join(chunks).strip() + "\n"

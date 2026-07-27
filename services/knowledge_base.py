@@ -46,8 +46,13 @@ def clean_knowledge_markdown(content):
     return "\n".join(cleaned).strip()
 
 
+def is_short_placeholder_section(content):
+    text = re.sub(r"\s+", "", str(content or ""))
+    return len(text) < 50 and any(marker in text for marker in ("暂无资料", "暂无合并资料", "暂无可合并资料"))
+
+
 class KnowledgeBaseService:
-    MASTER_FORMAT_VERSION = 2
+    MASTER_FORMAT_VERSION = 3
     CUSTOMER_SECTIONS = (
         "品牌基础",
         "产品/服务",
@@ -57,7 +62,6 @@ class KnowledgeBaseService:
         "信任",
         "合规风险",
         "公开背景",
-        "运营备注与已确认口径",
     )
     CUSTOMER_SOURCES = (
         ("latest_injection.md", "客户资料解析"),
@@ -126,7 +130,7 @@ class KnowledgeBaseService:
         if any(word in key for word in ("合规", "风险", "限制", "禁", "注意")):
             return "合规风险"
         if any(word in key for word in ("引用", "运营", "判断", "情报", "口径", "备注")):
-            return "运营备注与已确认口径"
+            return None
         return "公开背景"
 
     def _split_source(self, content):
@@ -140,8 +144,9 @@ class KnowledgeBaseService:
             body_start = match.end()
             body_end = matches[index + 1].start() if index + 1 < len(matches) else len(content)
             body = content[body_start:body_end].strip()
-            if body:
-                sections[self._section_name(match.group(1))].append(body)
+            section = self._section_name(match.group(1))
+            if body and section in sections and not is_short_placeholder_section(body):
+                sections[section].append(body)
         return sections
 
     def _source_material(self, package_dir):
@@ -156,15 +161,11 @@ class KnowledgeBaseService:
     def _build_customer_master(self, source_material):
         chunks = ["# 客户总资料", "", "以下内容供模型生产和人工维护；人工编辑后不会被上游资料自动覆盖。"]
         for section in self.CUSTOMER_SECTIONS:
-            chunks.extend(["", f"## {section}"])
-            has_content = False
+            entries = []
             for _label, source_sections in source_material:
-                entries = source_sections[section]
-                if entries:
-                    chunks.extend(["", "\n\n".join(entries)])
-                    has_content = True
-            if not has_content:
-                chunks.extend(["", "暂无资料。"])
+                entries.extend(entry for entry in source_sections[section] if not is_short_placeholder_section(entry))
+            if entries:
+                chunks.extend(["", f"## {section}", "", "\n\n".join(entries)])
         return "\n".join(chunks).strip() + "\n"
 
     def load_customer_master(self, client_id):
