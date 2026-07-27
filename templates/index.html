@@ -29,6 +29,7 @@
     <div class="t-ni" onclick="navTo('competitors',this)">竞品资料解析</div>
     <div class="t-ni" data-nav="knowledge" onclick="navTo('knowledge',this)">知识库</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
+    <div class="t-ni" onclick="navTo('quality',this)">质量门禁</div>
   </div>
   <div class="t-right">
     <select class="t-sel" id="globalClient" onchange="onClientChange()">
@@ -59,6 +60,7 @@
   <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
   <div class="s-nav" data-nav="knowledge" onclick="navTo('knowledge',this)"><i class="ti ti-books"></i>知识库</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
+  <div class="s-nav" onclick="navTo('quality',this)"><i class="ti ti-shield-check"></i>质量门禁</div>
   <div class="s-nav" onclick="navTo('publish',this)"><i class="ti ti-send"></i>发布文章</div>
   <div class="s-sec">配置</div>
   <div class="s-nav" onclick="navTo('clients',this)"><i class="ti ti-users"></i>客户管理</div>
@@ -425,6 +427,25 @@
   </div>
 </div>
 
+<!-- ═══ 质量门禁知识库 ═══ -->
+<div class="page" id="page-knowledge-quality">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>质量门禁知识库</em></div><div class="pg-sub">维护通用与行业审核规则；这里只编辑规则，不处理具体文章。</div></div>
+    <button class="btn btn-o btn-sm" onclick="loadQualityPolicy()">刷新</button>
+  </div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；保存前会要求确认。</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">保存通用规则</button></div>
+    <div class="form-row col2"><div class="fld"><label>违禁词（每行一个）</label><textarea id="qualityCommonBanned" rows="6"></textarea></div><div class="fld"><label>必须做（每行一条）</label><textarea id="qualityCommonMustDo" rows="6"></textarea></div></div>
+    <div class="form-row col2"><div class="fld"><label>不能做（每行一条）</label><textarea id="qualityCommonMustNot" rows="6"></textarea></div><div class="fld"><label>审核要求</label><textarea id="qualityCommonPrompt" rows="6"></textarea></div></div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">当前行业审核规则</span><div class="card-sub" id="qualityIndustryHint">请先选择客户；行业规则影响该行业的所有客户。</div></div><button class="btn btn-p btn-sm" onclick="saveIndustryQualityPolicy()">保存行业规则</button></div>
+    <div class="form-row col2"><div class="fld"><label>行业违禁词（每行一个）</label><textarea id="qualityIndustryBanned" rows="5"></textarea></div><div class="fld"><label>行业必须做（每行一条）</label><textarea id="qualityIndustryMustDo" rows="5"></textarea></div></div>
+    <div class="form-row col2"><div class="fld"><label>行业不能做（每行一条）</label><textarea id="qualityIndustryMustNot" rows="5"></textarea></div><div class="fld"><label>行业审核要求</label><textarea id="qualityIndustryPrompt" rows="5"></textarea></div></div>
+  </div>
+</div>
+
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
@@ -501,17 +522,6 @@
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>质量门禁</em></div><div class="pg-sub">展示该客户所有已生产文章；审核不通过的文章也保留，供人工编辑或 AI 修改。</div></div>
     <button class="btn btn-o btn-sm" onclick="loadQualityGateArticles()">刷新</button>
-  </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
-  <div class="card">
-    <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；保存前会要求确认。</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">保存通用规则</button></div>
-    <div class="form-row col2"><div class="fld"><label>违禁词（每行一个）</label><textarea id="qualityCommonBanned" rows="6"></textarea></div><div class="fld"><label>必须做（每行一条）</label><textarea id="qualityCommonMustDo" rows="6"></textarea></div></div>
-    <div class="form-row col2"><div class="fld"><label>不能做（每行一条）</label><textarea id="qualityCommonMustNot" rows="6"></textarea></div><div class="fld"><label>审核要求</label><textarea id="qualityCommonPrompt" rows="6"></textarea></div></div>
-  </div>
-  <div class="card">
-    <div class="card-hd"><div><span class="card-title">当前行业审核规则</span><div class="card-sub" id="qualityIndustryHint">请先选择客户；行业规则影响该行业的所有客户。</div></div><button class="btn btn-p btn-sm" onclick="saveIndustryQualityPolicy()">保存行业规则</button></div>
-    <div class="form-row col2"><div class="fld"><label>行业违禁词（每行一个）</label><textarea id="qualityIndustryBanned" rows="5"></textarea></div><div class="fld"><label>行业必须做（每行一条）</label><textarea id="qualityIndustryMustDo" rows="5"></textarea></div></div>
-    <div class="form-row col2"><div class="fld"><label>行业不能做（每行一条）</label><textarea id="qualityIndustryMustNot" rows="5"></textarea></div><div class="fld"><label>行业审核要求</label><textarea id="qualityIndustryPrompt" rows="5"></textarea></div></div>
   </div>
   <div class="card">
     <div class="card-hd"><span class="card-title">文章审核列表 <span id="quality-article-count" style="color:var(--text3);font-size:11px"></span></span></div>

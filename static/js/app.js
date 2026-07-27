@@ -4,12 +4,12 @@ function navTo(page, el) {
   document.querySelectorAll('.s-nav').forEach(n => n.classList.remove('on'));
   document.querySelectorAll('.t-ni').forEach(n => n.classList.remove('on'));
   document.getElementById('page-' + page)?.classList.add('on');
-  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'quality';
+  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'knowledge-quality';
   const activeNav = knowledgePage ? document.querySelector('[data-nav="knowledge"]') : el;
   if (activeNav) activeNav.classList.add('on');
   // page-specific load
   if (page === 'content') loadContent();
-  if (page === 'quality') { loadQualityGateArticles(); loadQualityPolicy(); }
+  if (page === 'quality') loadQualityGateArticles();
   if (page === 'publish') loadPublishPage();
   if (page === 'resources') loadResourcePage();
   if (page === 'daily') loadDailyPage();
@@ -19,11 +19,12 @@ function navTo(page, el) {
   if (page === 'competitors') loadCompetitorAnalysis();
   if (page === 'knowledge-customer') loadCustomerKnowledge();
   if (page === 'knowledge-competitors') loadCompetitorKnowledge();
+  if (page === 'knowledge-quality') loadQualityPolicy();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
 function openKnowledge(section) {
-  navTo(section === 'quality' ? 'quality' : 'knowledge-' + section, null);
+  navTo('knowledge-' + section, null);
 }
 // ── State ─────────────────────────────────────────────
 let currentClientId = '';

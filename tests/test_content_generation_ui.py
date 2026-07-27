@@ -91,9 +91,13 @@ class ContentGenerationUiTests(unittest.TestCase):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('navTo(\'knowledge\'', template)
-        self.assertIn('openKnowledge(\'quality\'', template)
+        self.assertIn('navTo(\'quality\'', template)
         self.assertIn('id="page-quality"', template)
+        self.assertIn('id="qualityArticleList"', template)
+        self.assertIn('id="page-knowledge-quality"', template)
+        self.assertIn('openKnowledge(\'quality\'', template)
+        quality_page = template.split('id="page-quality"', 1)[1].split('</div>\n\n<div class="page" id="page-publish"', 1)[0]
+        self.assertNotIn('id="qualityCommonBanned"', quality_page)
         self.assertIn("renderQualityGateArticles", script)
         self.assertIn("manualEditContentGeneration", script)
         self.assertIn("aiModifyContentGeneration", script)
