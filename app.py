@@ -1486,14 +1486,23 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     if not usable:
         return fallback
     ask_text = ask_text or (lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, get_settings()))
-    try:
-        high_frequency = str(ask_text(
-            build_high_frequency_competitor_prompt([item.get("name", "") for item in entities], usable),
-            6000,
-        ) or "")
-    except Exception:
+    high_frequency = []
+    batches = [usable[index:index + 4] for index in range(0, len(usable), 4)]
+    for index, batch in enumerate(batches, 1):
+        try:
+            extracted = str(ask_text(
+                build_high_frequency_competitor_prompt(
+                    [item.get("name", "") for item in entities], batch, index, len(batches),
+                ),
+                6000,
+            ) or "")
+        except Exception:
+            continue
+        if extracted.strip():
+            high_frequency.append(extracted)
+    if not high_frequency:
         return fallback
-    return merge_competitor_master_markdown(high_frequency, fallback)
+    return merge_competitor_master_markdown(*high_frequency, fallback)
 
 def knowledge_citation_summary(cid):
     from services.record_insights import build_record_insights

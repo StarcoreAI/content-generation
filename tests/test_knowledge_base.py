@@ -162,6 +162,39 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertIn("高频文章乙", calls[0][0])
             self.assertIn("提供到店试听。", content)
 
+    def test_competitor_sync_splits_detailed_extraction_by_four_articles(self):
+        with isolated_knowledge_app():
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "brand": "客户品牌"}])
+            geo_app.save(geo_app.F_RAW_RECORDS, [{
+                "client_id": "client-a", "today": "2026-07-26", "refs": [
+                    {"title": f"文章{index}", "url": f"https://example.com/{index}"}
+                    for index in range(1, 6)
+                ],
+            }])
+            calls = []
+
+            def ask_text(prompt, max_tokens):
+                calls.append((prompt, max_tokens))
+                if "文章5" in prompt:
+                    return "## 竞品甲\n\n- 共同事实\n- 第二批事实"
+                return "## 竞品甲\n\n- 共同事实\n- 第一批事实"
+
+            content = geo_app.competitor_knowledge_input(
+                "client-a",
+                ask_text=ask_text,
+                fetch_fn=lambda url: {"ok": True, "content": f"{url} 中的竞品甲资料"},
+            )
+
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(max_tokens == 6000 for _, max_tokens in calls))
+            self.assertIn("文章1", calls[0][0])
+            self.assertIn("文章4", calls[0][0])
+            self.assertNotIn("文章5", calls[0][0])
+            self.assertIn("文章5", calls[1][0])
+            self.assertIn("第一批事实", content)
+            self.assertIn("第二批事实", content)
+            self.assertEqual(content.count("共同事实"), 1)
+
     def test_customer_knowledge_get_includes_read_only_citation_summary(self):
         with isolated_knowledge_app():
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")

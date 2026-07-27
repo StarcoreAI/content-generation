@@ -54,11 +54,11 @@ def collect_high_frequency_article_sources(records, cached_by_url, fetcher, limi
     return sources
 
 
-def build_high_frequency_competitor_prompt(competitors, articles):
+def build_high_frequency_competitor_prompt(competitors, articles, batch_index=1, batch_count=1):
     names = "\n".join(f"- {name}" for name in (_real_name(item) for item in competitors or []) if name) or "由文章中出现的真实竞品名称决定。"
     blocks = []
     for index, article in enumerate(articles or [], 1):
-        content = str(article.get("content") or "").strip()[:5000]
+        content = str(article.get("content") or "").strip()[:8000]
         if not content:
             continue
         blocks.append(
@@ -69,13 +69,13 @@ def build_high_frequency_competitor_prompt(competitors, articles):
             f"正文：\n{content}"
         )
     return f"""你是 GEO 竞品资料整理助手。
-请从所有平台合并后、累计引用次数最高的 12 篇引用文章中，整理其中出现的竞品资料，供运营维护竞品知识库。
+请从所有平台合并后、累计引用次数最高的 12 篇引用文章中，整理其中出现的竞品资料，供运营维护竞品知识库。本次是第 {batch_index}/{batch_count} 批文章；后续会按竞品名称合并，不需要在本批压缩或概括资料。
 
 硬规则：
 1. 只使用以下文章正文，不使用外部知识，不联网搜索，不补充文章没有写出的事实。
 2. 只整理真实品牌名、机构名、门店名或公司名；禁止 A/B/C、竞品1、竞品2、某机构等占位名称。
 3. 不拉踩、不排名、不写推荐结论，不为了突出客户品牌贬低竞品。
-4. 只保留文章明确写出的定位、业务/项目、服务动作、地区/网点、流程、团队、售后、适合人群等信息；价格、资质、案例、效果、排名和数字必须保守，不得编造。
+4. 这是详尽事实抽取，不写摘要：尽量保留文章中每一条明确、可核对的竞品事实。定位、业务/项目、服务动作、地区/网点、流程、团队、售后、适合人群、价格、资质、案例、效果、排名和数字等，只要文章明确写出就分别列出；不同事实不得泛化合并或因同类而省略。
 5. 每个竞品按名称单独分节；没有可用信息就不要输出该竞品；不要输出空栏目、来源标签、URL、解释或选购建议。
 6. 输出 Markdown。每个分节必须以“## 真实竞品名称”开头，分节下直接写客观资料。
 
@@ -101,7 +101,18 @@ def merge_competitor_master_markdown(*documents):
     chunks = ["# 竞品总资料", "", "按真实竞品名称汇总，支持运营直接编辑。"]
     for name in order:
         chunks.extend(["", f"## {name}"])
-        chunks.extend(["", "\n\n".join(sections[name]) or "暂无可合并资料。"])
+        # ponytail: 只去掉完全相同的行，语义近似的事实留给运营人工判断。
+        unique_lines = []
+        seen = set()
+        for body in sections[name]:
+            for line in body.splitlines():
+                normalized = re.sub(r"\s+", " ", line).strip()
+                if normalized and normalized in seen:
+                    continue
+                if normalized:
+                    seen.add(normalized)
+                unique_lines.append(line)
+        chunks.extend(["", "\n".join(unique_lines).strip() or "暂无可合并资料。"])
     return "\n".join(chunks).strip() + "\n"
 
 
