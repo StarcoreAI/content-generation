@@ -18,7 +18,7 @@ class KnowledgeBaseService:
         "信任",
         "合规风险",
         "公开背景",
-        "引用情报与运营判断",
+        "运营备注与已确认口径",
     )
     CUSTOMER_SOURCES = (
         ("latest_injection.md", "客户资料解析"),
@@ -86,8 +86,8 @@ class KnowledgeBaseService:
             return "信任"
         if any(word in key for word in ("合规", "风险", "限制", "禁", "注意")):
             return "合规风险"
-        if any(word in key for word in ("引用", "运营", "判断", "情报")):
-            return "引用情报与运营判断"
+        if any(word in key for word in ("引用", "运营", "判断", "情报", "口径", "备注")):
+            return "运营备注与已确认口径"
         return "公开背景"
 
     def _split_source(self, content):

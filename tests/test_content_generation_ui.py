@@ -91,7 +91,8 @@ class ContentGenerationUiTests(unittest.TestCase):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn('navTo(\'quality\'', template)
+        self.assertIn('navTo(\'knowledge\'', template)
+        self.assertIn('openKnowledge(\'quality\'', template)
         self.assertIn('id="page-quality"', template)
         self.assertIn("renderQualityGateArticles", script)
         self.assertIn("manualEditContentGeneration", script)

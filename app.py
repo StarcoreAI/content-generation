@@ -1510,11 +1510,16 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     records = [record for record in all_records if record.get("today") == source_date] if source_date else []
     entities = default_competitor_entities(cid, source_date) if source_date else []
     hit_report = load_competitor_article_body_hit_report(cid, source_date) if source_date else None
-    upload_path = competitor_package_output_dir(cid) / "latest_upload_competitors.md"
-    fallback = build_competitor_master_input(
+    package_dir = competitor_package_output_dir(cid)
+    upload_path = package_dir / "latest_upload_competitors.md"
+    web_path = package_dir / "latest_web_competitors.md"
+    fallback = merge_competitor_master_markdown(
+        build_competitor_master_input(
         [item.get("name", "") for item in entities],
         (hit_report or {}).get("body_hits", []),
         upload_path.read_text(encoding="utf-8", errors="ignore") if upload_path.exists() else "",
+        ),
+        web_path.read_text(encoding="utf-8", errors="ignore") if web_path.exists() else "",
     )
     if not records:
         return fallback
@@ -1558,29 +1563,6 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     if not high_frequency:
         return fallback
     return merge_competitor_master_markdown(*high_frequency, fallback)
-
-def knowledge_citation_summary(cid):
-    from services.record_insights import build_record_insights
-
-    client = next((item for item in load(F_CLIENTS, []) if item.get("id") == cid), {})
-    insights = build_record_insights(
-        load_client_records(cid),
-        own_brand=client.get("brand") or client.get("name") or "",
-        own_client_name=client.get("name") or "",
-    )
-    return {
-        "total_records": insights.get("total_records", 0),
-        "total_refs": insights.get("total_refs", 0),
-        "mention_rate": insights.get("mention_rate", 0),
-        "top_articles": [
-            {key: item.get(key, "") for key in ("title", "url", "platform", "count")}
-            for item in (insights.get("top_articles") or [])[:10]
-        ],
-        "mentioned_entities": [
-            {key: item.get(key, "") for key in ("name", "type", "count")}
-            for item in (insights.get("mentioned_entities") or [])[:10]
-        ],
-    }
 
 def competitor_upload_dir(cid):
     return competitor_package_output_dir(cid) / "uploads"
@@ -1941,11 +1923,8 @@ def expand_competitor_web(cid):
 def get_customer_knowledge_master(cid):
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
-    return jsonify({
-        "ok": True,
-        **knowledge_base_service().load_customer_master(cid),
-        "citation_summary": knowledge_citation_summary(cid),
-    })
+    result = knowledge_base_service().sync_customer_master(cid, material_package_output_dir(cid))
+    return jsonify({"ok": True, **result})
 
 
 @app.route("/api/knowledge/customer/<cid>/sync", methods=["POST"])

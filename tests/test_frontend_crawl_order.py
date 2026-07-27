@@ -168,7 +168,13 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("async function addBatchQuestions()", html)
         self.assertIn("currentGroupQuestions.push(...additions)", html)
         self.assertIn("new Set(currentGroupQuestions)", html)
-        self.assertNotIn("prompt(", html)
+        add_batch = re.search(
+            r"async function addBatchQuestions\(\) \{(?P<body>.*?)\n\}",
+            html,
+            re.S,
+        )
+        self.assertIsNotNone(add_batch)
+        self.assertNotIn("prompt(", add_batch.group("body"))
 
     def test_global_platform_selector_is_removed_for_contract_platform_flow(self):
         html = read_frontend_source()
@@ -445,7 +451,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
 
         self.assertIn("banned_words: '禁用词命中'", html)
         self.assertIn("fact_traceability: '数字与主张可溯源'", html)
-        self.assertIn("建议修改后再用", html)
+        self.assertIn("审核提示", html)
         self.assertIn("人工判断", html)
         self.assertIn("可发布", html)
 

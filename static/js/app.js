@@ -1916,68 +1916,22 @@ function setCustomerKnowledgeStatus(text) {
   if (el) el.textContent = text;
 }
 
-function renderKnowledgeCitationSummary(summary) {
-  const el = document.getElementById('knowledgeCitationSummary');
-  if (!el) return;
-  el.replaceChildren();
-  if (!summary) {
-    el.textContent = '暂无引用情报';
-    return;
-  }
-  const headline = document.createElement('div');
-  headline.style.cssText = 'font-weight:800;color:var(--text2);margin-bottom:8px';
-  headline.textContent = `记录 ${summary.total_records || 0} 条 · 引用 ${summary.total_refs || 0} 篇 · 品牌提及 ${Math.round(summary.mention_rate || 0)}%`;
-  el.appendChild(headline);
-  const articles = summary.top_articles || [];
-  if (articles.length) {
-    const label = document.createElement('div');
-    label.style.cssText = 'font-size:11px;font-weight:800;color:var(--text2);margin:6px 0';
-    label.textContent = '高频引用文章';
-    el.appendChild(label);
-    articles.slice(0, 5).forEach(article => {
-      const row = document.createElement('div');
-      row.style.cssText = 'margin:4px 0';
-      const link = document.createElement('a');
-      const url = String(article.url || '');
-      if (/^https?:\/\//i.test(url)) {
-        link.href = url;
-        link.target = '_blank';
-        link.rel = 'noopener noreferrer';
-      }
-      link.textContent = `${article.title || '未命名文章'} · ×${article.count || 0}`;
-      link.style.color = 'var(--pri)';
-      row.appendChild(link);
-      el.appendChild(row);
-    });
-  }
-  const entities = summary.mentioned_entities || [];
-  if (entities.length) {
-    const entityLine = document.createElement('div');
-    entityLine.style.cssText = 'font-size:11px;color:var(--text2);margin-top:8px';
-    entityLine.textContent = `竞品/门店实体：${entities.slice(0, 8).map(item => `${item.name} ×${item.count || 0}`).join('；')}`;
-    el.appendChild(entityLine);
-  }
-}
-
 async function loadCustomerKnowledge() {
   const editor = document.getElementById('knowledgeCustomerContent');
   if (!editor) return;
   if (!currentClientId) {
     editor.value = '';
     setCustomerKnowledgeStatus('请选择客户后查看');
-    renderKnowledgeCitationSummary(null);
     return;
   }
   const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId));
   if (result?.error) {
     editor.value = '';
     setCustomerKnowledgeStatus('尚未整理客户资料');
-    renderKnowledgeCitationSummary(null);
     return;
   }
   editor.value = result.content || '';
   setCustomerKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '可直接编辑并保存已确认口径');
-  renderKnowledgeCitationSummary(result.citation_summary);
 }
 
 async function syncCustomerKnowledge(overwrite=false) {

@@ -404,10 +404,6 @@
   </div>
   <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">引用情报概览（只读）</span><div class="card-sub">来自爬取记录，仅供运营判断，不会写入客户总资料</div></div></div>
-    <div id="knowledgeCitationSummary" style="font-size:12px;color:var(--text3)">请选择客户后查看</div>
-  </div>
-  <div class="card">
     <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">保存已确认口径</button></div>
     <div class="fld" style="margin-bottom:0"><textarea id="knowledgeCustomerContent" rows="24" placeholder="整理现有资料后，在这里维护运营备注和已确认口径"></textarea></div>
   </div>
@@ -416,10 +412,10 @@
 <!-- ═══ 竞品知识库 ═══ -->
 <div class="page" id="page-knowledge-competitors">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>竞品知识库</em></div><div class="pg-sub">按竞品名称分开维护；整理时只使用当日实体、全平台累计引用最高的 12 篇文章正文和上传资料</div></div>
+    <div><div class="pg-title">✦ <em>竞品知识库</em></div><div class="pg-sub">按竞品名称分开维护；整理时合并竞品资料解析、联网扩展和全平台累计引用最高的 12 篇文章</div></div>
     <div class="acts">
       <button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
-      <button class="btn btn-p btn-sm" onclick="syncCompetitorKnowledge()">整理现有资料</button>
+      <button class="btn btn-p btn-sm" onclick="syncCompetitorKnowledge()">整合已有资料</button>
     </div>
   </div>
   <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>

@@ -219,26 +219,32 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertIn("第二批事实", content)
             self.assertEqual(content.count("共同事实"), 1)
 
-    def test_customer_knowledge_get_includes_read_only_citation_summary(self):
-        with isolated_knowledge_app():
+    def test_customer_knowledge_get_builds_master_from_parsed_and_web_sources(self):
+        with isolated_knowledge_app() as root:
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
             geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "owner_username": "owner", "brand": "客户品牌"}])
-            geo_app.save(geo_app.F_RAW_RECORDS, [{
-                "client_id": "client-a", "brand": "客户品牌", "brand_mentioned": True,
-                "refs": [{"title": "高频引用文章", "url": "https://example.com/a", "platform": "示例站"}],
-                "mentioned_entities": [{"name": "竞品甲", "type": "品牌", "evidence": "竞品甲"}],
-            }])
+            package_dir = root / "material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_injection.md").write_text(
+                "# 客户资料解析\n\n## 品牌基础\n解析得到的品牌资料。",
+                encoding="utf-8",
+            )
+            (package_dir / "latest_web_supplement.md").write_text(
+                "# 客户资料联网补充\n\n## 公开背景\n联网补充的公开资料。",
+                encoding="utf-8",
+            )
             client = geo_app.app.test_client()
             client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
 
             response = client.get("/api/knowledge/customer/client-a")
 
             self.assertEqual(response.status_code, 200)
-            summary = response.get_json()["citation_summary"]
-            self.assertEqual(summary["total_records"], 1)
-            self.assertEqual(summary["total_refs"], 1)
-            self.assertEqual(summary["top_articles"][0]["title"], "高频引用文章")
-            self.assertEqual(summary["mentioned_entities"][0]["name"], "竞品甲")
+            body = response.get_json()
+            self.assertNotIn("citation_summary", body)
+            self.assertIn("[客户资料解析]", body["content"])
+            self.assertIn("解析得到的品牌资料。", body["content"])
+            self.assertIn("[AI 联网补充]", body["content"])
+            self.assertIn("联网补充的公开资料。", body["content"])
 
     def test_owner_can_sync_save_and_read_customer_master(self):
         with isolated_knowledge_app() as root:
@@ -300,6 +306,9 @@ class CustomerMasterApiTests(unittest.TestCase):
             (package_dir / "latest_upload_competitors.md").write_text(
                 "# 竞品上传资料\n\n## 竞品乙\n乙机构提供线上答疑。", encoding="utf-8"
             )
+            (package_dir / "latest_web_competitors.md").write_text(
+                "# 竞品联网扩展\n\n## 竞品丙\n丙机构公开提供免费线下体验。", encoding="utf-8"
+            )
             client = geo_app.app.test_client()
             client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
 
@@ -311,6 +320,8 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertIn("竞品甲有到店试听。", content)
             self.assertIn("## 竞品乙", content)
             self.assertIn("乙机构提供线上答疑。", content)
+            self.assertIn("## 竞品丙", content)
+            self.assertIn("丙机构公开提供免费线下体验。", content)
 
 
 class CustomerKnowledgeUiTests(unittest.TestCase):
@@ -325,9 +336,9 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertNotIn("客户知识库</div>", template.split('<div class="sidebar">', 1)[1].split('<div class="s-nav" onclick="navTo(\'content\'', 1)[0])
         self.assertIn('id="page-knowledge-customer"', template)
         self.assertIn('id="knowledgeCustomerContent"', template)
-        self.assertIn('id="knowledgeCitationSummary"', template)
+        self.assertNotIn('id="knowledgeCitationSummary"', template)
         self.assertIn("function loadCustomerKnowledge()", script)
-        self.assertIn("function renderKnowledgeCitationSummary(", script)
+        self.assertNotIn("function renderKnowledgeCitationSummary(", script)
         self.assertIn("function syncCustomerKnowledge(", script)
         self.assertIn("function saveCustomerKnowledge()", script)
         self.assertIn("/api/knowledge/customer/", script)
