@@ -14,6 +14,8 @@ function navTo(page, el) {
   if (page === 'reference') loadReferenceIntelligence();
   if (page === 'materials') loadMaterialAnalysis();
   if (page === 'competitors') loadCompetitorAnalysis();
+  if (page === 'knowledge-customer') loadCustomerKnowledge();
+  if (page === 'knowledge-competitors') loadCompetitorKnowledge();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
@@ -500,6 +502,8 @@ function onClientChange() {
   if (document.getElementById('page-content')?.classList.contains('on')) loadContent();
   if (document.getElementById('page-materials')?.classList.contains('on')) loadMaterialAnalysis();
   if (document.getElementById('page-competitors')?.classList.contains('on')) loadCompetitorAnalysis();
+  if (document.getElementById('page-knowledge-customer')?.classList.contains('on')) loadCustomerKnowledge();
+  if (document.getElementById('page-knowledge-competitors')?.classList.contains('on')) loadCompetitorKnowledge();
   if (document.getElementById('page-reference')?.classList.contains('on')) {
     loadReferenceIntelligence();
   }
@@ -1865,6 +1869,215 @@ function loadMaterialAnalysis() {
 async function loadCompetitorAnalysis() {
   await loadCompetitorEntities();
   await loadCompetitorResult();
+}
+
+function setCustomerKnowledgeStatus(text) {
+  const el = document.getElementById('knowledgeCustomerStatus');
+  if (el) el.textContent = text;
+}
+
+function renderKnowledgeCitationSummary(summary) {
+  const el = document.getElementById('knowledgeCitationSummary');
+  if (!el) return;
+  el.replaceChildren();
+  if (!summary) {
+    el.textContent = '暂无引用情报';
+    return;
+  }
+  const headline = document.createElement('div');
+  headline.style.cssText = 'font-weight:800;color:var(--text2);margin-bottom:8px';
+  headline.textContent = `记录 ${summary.total_records || 0} 条 · 引用 ${summary.total_refs || 0} 篇 · 品牌提及 ${Math.round(summary.mention_rate || 0)}%`;
+  el.appendChild(headline);
+  const articles = summary.top_articles || [];
+  if (articles.length) {
+    const label = document.createElement('div');
+    label.style.cssText = 'font-size:11px;font-weight:800;color:var(--text2);margin:6px 0';
+    label.textContent = '高频引用文章';
+    el.appendChild(label);
+    articles.slice(0, 5).forEach(article => {
+      const row = document.createElement('div');
+      row.style.cssText = 'margin:4px 0';
+      const link = document.createElement('a');
+      const url = String(article.url || '');
+      if (/^https?:\/\//i.test(url)) {
+        link.href = url;
+        link.target = '_blank';
+        link.rel = 'noopener noreferrer';
+      }
+      link.textContent = `${article.title || '未命名文章'} · ×${article.count || 0}`;
+      link.style.color = 'var(--pri)';
+      row.appendChild(link);
+      el.appendChild(row);
+    });
+  }
+  const entities = summary.mentioned_entities || [];
+  if (entities.length) {
+    const entityLine = document.createElement('div');
+    entityLine.style.cssText = 'font-size:11px;color:var(--text2);margin-top:8px';
+    entityLine.textContent = `竞品/门店实体：${entities.slice(0, 8).map(item => `${item.name} ×${item.count || 0}`).join('；')}`;
+    el.appendChild(entityLine);
+  }
+}
+
+async function loadCustomerKnowledge() {
+  const editor = document.getElementById('knowledgeCustomerContent');
+  if (!editor) return;
+  if (!currentClientId) {
+    editor.value = '';
+    setCustomerKnowledgeStatus('请选择客户后查看');
+    renderKnowledgeCitationSummary(null);
+    return;
+  }
+  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId));
+  if (result?.error) {
+    editor.value = '';
+    setCustomerKnowledgeStatus('尚未整理客户资料');
+    renderKnowledgeCitationSummary(null);
+    return;
+  }
+  editor.value = result.content || '';
+  setCustomerKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '可直接编辑并保存已确认口径');
+  renderKnowledgeCitationSummary(result.citation_summary);
+}
+
+async function syncCustomerKnowledge(overwrite=false) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId) + '/sync', 'POST', {overwrite});
+  if (result?.error) { toast(result.error, 'err'); return; }
+  if (result.source_update_available && !overwrite) {
+    setCustomerKnowledgeStatus('上游资料已有更新，当前人工版本未被覆盖');
+    if (!confirm('上游资料已更新。是否用最新来源覆盖当前人工版本？')) return;
+    return syncCustomerKnowledge(true);
+  }
+  document.getElementById('knowledgeCustomerContent').value = result.content || '';
+  setCustomerKnowledgeStatus(overwrite ? '已使用最新来源重新整理' : '已整理现有资料，可继续编辑确认口径');
+  toast('客户知识库已更新');
+}
+
+async function saveCustomerKnowledge() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const content = document.getElementById('knowledgeCustomerContent')?.value || '';
+  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId), 'PUT', {content});
+  if (result?.error) { toast(result.error, 'err'); return; }
+  setCustomerKnowledgeStatus('已保存人工确认口径');
+  toast('客户知识库已保存');
+}
+
+let competitorKnowledgePreamble = '# 竞品总资料';
+
+function setCompetitorKnowledgeStatus(text) {
+  const el = document.getElementById('knowledgeCompetitorStatus');
+  if (el) el.textContent = text;
+}
+
+function parseCompetitorKnowledge(content) {
+  const lines = String(content || '').split('\n');
+  const sections = [];
+  let preamble = [];
+  let current = null;
+  lines.forEach(line => {
+    const match = line.match(/^##\s+(.+?)\s*$/);
+    if (match) {
+      current = {name: match[1].trim(), lines: []};
+      sections.push(current);
+    } else if (current) {
+      current.lines.push(line);
+    } else {
+      preamble.push(line);
+    }
+  });
+  return {preamble: preamble.join('\n').trim() || '# 竞品总资料', sections};
+}
+
+function renderCompetitorKnowledgeSections(content) {
+  const el = document.getElementById('knowledgeCompetitorSections');
+  if (!el) return;
+  const parsed = parseCompetitorKnowledge(content);
+  competitorKnowledgePreamble = parsed.preamble;
+  el.replaceChildren();
+  if (!parsed.sections.length) {
+    const empty = document.createElement('div');
+    empty.style.cssText = 'font-size:12px;color:var(--text3)';
+    empty.textContent = '暂无竞品资料；可先整理现有资料，或手动新增真实竞品名称。';
+    el.appendChild(empty);
+    return;
+  }
+  parsed.sections.forEach(section => appendCompetitorKnowledgeSection(section.name, section.lines.join('\n').trim()));
+}
+
+function appendCompetitorKnowledgeSection(name, body='') {
+  const el = document.getElementById('knowledgeCompetitorSections');
+  if (!el) return;
+  const card = document.createElement('div');
+  card.dataset.competitorKnowledgeSection = name;
+  card.style.cssText = 'padding:12px 0;border-bottom:1px solid var(--border2)';
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px';
+  const title = document.createElement('strong');
+  title.textContent = name;
+  const remove = document.createElement('button');
+  remove.className = 'btn btn-o btn-sm';
+  remove.textContent = '移除分节';
+  remove.onclick = () => card.remove();
+  header.append(title, remove);
+  const editor = document.createElement('textarea');
+  editor.rows = 8;
+  editor.value = body;
+  editor.style.width = '100%';
+  card.append(header, editor);
+  el.appendChild(card);
+}
+
+async function loadCompetitorKnowledge() {
+  const el = document.getElementById('knowledgeCompetitorSections');
+  if (!el) return;
+  if (!currentClientId) {
+    renderCompetitorKnowledgeSections('');
+    setCompetitorKnowledgeStatus('请选择客户后查看');
+    return;
+  }
+  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId));
+  if (result?.error) {
+    renderCompetitorKnowledgeSections('');
+    setCompetitorKnowledgeStatus('尚未整理竞品资料');
+    return;
+  }
+  renderCompetitorKnowledgeSections(result.content || '');
+  setCompetitorKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '按竞品名称分节维护，可直接编辑保存');
+}
+
+async function syncCompetitorKnowledge(overwrite=false) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId) + '/sync', 'POST', {overwrite});
+  if (result?.error) { toast(result.error, 'err'); return; }
+  if (result.source_update_available && !overwrite) {
+    setCompetitorKnowledgeStatus('上游资料已有更新，当前人工版本未被覆盖');
+    if (!confirm('当日竞品资料已有更新。是否用最新资料覆盖当前人工版本？')) return;
+    return syncCompetitorKnowledge(true);
+  }
+  renderCompetitorKnowledgeSections(result.content || '');
+  setCompetitorKnowledgeStatus(overwrite ? '已使用最新资料重新整理' : '已整理现有资料，可继续编辑');
+  toast('竞品知识库已更新');
+}
+
+function addCompetitorKnowledgeSection() {
+  const name = prompt('请输入真实竞品名称');
+  if (!name || !name.trim()) return;
+  appendCompetitorKnowledgeSection(name.trim());
+}
+
+async function saveCompetitorKnowledge() {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const sections = Array.from(document.querySelectorAll('[data-competitor-knowledge-section]')).map(card => {
+    const name = card.dataset.competitorKnowledgeSection;
+    const body = card.querySelector('textarea')?.value.trim() || '';
+    return `## ${name}\n${body}`;
+  });
+  const content = [competitorKnowledgePreamble, ...sections].join('\n\n').trim();
+  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId), 'PUT', {content});
+  if (result?.error) { toast(result.error, 'err'); return; }
+  setCompetitorKnowledgeStatus('已保存人工确认资料');
+  toast('竞品知识库已保存');
 }
 
 async function loadMaterials() {

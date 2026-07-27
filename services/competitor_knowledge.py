@@ -1,0 +1,140 @@
+"""Build an editable competitor master from already collected local material."""
+import re
+
+from services.reference_intelligence import collect_reference_articles
+
+
+def _real_name(value):
+    name = re.sub(r"\s+", " ", str(value or "")).strip(" #：:-")
+    if not name or re.fullmatch(r"(?:竞品|机构|品牌)?[A-ZＡ-Ｚ0-9一二三四五六七八九十]+", name):
+        return ""
+    return name[:80]
+
+
+def _upload_sections(markdown):
+    matches = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", str(markdown or "")))
+    sections = {}
+    for index, match in enumerate(matches):
+        name = _real_name(match.group(1))
+        if not name:
+            continue
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(markdown)
+        body = str(markdown)[match.end():end].strip()
+        if body:
+            sections[name] = body
+    return sections
+
+
+def collect_high_frequency_article_sources(records, cached_by_url, fetcher, limit=12):
+    """Fetch the globally most-cited references, preferring an existing body cache."""
+    sources = []
+    for reference in collect_reference_articles(records, limit=limit):
+        url = reference["url"]
+        cached = (cached_by_url or {}).get(url)
+        if isinstance(cached, dict) and cached.get("ok") and str(cached.get("content") or "").strip():
+            fetched = {**cached, "fetch_method": "cache"}
+        else:
+            try:
+                fetched = dict(fetcher(url) or {})
+            except Exception as exc:
+                fetched = {"ok": False, "error": str(exc)}
+            fetched.setdefault("fetch_method", "fetch")
+        sources.append({
+            **reference,
+            "ok": bool(fetched.get("ok")),
+            # 这里展示的是被平台实际引用时的标题，不能被抓取页的 <title> 覆盖，
+            # 否则运营无法将资料追溯到原始引用记录。
+            "title": str(reference.get("source_title") or fetched.get("title") or "").strip(),
+            "fetched_title": str(fetched.get("title") or "").strip(),
+            "description": str(fetched.get("description") or "").strip(),
+            "content": str(fetched.get("content") or "").strip(),
+            "fetch_method": fetched.get("fetch_method") or "fetch",
+            "error": str(fetched.get("error") or ""),
+        })
+    return sources
+
+
+def build_high_frequency_competitor_prompt(competitors, articles):
+    names = "\n".join(f"- {name}" for name in (_real_name(item) for item in competitors or []) if name) or "由文章中出现的真实竞品名称决定。"
+    blocks = []
+    for index, article in enumerate(articles or [], 1):
+        content = str(article.get("content") or "").strip()[:5000]
+        if not content:
+            continue
+        blocks.append(
+            f"=== 高频引用文章 {index} ===\n"
+            f"标题：{article.get('title') or ''}\n"
+            f"URL：{article.get('url') or ''}\n"
+            f"累计引用次数：{article.get('citation_count') or 0}\n"
+            f"正文：\n{content}"
+        )
+    return f"""你是 GEO 竞品资料整理助手。
+请从所有平台合并后、累计引用次数最高的 12 篇引用文章中，整理其中出现的竞品资料，供运营维护竞品知识库。
+
+硬规则：
+1. 只使用以下文章正文，不使用外部知识，不联网搜索，不补充文章没有写出的事实。
+2. 只整理真实品牌名、机构名、门店名或公司名；禁止 A/B/C、竞品1、竞品2、某机构等占位名称。
+3. 不拉踩、不排名、不写推荐结论，不为了突出客户品牌贬低竞品。
+4. 只保留文章明确写出的定位、业务/项目、服务动作、地区/网点、流程、团队、售后、适合人群等信息；价格、资质、案例、效果、排名和数字必须保守，不得编造。
+5. 每个竞品按名称单独分节；没有可用信息就不要输出该竞品；不要输出空栏目、来源标签、URL、解释或选购建议。
+6. 输出 Markdown。每个分节必须以“## 真实竞品名称”开头，分节下直接写客观资料。
+
+当日已识别的竞品名称（仅作核对，不代表可以编造）：
+{names}
+
+固定文章来源：
+{"\n\n".join(blocks) or "无可用文章正文。"}
+"""
+
+
+def merge_competitor_master_markdown(*documents):
+    """Merge Markdown sections without exposing source labels in the master."""
+    sections = {}
+    order = []
+    for document in documents:
+        for name, body in _upload_sections(document).items():
+            if name not in sections:
+                sections[name] = []
+                order.append(name)
+            if body and body not in sections[name] and body != "暂无可合并资料。":
+                sections[name].append(body)
+    chunks = ["# 竞品总资料", "", "按真实竞品名称汇总，支持运营直接编辑。"]
+    for name in order:
+        chunks.extend(["", f"## {name}"])
+        chunks.extend(["", "\n\n".join(sections[name]) or "暂无可合并资料。"])
+    return "\n".join(chunks).strip() + "\n"
+
+
+def build_competitor_master_input(entity_names, body_hits, upload_markdown):
+    """Return one Markdown master with a section for every real competitor name."""
+    uploads = _upload_sections(upload_markdown)
+    names = []
+    for name in list(entity_names or []) + list(uploads):
+        name = _real_name(name)
+        if name and name not in names:
+            names.append(name)
+
+    evidence_by_name = {name: [] for name in names}
+    for hit in body_hits or []:
+        if not isinstance(hit, dict) or hit.get("status") != "matched":
+            continue
+        evidence = str(hit.get("evidence") or "").strip()
+        fallback = str(hit.get("title") or "").strip()
+        for name in hit.get("matched_entities") or []:
+            name = _real_name(name)
+            if name not in evidence_by_name:
+                continue
+            line = evidence or (f"正文命中：{fallback}" if fallback else "")
+            if line and line not in evidence_by_name[name]:
+                evidence_by_name[name].append(line)
+
+    chunks = ["# 竞品总资料", "", "按真实竞品名称汇总，支持运营直接编辑。"]
+    for name in names:
+        chunks.extend(["", f"## {name}"])
+        if uploads.get(name):
+            chunks.extend(["", uploads[name]])
+        for line in evidence_by_name[name]:
+            chunks.extend(["", f"- {line}"])
+        if not uploads.get(name) and not evidence_by_name[name]:
+            chunks.extend(["", "暂无可合并资料。"])
+    return "\n".join(chunks).strip() + "\n"

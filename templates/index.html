@@ -27,6 +27,8 @@
     <div class="t-ni" onclick="navTo('reference',this)">引用情报</div>
     <div class="t-ni" onclick="navTo('materials',this)">客户资料解析</div>
     <div class="t-ni" onclick="navTo('competitors',this)">竞品资料解析</div>
+    <div class="t-ni" onclick="navTo('knowledge-customer',this)">客户知识库</div>
+    <div class="t-ni" onclick="navTo('knowledge-competitors',this)">竞品知识库</div>
     <div class="t-ni" onclick="navTo('content',this)">内容生产</div>
   </div>
   <div class="t-right">
@@ -56,6 +58,8 @@
   <div class="s-nav" onclick="navTo('reference',this)"><i class="ti ti-bulb"></i>引用情报分析</div>
   <div class="s-nav" onclick="navTo('materials',this)"><i class="ti ti-files"></i>客户资料解析</div>
   <div class="s-nav" onclick="navTo('competitors',this)"><i class="ti ti-target-arrow"></i>竞品资料解析</div>
+  <div class="s-nav" onclick="navTo('knowledge-customer',this)"><i class="ti ti-books"></i>客户知识库</div>
+  <div class="s-nav" onclick="navTo('knowledge-competitors',this)"><i class="ti ti-list-details"></i>竞品知识库</div>
   <div class="s-nav" onclick="navTo('content',this)"><i class="ti ti-writing"></i>内容生产</div>
   <div class="s-nav" onclick="navTo('quality',this)"><i class="ti ti-shield-check"></i>质量门禁</div>
   <div class="s-nav" onclick="navTo('publish',this)"><i class="ti ti-send"></i>发布文章</div>
@@ -389,6 +393,40 @@
       </div>
     </div>
     <div id="competitorMaterialResult" style="display:none;margin-top:12px;padding:12px;background:rgba(255,255,255,.75);border:1.5px solid var(--border2);border-radius:var(--r-sm)"></div>
+  </div>
+</div>
+
+<!-- ═══ 客户知识库 ═══ -->
+<div class="page" id="page-knowledge-customer">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>客户知识库</em></div><div class="pg-sub">将客户资料解析与 AI 联网补充整理为一份可编辑总资料；不会自动参与内容生产</div></div>
+    <div class="acts">
+      <button class="btn btn-o btn-sm" onclick="loadCustomerKnowledge()">刷新</button>
+      <button class="btn btn-p btn-sm" onclick="syncCustomerKnowledge()">整理现有资料</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">引用情报概览（只读）</span><div class="card-sub">来自爬取记录，仅供运营判断，不会写入客户总资料</div></div></div>
+    <div id="knowledgeCitationSummary" style="font-size:12px;color:var(--text3)">请选择客户后查看</div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">保存已确认口径</button></div>
+    <div class="fld" style="margin-bottom:0"><textarea id="knowledgeCustomerContent" rows="24" placeholder="整理现有资料后，在这里维护运营备注和已确认口径"></textarea></div>
+  </div>
+</div>
+
+<!-- ═══ 竞品知识库 ═══ -->
+<div class="page" id="page-knowledge-competitors">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>竞品知识库</em></div><div class="pg-sub">按竞品名称分开维护；整理时只使用当日实体、全平台累计引用最高的 12 篇文章正文和上传资料</div></div>
+    <div class="acts">
+      <button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
+      <button class="btn btn-p btn-sm" onclick="syncCompetitorKnowledge()">整理现有资料</button>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">竞品总资料</span><div class="card-sub" id="knowledgeCompetitorStatus">请选择客户后查看</div></div><div class="acts"><button class="btn btn-o btn-sm" onclick="addCompetitorKnowledgeSection()">新增竞品</button><button class="btn btn-p btn-sm" onclick="saveCompetitorKnowledge()">保存</button></div></div>
+    <div id="knowledgeCompetitorSections"><div style="font-size:12px;color:var(--text3)">请选择客户后查看</div></div>
   </div>
 </div>
 

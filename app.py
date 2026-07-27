@@ -48,6 +48,13 @@ from services.record_stats import (
 )
 from services.record_trends import build_article_pool, build_group_mention_trend, build_question_trend, build_source_trend
 from services.selection_evidence import SelectionEvidenceService
+from services.knowledge_base import KnowledgeBaseService
+from services.competitor_knowledge import (
+    build_competitor_master_input,
+    build_high_frequency_competitor_prompt,
+    collect_high_frequency_article_sources,
+    merge_competitor_master_markdown,
+)
 from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
@@ -1436,6 +1443,81 @@ def material_package_output_dir(cid):
 def competitor_package_output_dir(cid):
     return Path(D) / "competitor_material_packages" / cid
 
+def knowledge_base_service():
+    return KnowledgeBaseService(Path(D) / "knowledge_base")
+
+def competitor_knowledge_article_cache_path(cid):
+    return Path(D) / "knowledge_base" / cid / "competitor_article_sources.json"
+
+def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True):
+    all_records = load_client_records(cid)
+    source_date = max((str(record.get("today") or "").strip() for record in all_records), default="")
+    records = [record for record in all_records if record.get("today") == source_date] if source_date else []
+    entities = default_competitor_entities(cid, source_date) if source_date else []
+    hit_report = load_competitor_article_body_hit_report(cid, source_date) if source_date else None
+    upload_path = competitor_package_output_dir(cid) / "latest_upload_competitors.md"
+    fallback = build_competitor_master_input(
+        [item.get("name", "") for item in entities],
+        (hit_report or {}).get("body_hits", []),
+        upload_path.read_text(encoding="utf-8", errors="ignore") if upload_path.exists() else "",
+    )
+    if not records:
+        return fallback
+
+    article_cache_path = competitor_knowledge_article_cache_path(cid)
+    article_cache_body = load_json(article_cache_path, {"articles": {}}) if article_cache_path.exists() else {"articles": {}}
+    local_cache = article_cache_body.get("articles", {}) if isinstance(article_cache_body, dict) else {}
+    stage_dir = reference_intel.reference_stage_dir(F_REFERENCE_INTELLIGENCE, cid, source_date, today_str)
+    cached = dict(local_cache) if isinstance(local_cache, dict) else {}
+    cached.update(reference_intel.load_reference_fetch_cache(stage_dir, load))
+    fetch_fn = fetch_fn or (lambda url: fetch_article_text(url, timeout=25, max_chars=12000, browser_fallback=True))
+    articles = collect_high_frequency_article_sources(records, cached, fetch_fn, limit=12)
+    saved_cache = dict(local_cache) if isinstance(local_cache, dict) else {}
+    for article in articles:
+        if article.get("ok") and article.get("content"):
+            saved_cache[article["url"]] = {
+                key: article.get(key, "")
+                for key in ("ok", "title", "description", "content", "error")
+            }
+    if persist_cache and saved_cache:
+        save_json(article_cache_path, {"articles": saved_cache, "source_date": source_date})
+
+    usable = [article for article in articles if article.get("ok") and article.get("content")]
+    if not usable:
+        return fallback
+    ask_text = ask_text or (lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, get_settings()))
+    try:
+        high_frequency = str(ask_text(
+            build_high_frequency_competitor_prompt([item.get("name", "") for item in entities], usable),
+            6000,
+        ) or "")
+    except Exception:
+        return fallback
+    return merge_competitor_master_markdown(high_frequency, fallback)
+
+def knowledge_citation_summary(cid):
+    from services.record_insights import build_record_insights
+
+    client = next((item for item in load(F_CLIENTS, []) if item.get("id") == cid), {})
+    insights = build_record_insights(
+        load_client_records(cid),
+        own_brand=client.get("brand") or client.get("name") or "",
+        own_client_name=client.get("name") or "",
+    )
+    return {
+        "total_records": insights.get("total_records", 0),
+        "total_refs": insights.get("total_refs", 0),
+        "mention_rate": insights.get("mention_rate", 0),
+        "top_articles": [
+            {key: item.get(key, "") for key in ("title", "url", "platform", "count")}
+            for item in (insights.get("top_articles") or [])[:10]
+        ],
+        "mentioned_entities": [
+            {key: item.get(key, "") for key in ("name", "type", "count")}
+            for item in (insights.get("mentioned_entities") or [])[:10]
+        ],
+    }
+
 def competitor_upload_dir(cid):
     return competitor_package_output_dir(cid) / "uploads"
 
@@ -1789,6 +1871,79 @@ def expand_competitor_web(cid):
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
     return jsonify(result)
+
+
+@app.route("/api/knowledge/customer/<cid>", methods=["GET"])
+def get_customer_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({
+        "ok": True,
+        **knowledge_base_service().load_customer_master(cid),
+        "citation_summary": knowledge_citation_summary(cid),
+    })
+
+
+@app.route("/api/knowledge/customer/<cid>/sync", methods=["POST"])
+def sync_customer_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    payload = request.get_json(silent=True) or {}
+    result = knowledge_base_service().sync_customer_master(
+        cid,
+        material_package_output_dir(cid),
+        overwrite=bool(payload.get("overwrite")),
+    )
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/customer/<cid>", methods=["PUT"])
+def save_customer_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        result = knowledge_base_service().save_customer_master(
+            cid,
+            str((request.get_json(silent=True) or {}).get("content") or ""),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/competitors/<cid>", methods=["GET"])
+def get_competitor_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    return jsonify({"ok": True, **knowledge_base_service().load_competitor_master(cid)})
+
+
+@app.route("/api/knowledge/competitors/<cid>/sync", methods=["POST"])
+def sync_competitor_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    payload = request.get_json(silent=True) or {}
+    result = knowledge_base_service().sync_competitor_master(
+        cid,
+        competitor_knowledge_input(cid),
+        overwrite=bool(payload.get("overwrite")),
+    )
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/competitors/<cid>", methods=["PUT"])
+def save_competitor_knowledge_master(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        result = knowledge_base_service().save_competitor_master(
+            cid,
+            str((request.get_json(silent=True) or {}).get("content") or ""),
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
+
 
 @app.route("/api/competitors/<cid>/upload.md", methods=["GET"])
 def download_competitor_upload_markdown(cid):
