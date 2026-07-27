@@ -359,6 +359,17 @@ class CompetitorMasterTests(unittest.TestCase):
         self.assertIn("不使用外部知识", prompt)
         self.assertIn("## 真实竞品名称", prompt)
 
+    def test_detailed_competitor_prompt_requires_an_overview_before_facts(self):
+        from services.competitor_knowledge import build_high_frequency_competitor_prompt
+
+        prompt = build_high_frequency_competitor_prompt(
+            ["竞品甲"],
+            [{"title": "高频文章", "url": "https://example.com/a", "content": "竞品甲提供整装服务。"}],
+        )
+
+        self.assertIn("先写 1–3 句客观概述", prompt)
+        self.assertIn("概述后再用条目列出", prompt)
+
     def test_merging_high_frequency_output_keeps_one_section_per_competitor(self):
         from services.competitor_knowledge import merge_competitor_master_markdown
 
