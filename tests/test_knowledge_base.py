@@ -319,7 +319,10 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")
         script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("navTo('knowledge-customer'", template)
+        self.assertIn("navTo('knowledge'", template)
+        self.assertIn('data-nav="knowledge"', template)
+        self.assertIn("function openKnowledge", script)
+        self.assertNotIn("客户知识库</div>", template.split('<div class="sidebar">', 1)[1].split('<div class="s-nav" onclick="navTo(\'content\'', 1)[0])
         self.assertIn('id="page-knowledge-customer"', template)
         self.assertIn('id="knowledgeCustomerContent"', template)
         self.assertIn('id="knowledgeCitationSummary"', template)
@@ -336,7 +339,7 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")
         script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("navTo('knowledge-competitors'", template)
+        self.assertIn("openKnowledge('competitors')", template)
         self.assertIn('id="page-knowledge-competitors"', template)
         self.assertIn('id="knowledgeCompetitorSections"', template)
         self.assertIn("function loadCompetitorKnowledge()", script)

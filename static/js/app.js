@@ -1,9 +1,12 @@
 function navTo(page, el) {
+  if (page === 'knowledge') page = 'knowledge-customer';
   document.querySelectorAll('.page').forEach(p => p.classList.remove('on'));
   document.querySelectorAll('.s-nav').forEach(n => n.classList.remove('on'));
   document.querySelectorAll('.t-ni').forEach(n => n.classList.remove('on'));
   document.getElementById('page-' + page)?.classList.add('on');
-  if (el) el.classList.add('on');
+  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'quality';
+  const activeNav = knowledgePage ? document.querySelector('[data-nav="knowledge"]') : el;
+  if (activeNav) activeNav.classList.add('on');
   // page-specific load
   if (page === 'content') loadContent();
   if (page === 'quality') { loadQualityGateArticles(); loadQualityPolicy(); }
@@ -18,6 +21,9 @@ function navTo(page, el) {
   if (page === 'knowledge-competitors') loadCompetitorKnowledge();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
+}
+function openKnowledge(section) {
+  navTo(section === 'quality' ? 'quality' : 'knowledge-' + section, null);
 }
 // ── State ─────────────────────────────────────────────
 let currentClientId = '';
