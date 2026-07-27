@@ -135,6 +135,44 @@ def build_question_trend(records, question):
     }
 
 
+def build_question_article_list(records):
+    """Aggregate cited articles from the records of one exact question."""
+    articles = {}
+    total_refs = 0
+    for record in records or []:
+        ai_platform = record.get("source_platform") or "doubao"
+        for ref in record.get("refs") or []:
+            if not isinstance(ref, dict):
+                continue
+            title = ref.get("title") or ""
+            url = ref.get("url") or ""
+            key = canonical_article_key(title, url)
+            if not key:
+                continue
+            total_refs += 1
+            article = articles.setdefault(key, {
+                "title": title,
+                "url": url,
+                "count": 0,
+                "source_platforms": set(),
+                "ai_platforms": set(),
+            })
+            article["count"] += 1
+            if ref.get("platform"):
+                article["source_platforms"].add(ref["platform"])
+            article["ai_platforms"].add(ai_platform)
+
+    rows = [{
+        "title": item["title"],
+        "url": item["url"],
+        "count": item["count"],
+        "source_platforms": sorted(item["source_platforms"]),
+        "ai_platforms": sorted(item["ai_platforms"]),
+    } for item in articles.values()]
+    rows.sort(key=lambda item: (-item["count"], item["title"], item["url"]))
+    return {"total_records": len(records or []), "total_refs": total_refs, "articles": rows[:50]}
+
+
 def build_article_pool(records, anchor_date=None):
     """Build the selected day's new and retained cited-article pool."""
     records = list(records or [])

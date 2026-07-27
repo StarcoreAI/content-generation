@@ -53,7 +53,13 @@ from services.competitor_materials import (
 from services.record_stats import (
     build_raw_platform_stats,
 )
-from services.record_trends import build_article_pool, build_group_mention_trend, build_question_trend, build_source_trend
+from services.record_trends import (
+    build_article_pool,
+    build_group_mention_trend,
+    build_question_article_list,
+    build_question_trend,
+    build_source_trend,
+)
 from services.selection_evidence import SelectionEvidenceService
 from services.knowledge_base import KnowledgeBaseService
 from services.competitor_knowledge import (
@@ -1330,6 +1336,24 @@ def question_trend():
     })
 
 
+@app.route("/api/records/question_articles", methods=["GET"])
+def question_articles():
+    client_id = (request.args.get("client_id") or "").strip()
+    if not client_id or not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    question = (request.args.get("question") or "").strip()
+    if not question:
+        return jsonify({"error": "question_required"}), 400
+    group_id = (request.args.get("group_id") or "").strip()
+    records = load_client_records(client_id, group_id=group_id or None, question=question)
+    return jsonify({
+        "client_id": client_id,
+        "group_id": group_id,
+        "question": question,
+        **build_question_article_list(records),
+    })
+
+
 @app.route("/api/records/group_trend", methods=["GET"])
 def group_trend():
     client_id = (request.args.get("client_id") or "").strip()
@@ -1504,12 +1528,24 @@ def knowledge_base_service():
 def competitor_knowledge_article_cache_path(cid):
     return Path(D) / "knowledge_base" / cid / "competitor_article_sources.json"
 
-def competitor_knowledge_context(cid):
+def competitor_knowledge_context(cid, date_str="", group_id="", task_id="", platform=""):
     all_records = load_client_records(cid)
-    source_date = max((str(record.get("today") or "").strip() for record in all_records), default="")
-    records = [record for record in all_records if record.get("today") == source_date] if source_date else []
-    entities = default_competitor_entities(cid, source_date) if source_date else []
-    hit_report = load_competitor_article_body_hit_report(cid, source_date) if source_date else None
+    source_date = str(date_str or "").strip() or max(
+        (str(record.get("today") or "").strip() for record in all_records), default=""
+    )
+    records = load_client_records(
+        cid,
+        date=source_date,
+        group_id=group_id or None,
+        task_id=task_id or None,
+        platform=platform or None,
+    ) if source_date else []
+    entities = default_competitor_entities(
+        cid, source_date, group_id=group_id, task_id=task_id, platform=platform
+    ) if source_date else []
+    hit_report = load_competitor_article_body_hit_report(
+        cid, source_date, task_id=task_id, group_id=group_id, platform=platform
+    ) if source_date else None
     package_dir = competitor_package_output_dir(cid)
     upload_path = package_dir / "latest_upload_competitors.md"
     web_path = package_dir / "latest_web_competitors.md"
@@ -1523,8 +1559,11 @@ def competitor_knowledge_context(cid):
     )
     return source_date, records, entities, fallback
 
-def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True):
-    source_date, records, entities, fallback = competitor_knowledge_context(cid)
+def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True,
+                               date_str="", group_id="", task_id="", platform=""):
+    source_date, records, entities, fallback = competitor_knowledge_context(
+        cid, date_str=date_str, group_id=group_id, task_id=task_id, platform=platform
+    )
     if not records:
         return fallback
 
@@ -1622,9 +1661,15 @@ def run_client_material_web_expansion(cid):
         search_fn=search_fn,
     )
 
-def default_competitor_entities(cid, date_str=None, limit=10):
+def default_competitor_entities(cid, date_str=None, limit=10, group_id="", task_id="", platform=""):
     client = next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None) or {}
-    records = load_client_records(cid, date=date_str or today_str())
+    records = load_client_records(
+        cid,
+        date=date_str or today_str(),
+        group_id=group_id or None,
+        task_id=task_id or None,
+        platform=platform or None,
+    )
     from services.record_insights import build_record_insights
     insights = build_record_insights(
         records,
@@ -1977,7 +2022,13 @@ def sync_competitor_knowledge_master(cid):
     payload = request.get_json(silent=True) or {}
     result = knowledge_base_service().sync_competitor_master(
         cid,
-        competitor_knowledge_input(cid),
+        competitor_knowledge_input(
+            cid,
+            date_str=str(payload.get("date") or "").strip(),
+            group_id=str(payload.get("group_id") or "").strip(),
+            task_id=str(payload.get("task_id") or "").strip(),
+            platform=str(payload.get("platform") or "").strip(),
+        ),
         overwrite=bool(payload.get("overwrite")),
     )
     return jsonify({"ok": True, **result})

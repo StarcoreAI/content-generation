@@ -365,6 +365,30 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertNotIn("来源性质", content)
             self.assertNotIn("https://", content)
 
+    def test_daily_competitor_extraction_forwards_current_scope(self):
+        with isolated_knowledge_app():
+            create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "owner_username": "owner"}])
+            captured = {}
+            original = geo_app.competitor_knowledge_input
+            geo_app.competitor_knowledge_input = lambda client_id, **scope: captured.update(
+                {"client_id": client_id, **scope}
+            ) or "# 竞品总资料\n"
+            try:
+                client = geo_app.app.test_client()
+                client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
+                response = client.post("/api/knowledge/competitors/client-a/sync", json={
+                    "date": "2026-07-26", "group_id": "group-a", "task_id": "task-a", "platform": "qwen",
+                })
+            finally:
+                geo_app.competitor_knowledge_input = original
+
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(captured, {
+                "client_id": "client-a", "date_str": "2026-07-26", "group_id": "group-a",
+                "task_id": "task-a", "platform": "qwen",
+            })
+
     def test_competitor_knowledge_get_initializes_from_existing_materials(self):
         with isolated_knowledge_app() as root:
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")

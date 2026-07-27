@@ -207,7 +207,9 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertIn('id="dailyAiPlatformCompare"', html)
-        self.assertIn('id="dailyEntityMentions"', html)
+        self.assertIn('id="dailyCompetitorKnowledgeBtn"', html)
+        self.assertIn('id="dailyCompetitorKnowledgeStatus"', html)
+        self.assertNotIn('id="dailyEntityMentions"', html)
         self.assertNotIn('id="dailyPlatformBars"', html)
         self.assertNotIn('id="dailyRefPlatformList"', html)
         self.assertIn("async function loadDailyInsights(", html)
@@ -218,27 +220,16 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("来源平台分布", html)
         self.assertNotIn("zero_ref_records", html)
 
-    def test_daily_entity_mentions_can_be_deleted_from_aggregate_list(self):
+    def test_daily_high_frequency_competitor_extraction_replaces_entity_generation(self):
         html = read_frontend_source()
 
-        self.assertIn("function renderDailyEntityDeleteButton(", html)
-        self.assertIn("async function deleteDailyEntity(", html)
-        self.assertIn("/api/daily/entities/delete", html)
-        self.assertIn("renderDailyEntityDeleteButton(e.name)", html)
-        self.assertIn("deleteDailyEntity(decodeURIComponent", html)
-
-    def test_daily_entity_status_is_shown_near_mentions(self):
-        html = read_frontend_source()
-
-        self.assertIn('id="dailyEntityStatus"', html)
-        self.assertIn('id="dailyEntityGenerateBtn"', html)
-        self.assertIn("async function loadDailyEntityStatus(", html)
-        self.assertIn("async function generateDailyEntities(", html)
-        self.assertIn("function renderDailyEntityStatus(", html)
-        self.assertIn("/api/daily/entity_status", html)
-        self.assertIn("/api/daily/entities/generate", html)
-        self.assertIn("实体识别", html)
-        self.assertIn("生成竞品提及", html)
+        self.assertIn("async function extractDailyCompetitorKnowledge(", html)
+        self.assertIn("正在从高频引用文章提取竞品资料", html)
+        self.assertIn("/api/knowledge/competitors/", html)
+        self.assertIn("/sync', 'POST'", html)
+        self.assertNotIn('id="dailyEntityGenerateBtn"', html)
+        self.assertNotIn("async function generateDailyEntities(", html)
+        self.assertNotIn("/api/daily/entities/generate", html)
 
     def test_reference_intelligence_page_is_wired(self):
         html = read_frontend_source()

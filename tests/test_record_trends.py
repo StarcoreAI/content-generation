@@ -10,6 +10,7 @@ from services.auth import create_user
 from services.record_trends import (
     build_article_pool,
     build_group_mention_trend,
+    build_question_article_list,
     build_question_trend,
     build_source_trend,
     source_domain,
@@ -113,6 +114,21 @@ class RecordTrendTests(unittest.TestCase):
             "date": "",
             "new_entries": [],
             "retained": [],
+        })
+
+    def test_question_article_list_merges_same_article_for_one_exact_question(self):
+        articles = build_question_article_list([
+            item for item in self.records if item["question"] == "装修公司怎么选"
+        ])
+
+        self.assertEqual(articles["total_records"], 4)
+        self.assertEqual(articles["total_refs"], 6)
+        self.assertEqual(articles["articles"][0], {
+            "title": "同一篇文章 - 媒体",
+            "url": "https://www.example.com/articles/1?from=ai",
+            "count": 4,
+            "source_platforms": ["媒体"],
+            "ai_platforms": ["deepseek", "qwen"],
         })
 
     def test_source_domain_normalizes_urls_and_falls_back_to_platform(self):
@@ -257,6 +273,11 @@ class RecordTrendRouteTests(unittest.TestCase):
             self.assertEqual(trend.status_code, 200)
             self.assertEqual(trend.get_json()["trend"]["deepseek"][0]["mentioned"], True)
             self.assertEqual(alice.get("/api/records/article_pool?client_id=alice-client").status_code, 200)
+            question_articles = alice.get(
+                "/api/records/question_articles?client_id=alice-client&group_id=group-1&question=装修公司怎么选"
+            )
+            self.assertEqual(question_articles.status_code, 200)
+            self.assertEqual(question_articles.get_json()["articles"][0]["count"], 1)
             source_trend = alice.get("/api/records/source_trend?client_id=alice-client")
             self.assertEqual(source_trend.status_code, 200)
             self.assertEqual(source_trend.get_json()["series"][0]["source"], "example.com")
@@ -274,6 +295,10 @@ class RecordTrendRouteTests(unittest.TestCase):
                 404,
             )
             self.assertEqual(bob.get("/api/records/source_trend?client_id=alice-client").status_code, 404)
+            self.assertEqual(
+                bob.get("/api/records/question_articles?client_id=alice-client&question=装修公司怎么选").status_code,
+                404,
+            )
             self.assertEqual(
                 bob.get("/api/records/group_trend?client_id=alice-client&group_id=group-1").status_code,
                 404,
@@ -319,6 +344,17 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("sourceTrend.dates", script)
         self.assertIn("record-source-bar", script)
         self.assertIn("实际爬取次数", script)
+
+    def test_records_library_wires_question_article_view(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("按具体问题看引用文章", template)
+        self.assertIn('id="recordQuestionArticleFilter"', template)
+        self.assertIn('id="recordQuestionArticles"', template)
+        self.assertIn("async function loadRecordQuestionArticles", script)
+        self.assertIn("/api/records/question_articles", script)
 
     def test_records_library_removes_views_duplicated_by_daily_data(self):
         root = Path(__file__).resolve().parents[1]

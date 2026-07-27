@@ -119,15 +119,15 @@
     </div>
     <div class="card">
       <div class="card-hd">
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-          <span class="card-title">竞品/门店提及</span>
-          <button class="btn btn-o btn-sm" id="dailyEntityGenerateBtn" onclick="generateDailyEntities()" title="按当前筛选范围生成竞品提及">
-            <i class="ti ti-sparkles"></i> 生成竞品提及
-          </button>
+        <div>
+          <span class="card-title">高频引用文章竞品资料</span>
+          <div style="font-size:11px;color:var(--text3);margin-top:3px" id="dailyCompetitorKnowledgeStatus">从当前范围内的高频引用文章补充竞品资料</div>
         </div>
-        <span style="font-size:11px;color:var(--text3)" id="dailyEntityStatus">实体识别状态待加载</span>
+        <button class="btn btn-p btn-sm" id="dailyCompetitorKnowledgeBtn" onclick="extractDailyCompetitorKnowledge()" title="从当前日期和 AI 平台的高频引用文章补充竞品资料">
+          <i class="ti ti-sparkles"></i> 补充竞品资料
+        </button>
       </div>
-      <div id="dailyEntityMentions"><div style="color:var(--text3);font-size:12px">暂无数据</div></div>
+      <div style="color:var(--text2);font-size:12px;line-height:1.7">从当前范围内累计引用最高的 12 篇文章提取竞品信息，完成后写入竞品知识库，供运营继续编辑。</div>
     </div>
   </div>
 
@@ -279,6 +279,16 @@
     <div id="recordSourceTrend"><div style="color:var(--text3);font-size:12px">加载中...</div></div>
   </div>
 
+  <div class="card">
+    <div class="card-hd">
+      <div><span class="card-title">按具体问题看引用文章</span><div class="card-sub">跨日期汇总该问题的实际引用文章</div></div>
+      <select id="recordQuestionArticleFilter" onchange="loadRecordQuestionArticles()" style="font-size:11px;padding:5px 8px;max-width:420px">
+        <option value="">请先选择问题组</option>
+      </select>
+    </div>
+    <div id="recordQuestionArticles"><div style="color:var(--text3);font-size:12px">请先选择问题组</div></div>
+  </div>
+
 </div>
 
 <!-- ═══ 引用情报分析 ═══ -->
@@ -417,7 +427,6 @@
     <div><div class="pg-title">✦ <em>竞品知识库</em></div><div class="pg-sub">按竞品名称分开维护；整理时合并竞品资料解析、联网扩展和全平台累计引用最高的 12 篇文章</div></div>
     <div class="acts">
       <button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
-      <button class="btn btn-p btn-sm" onclick="syncCompetitorKnowledge()">整合已有资料</button>
     </div>
   </div>
   <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>

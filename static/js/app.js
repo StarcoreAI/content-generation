@@ -1214,6 +1214,7 @@ function showCreateGroup() {
 async function loadGroups() {
   if (!currentClientId) return;
   const groups = await api('/api/groups/' + currentClientId);
+  window._recordGroups = groups;
   const el = document.getElementById('groupList');
   // 更新记录库问题组下拉
   const filter = document.getElementById('rec-group-filter');
@@ -1621,6 +1622,70 @@ async function loadRecordsLibraryViews() {
   loadRecordArticlePool();
   loadRecordSourceTrend();
   loadQueryScenes();
+  populateRecordQuestionArticleFilter();
+  loadRecordQuestionArticles();
+}
+
+function populateRecordQuestionArticleFilter() {
+  const select = document.getElementById('recordQuestionArticleFilter');
+  const groupId = document.getElementById('rec-group-filter')?.value || '';
+  if (!select) return;
+  const group = (window._recordGroups || []).find(item => item.id === groupId);
+  const previous = select.value;
+  if (!group) {
+    select.innerHTML = '<option value="">请先选择问题组</option>';
+    return;
+  }
+  const questions = group.questions || [];
+  select.innerHTML = questions.length
+    ? questions.map(question => `<option value="${escHtml(question)}">${escHtml(question)}</option>`).join('')
+    : '<option value="">该问题组暂无问题</option>';
+  select.value = questions.includes(previous) ? previous : (questions[0] || '');
+}
+
+function renderRecordQuestionArticles(data) {
+  const el = document.getElementById('recordQuestionArticles');
+  if (!el) return;
+  if (!data?.articles?.length) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">该问题暂无引用文章</div>';
+    return;
+  }
+  const rows = data.articles.map((article, index) => {
+    const title = escHtml(article.title || '未命名文章');
+    const link = article.url
+      ? `<a href="${escHtml(article.url)}" target="_blank" rel="noopener" style="color:#312e81;text-decoration:none">${title}</a>`
+      : title;
+    const sources = (article.source_platforms || []).map(escHtml).join('、') || '未知来源';
+    const platforms = (article.ai_platforms || []).map(platform => escHtml(CRAWL_PLATFORM_NAMES[platform] || platform)).join('、');
+    return `<div style="display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid var(--border2)">
+      <span style="width:22px;height:22px;border-radius:7px;background:var(--pri-ll);color:var(--pri);font-size:11px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${index + 1}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-size:12px;font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${title}">${link}</div>
+        <div style="font-size:10px;color:var(--text3);margin-top:4px">来源：${sources}${platforms ? ` · 被 ${platforms} 引用` : ''}</div>
+      </div>
+      <span style="font-size:11px;font-weight:800;color:var(--pri);white-space:nowrap">被引 ${article.count} 次</span>
+    </div>`;
+  }).join('');
+  el.innerHTML = `<div style="font-size:11px;color:var(--text3);margin-bottom:6px">${data.total_records} 条实际爬取记录 · ${data.total_refs} 次引用</div>${rows}`;
+}
+
+async function loadRecordQuestionArticles() {
+  const el = document.getElementById('recordQuestionArticles');
+  const question = document.getElementById('recordQuestionArticleFilter')?.value || '';
+  const groupId = document.getElementById('rec-group-filter')?.value || '';
+  if (!el) return;
+  if (!currentClientId || !groupId || !question) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">请先选择问题组和具体问题</div>';
+    return;
+  }
+  el.innerHTML = '<div style="color:var(--text3);font-size:12px">正在汇总引用文章...</div>';
+  try {
+    const data = await api(`/api/records/question_articles?client_id=${encodeURIComponent(currentClientId)}&group_id=${encodeURIComponent(groupId)}&question=${encodeURIComponent(question)}`);
+    if (data?.error) throw new Error(data.error);
+    renderRecordQuestionArticles(data);
+  } catch (error) {
+    el.innerHTML = '<div style="color:var(--text3);font-size:12px">引用文章暂不可用</div>';
+  }
 }
 
 function renderQuerySceneRows(rows) {
@@ -2121,20 +2186,6 @@ async function loadCompetitorKnowledge() {
   }
   renderCompetitorKnowledgeSections(result.content || '');
   setCompetitorKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '按竞品名称分节维护，可直接编辑保存');
-}
-
-async function syncCompetitorKnowledge(overwrite=false) {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId) + '/sync', 'POST', {overwrite});
-  if (result?.error) { toast(result.error, 'err'); return; }
-  if (result.source_update_available && !overwrite) {
-    setCompetitorKnowledgeStatus('上游资料已有更新，当前人工版本未被覆盖');
-    if (!confirm('当日竞品资料已有更新。是否用最新资料覆盖当前人工版本？')) return;
-    return syncCompetitorKnowledge(true);
-  }
-  renderCompetitorKnowledgeSections(result.content || '');
-  setCompetitorKnowledgeStatus(overwrite ? '已使用最新资料重新整理' : '已整理现有资料，可继续编辑');
-  toast('竞品知识库已更新');
 }
 
 function addCompetitorKnowledgeSection() {
@@ -3273,8 +3324,7 @@ async function loadDailyData() {
     window._dailyRecords = [];
     window._dailyPage = 0;
     document.getElementById('dailyTopArticles').innerHTML = '<div style="color:var(--text3);font-size:12px">暂无数据</div>';
-    renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
-    renderDailyEntityStatus({status:'not_found'});
+    renderDailyInsights({ai_platforms:[], top_ref_platforms:[]});
     return;
   }
   // 分页懒加载：只渲染前20条，滚动到底自动加载
@@ -3293,7 +3343,6 @@ async function loadDailyData() {
   // 加载高频引用文章（来源平台分布已合并到 AI 平台分类）
   loadDailyTopArticles(date, groupId, taskId);
   loadDailyInsights(date, groupId, taskId);
-  loadDailyEntityStatus(date, taskId);
 }
 
 async function loadDailyInsights(date, groupId, taskId='') {
@@ -3303,61 +3352,50 @@ async function loadDailyInsights(date, groupId, taskId='') {
     const r = await api(`/api/daily/insights?client_id=${currentClientId}&date=${date}&platform=${currentPlatform}${gParam}${taskParam}`);
     renderDailyInsights(r.insights || {});
   } catch(e) {
-    renderDailyInsights({ai_platforms:[], mentioned_entities:[], top_ref_platforms:[]});
+    renderDailyInsights({ai_platforms:[], top_ref_platforms:[]});
   }
 }
 
-function renderDailyEntityStatus(status) {
-  const el = document.getElementById('dailyEntityStatus');
+function setDailyCompetitorKnowledgeStatus(text, color='var(--text3)') {
+  const el = document.getElementById('dailyCompetitorKnowledgeStatus');
   if (!el) return;
-  const map = {
-    queued: ['实体识别排队中', 'var(--amber)'],
-    running: ['实体识别处理中', 'var(--pri)'],
-    completed: [`实体识别已完成${status?.changed !== undefined ? ` · 更新 ${status.changed} 条` : ''}`, 'var(--teal)'],
-    failed: [`实体识别失败${status?.error ? `：${status.error}` : ''}`, 'var(--red)'],
-    skipped: ['实体识别已跳过', 'var(--text3)'],
-    not_found: ['暂无实体识别任务', 'var(--text3)'],
-    unknown: ['实体识别状态未知', 'var(--text3)']
-  };
-  const [label, color] = map[status?.status || 'unknown'] || map.unknown;
-  el.textContent = label;
+  el.textContent = text;
   el.style.color = color;
 }
 
-async function loadDailyEntityStatus(date, taskId='') {
-  try {
-    const taskParam = taskId ? `&task_id=${encodeURIComponent(taskId)}` : '';
-    const status = await api(`/api/daily/entity_status?client_id=${currentClientId}&date=${date}${taskParam}`);
-    renderDailyEntityStatus(status);
-  } catch(e) {
-    renderDailyEntityStatus({status:'unknown', error:e.message});
-  }
-}
-
-async function generateDailyEntities() {
+async function extractDailyCompetitorKnowledge(overwrite=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const btn = document.getElementById('dailyEntityGenerateBtn');
+  const btn = document.getElementById('dailyCompetitorKnowledgeBtn');
   const oldHtml = btn ? btn.innerHTML : '';
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const groupId = document.getElementById('dailyGroupFilter')?.value || '';
   const taskId = document.getElementById('dailyTaskFilter')?.value || '';
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = '<i class="ti ti-loader-2"></i> 生成中';
+    btn.innerHTML = '<i class="ti ti-loader-2"></i> 正在提取';
   }
+  setDailyCompetitorKnowledgeStatus('正在从高频引用文章提取竞品资料，可能需要数分钟…', 'var(--pri)');
   try {
-    const r = await api('/api/daily/entities/generate', 'POST', {
-      client_id: currentClientId,
+    const r = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId) + '/sync', 'POST', {
       date,
       platform: currentPlatform,
       group_id: groupId,
       task_id: taskId,
+      overwrite,
     });
-    if (r.error) { toast(r.message || r.error, 'err'); return; }
-    renderDailyEntityStatus(r.entity_normalize || {status:'queued'});
-    toast('已开始生成竞品提及');
+    if (r?.error) throw new Error(r.error);
+    if (r.source_update_available && !overwrite) {
+      setDailyCompetitorKnowledgeStatus('发现人工编辑版本，尚未覆盖', 'var(--amber)');
+      if (confirm('竞品知识库已有人工编辑内容。是否用本次提取的资料覆盖？')) {
+        return extractDailyCompetitorKnowledge(true);
+      }
+      return;
+    }
+    setDailyCompetitorKnowledgeStatus('提取完成，已写入竞品知识库，可前往查看和编辑', 'var(--teal)');
+    toast('竞品资料已更新');
   } catch(e) {
-    toast('生成失败：' + e.message, 'err');
+    setDailyCompetitorKnowledgeStatus('提取失败：' + e.message, 'var(--red)');
+    toast('提取失败：' + e.message, 'err');
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -3366,37 +3404,8 @@ async function generateDailyEntities() {
   }
 }
 
-function renderDailyEntityDeleteButton(entityName) {
-  const encodedName = encodeURIComponent(entityName || '');
-  return `<button class="btn btn-danger btn-sm" title="从当前筛选范围删除该实体" onclick="deleteDailyEntity(decodeURIComponent('${encodedName}'))">删除</button>`;
-}
-
-async function deleteDailyEntity(entityName) {
-  if (!currentClientId || !entityName) return;
-  if (!confirm(`确认从当前竞品展示范围删除「${entityName}」？\n原始回答不会删除，只移除这个AI识别实体。`)) return;
-  const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
-  const groupId = document.getElementById('dailyGroupFilter')?.value || '';
-  const taskId = document.getElementById('dailyTaskFilter')?.value || '';
-  try {
-    const r = await api('/api/daily/entities/delete', 'POST', {
-      client_id: currentClientId,
-      date,
-      platform: currentPlatform,
-      group_id: groupId,
-      task_id: taskId,
-      name: entityName
-    });
-    if (!r.ok) { toast(r.error || '删除失败', 'err'); return; }
-    toast(`已删除 ${r.removed || 0} 处实体识别结果`);
-    loadDailyData();
-  } catch(e) {
-    toast('删除失败：' + e.message, 'err');
-  }
-}
-
 function renderDailyInsights(insights) {
   const platforms = insights.ai_platforms || [];
-  const entities = insights.mentioned_entities || [];
   const note = document.getElementById('dailyAiPlatformNote');
   if (note) note.textContent = `共 ${insights.total_records || 0} 条记录`;
   if (typeof insights.mention_rate !== 'undefined') {
@@ -3426,20 +3435,6 @@ function renderDailyInsights(insights) {
         ${refRows || '<div style="font-size:10px;color:var(--text3);margin-top:5px">暂无引用来源</div>'}
       </div>`;
     }).join('') : '<div style="color:var(--text3);font-size:12px">暂无平台数据</div>';
-  }
-
-  const entityEl = document.getElementById('dailyEntityMentions');
-  if (entityEl) {
-    entityEl.innerHTML = entities.length ? entities.slice(0, 12).map((e, i) => `
-      <div style="display:flex;align-items:flex-start;gap:8px;padding:7px 0;border-bottom:1px solid var(--border2)">
-        <span style="width:20px;height:20px;border-radius:6px;background:var(--pink-l);color:var(--pink);font-size:10px;font-weight:900;display:flex;align-items:center;justify-content:center;flex-shrink:0">${i+1}</span>
-        <div style="flex:1;min-width:0">
-          <div style="font-size:12px;font-weight:900;color:#312e81">${escHtml(e.name)} <span class="badge badge-p" style="font-size:9px">${escHtml(e.type || '实体')}</span></div>
-          <div style="font-size:10px;color:var(--text3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escHtml((e.evidence_samples || [])[0] || '')}</div>
-        </div>
-        <span style="font-size:12px;font-weight:900;color:var(--pink);flex-shrink:0">×${escHtml(e.count)}</span>
-        ${renderDailyEntityDeleteButton(e.name)}
-      </div>`).join('') : '<div style="color:var(--text3);font-size:12px">暂无竞品/门店提及数据。可先运行实体抽取 dry-run，确认后再入库。</div>';
   }
 }
 
