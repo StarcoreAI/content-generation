@@ -15,6 +15,7 @@ RESEARCH_DIRECTORIES = (
     "selection_evidence",
     "reference_intelligence",
 )
+KNOWLEDGE_FILES = ("customer_master.md", "competitor_master.md")
 
 
 def _load_json(path, fallback):
@@ -56,6 +57,20 @@ def _copy_client_tree(data_dir, output_dir, directory, client_id):
     return True
 
 
+def _copy_knowledge_masters(data_dir, output_dir, client_id):
+    source_dir = data_dir / "knowledge_base" / client_id
+    target_dir = output_dir / "knowledge_base" / client_id
+    copied = False
+    for filename in KNOWLEDGE_FILES:
+        source = source_dir / filename
+        if not source.is_file():
+            continue
+        target_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target_dir / filename)
+        copied = True
+    return copied
+
+
 def export_content_research_samples(data_dir, output_dir, selectors=DEFAULT_SELECTORS):
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
@@ -82,6 +97,9 @@ def export_content_research_samples(data_dir, output_dir, selectors=DEFAULT_SELE
             directory: _copy_client_tree(data_dir, output_dir, directory, client_id)
             for directory in RESEARCH_DIRECTORIES
         }
+        copied[client_id]["knowledge_masters"] = _copy_knowledge_masters(
+            data_dir, output_dir, client_id,
+        )
     summary = {
         "client_ids": [str(client.get("id") or "") for client in selected_clients],
         "output_dir": str(output_dir.resolve()),

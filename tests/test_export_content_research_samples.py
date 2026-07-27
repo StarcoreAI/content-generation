@@ -34,6 +34,15 @@ class ExportContentResearchSamplesTests(unittest.TestCase):
                 path = root / folder / client_id / filename
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text(f"{client_id}-{folder}", encoding="utf-8")
+            knowledge_dir = root / "knowledge_base" / client_id
+            knowledge_dir.mkdir(parents=True, exist_ok=True)
+            (knowledge_dir / "customer_master.md").write_text(
+                f"{client_id}-客户总资料", encoding="utf-8"
+            )
+            (knowledge_dir / "competitor_master.md").write_text(
+                f"{client_id}-竞品总资料", encoding="utf-8"
+            )
+            (knowledge_dir / "customer_state.json").write_text("{}", encoding="utf-8")
 
     def test_exports_only_selected_clients_and_research_directories(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -50,6 +59,12 @@ class ExportContentResearchSamplesTests(unittest.TestCase):
             self.assertEqual(set(exported_groups), {"cui", "gu"})
             self.assertTrue((output_dir / "material_packages" / "cui" / "latest_injection.md").exists())
             self.assertTrue((output_dir / "reference_intelligence" / "gu" / "fetched_articles.json").exists())
+            self.assertEqual(
+                (output_dir / "knowledge_base" / "cui" / "customer_master.md").read_text(encoding="utf-8"),
+                "cui-客户总资料",
+            )
+            self.assertTrue((output_dir / "knowledge_base" / "gu" / "competitor_master.md").exists())
+            self.assertFalse((output_dir / "knowledge_base" / "cui" / "customer_state.json").exists())
             self.assertFalse((output_dir / "material_packages" / "other").exists())
             self.assertFalse((output_dir / "raw_records.json").exists())
 
