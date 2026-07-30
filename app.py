@@ -2,10 +2,11 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import json, os, re, asyncio, threading, glob, random, uuid, secrets
+import json, os, re, asyncio, threading, glob, random, uuid, secrets, time
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from pathlib import Path
+from urllib.parse import urlsplit
 from flask import Flask, render_template, request, jsonify, redirect, session, url_for, has_request_context, send_file
 from openai import OpenAI
 from services import crawl_tasks as crawl_task_store
@@ -727,20 +728,71 @@ def ai_with_settings(prompt, max_tokens=2000, settings=None):
     return raw
 
 
+def _log_model_call(event, **fields):
+    payload = {
+        "event": event,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        **fields,
+    }
+    print("[model_call] " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
+def _model_error_summary(exc, api_key, prompt):
+    message = str(exc)
+    if api_key:
+        message = message.replace(str(api_key), "[REDACTED]")
+    if prompt:
+        message = message.replace(str(prompt), "[REDACTED]")
+    return message[:500]
+
+
 def ai_with_settings_response(prompt, max_tokens=2000, settings=None):
     s = settings or get_settings()
     if not s.get("api_key"):
         raise Exception("请先在系统设置中配置 API Key")
-    client = OpenAI(api_key=s["api_key"], base_url=s["base_url"].rstrip("/"))
+    base_url = str(s["base_url"] or "").rstrip("/")
+    call_fields = {
+        "call_id": uuid.uuid4().hex[:12],
+        "source": "ai_with_settings_response",
+        "model": str(s.get("model") or ""),
+        "base_url_host": urlsplit(base_url).netloc,
+        "max_tokens": max_tokens,
+    }
+    started_at = time.monotonic()
+    _log_model_call("started", **call_fields)
     kwargs = {
         "model": s["model"],
         "messages": [{"role": "user", "content": prompt}],
     }
     if max_tokens is not None:
         kwargs["max_tokens"] = max_tokens
-    resp = client.chat.completions.create(**kwargs)
-    choice = resp.choices[0]
-    raw = str(getattr(choice.message, "content", "") or "").strip()
+    try:
+        client = OpenAI(api_key=s["api_key"], base_url=base_url)
+        resp = client.chat.completions.create(**kwargs)
+        choice = resp.choices[0]
+        raw = str(getattr(choice.message, "content", "") or "").strip()
+    except Exception as exc:
+        response = getattr(exc, "response", None)
+        headers = getattr(response, "headers", {}) or {}
+        request_id = headers.get("x-request-id") or headers.get("request-id")
+        _log_model_call(
+            "failed",
+            **call_fields,
+            elapsed_ms=round((time.monotonic() - started_at) * 1000),
+            error_type=type(exc).__name__,
+            error_message=_model_error_summary(exc, s.get("api_key"), prompt),
+            upstream_status=getattr(response, "status_code", None) or getattr(exc, "status_code", None),
+            upstream_request_id=request_id,
+        )
+        raise
+    _log_model_call(
+        "finished",
+        **call_fields,
+        elapsed_ms=round((time.monotonic() - started_at) * 1000),
+        response_model=str(getattr(resp, "model", "") or s.get("model", "")),
+        finish_reason=str(getattr(choice, "finish_reason", "") or ""),
+        response_length=len(raw),
+    )
     return raw, {
         "model": str(getattr(resp, "model", "") or s.get("model", "")),
         "finish_reason": str(getattr(choice, "finish_reason", "") or ""),

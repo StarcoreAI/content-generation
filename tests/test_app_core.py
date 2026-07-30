@@ -155,6 +155,65 @@ class CoreFunctionTests(unittest.TestCase):
             "response_length": 4,
         })
 
+    def test_ai_with_settings_response_logs_safe_start_and_finish_events(self):
+        class FakeChoice:
+            message = type("Message", (), {"content": "body"})
+            finish_reason = "stop"
+
+        class FakeCompletions:
+            def create(self, **_kwargs):
+                return type("Response", (), {"model": "actual-model", "choices": [FakeChoice()]})
+
+        class FakeOpenAI:
+            def __init__(self, **_kwargs):
+                self.chat = type("Chat", (), {"completions": FakeCompletions()})()
+
+        with patch.object(geo_app, "OpenAI", FakeOpenAI), patch("builtins.print") as mock_print:
+            geo_app.ai_with_settings_response(
+                "private prompt content",
+                max_tokens=4321,
+                settings={"api_key": "top-secret", "base_url": "https://api.example.com/v1", "model": "configured-model"},
+            )
+
+        events = [
+            json.loads(call.args[0].removeprefix("[model_call] "))
+            for call in mock_print.call_args_list
+            if call.args and str(call.args[0]).startswith("[model_call] ")
+        ]
+        self.assertEqual([event["event"] for event in events], ["started", "finished"])
+        self.assertEqual(events[0]["model"], "configured-model")
+        self.assertEqual(events[0]["base_url_host"], "api.example.com")
+        self.assertEqual(events[0]["max_tokens"], 4321)
+        self.assertEqual(events[0]["call_id"], events[1]["call_id"])
+        self.assertGreaterEqual(events[1]["elapsed_ms"], 0)
+        rendered_events = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("top-secret", rendered_events)
+        self.assertNotIn("private prompt content", rendered_events)
+
+    def test_ai_with_settings_response_logs_safe_failure_event(self):
+        class FailingOpenAI:
+            def __init__(self, **_kwargs):
+                raise RuntimeError("upstream connection closed")
+
+        with patch.object(geo_app, "OpenAI", FailingOpenAI), patch("builtins.print") as mock_print:
+            with self.assertRaisesRegex(RuntimeError, "upstream connection closed"):
+                geo_app.ai_with_settings_response(
+                    "private prompt content",
+                    settings={"api_key": "top-secret", "base_url": "https://api.example.com/v1", "model": "configured-model"},
+                )
+
+        events = [
+            json.loads(call.args[0].removeprefix("[model_call] "))
+            for call in mock_print.call_args_list
+            if call.args and str(call.args[0]).startswith("[model_call] ")
+        ]
+        self.assertEqual([event["event"] for event in events], ["started", "failed"])
+        self.assertEqual(events[1]["error_type"], "RuntimeError")
+        self.assertIn("upstream connection closed", events[1]["error_message"])
+        rendered_events = json.dumps(events, ensure_ascii=False)
+        self.assertNotIn("top-secret", rendered_events)
+        self.assertNotIn("private prompt content", rendered_events)
+
     def test_ai_json_records_parsing_diagnostics_in_planning_context(self):
         class FakeChoice:
             message = type("Message", (), {"content": "{}"})
