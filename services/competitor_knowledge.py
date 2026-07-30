@@ -2,7 +2,27 @@
 import re
 
 from services.knowledge_base import clean_knowledge_markdown, is_short_placeholder_section
-from services.reference_intelligence import collect_reference_articles
+
+
+def _collect_referenced_articles(records, limit=20):
+    by_url, order = {}, []
+    for record in records or []:
+        for ref in record.get("refs") or []:
+            url = str(ref.get("url") or "").strip()
+            if not url.startswith(("http://", "https://")):
+                continue
+            if url not in by_url:
+                by_url[url] = {
+                    "url": url, "source_title": str(ref.get("title") or ""),
+                    "platform": str(ref.get("platform") or ""),
+                    "citation_count": 0, "_index": len(order),
+                }
+                order.append(url)
+            by_url[url]["citation_count"] += 1
+    result = sorted(by_url.values(), key=lambda item: (-item["citation_count"], item["_index"]))
+    for item in result:
+        item.pop("_index", None)
+    return result[:limit] if limit else result
 
 
 def _real_name(value):
@@ -30,7 +50,7 @@ def _upload_sections(markdown):
 def collect_high_frequency_article_sources(records, cached_by_url, fetcher, limit=12):
     """Fetch the globally most-cited references, preferring an existing body cache."""
     sources = []
-    for reference in collect_reference_articles(records, limit=limit):
+    for reference in _collect_referenced_articles(records, limit=limit):
         url = reference["url"]
         cached = (cached_by_url or {}).get(url)
         if isinstance(cached, dict) and cached.get("ok") and str(cached.get("content") or "").strip():
@@ -75,12 +95,13 @@ def build_high_frequency_competitor_prompt(competitors, articles, batch_index=1,
 
 硬规则：
 1. 只使用以下文章正文，不使用外部知识，不联网搜索，不补充文章没有写出的事实。
-2. 只整理真实品牌名、机构名、门店名、公司名，或专家、医生、设计师、顾问等真实个人名称；禁止 A/B/C、竞品1、竞品2、某机构等占位名称。
-3. 不拉踩、不排名、不写推荐结论，不为了突出客户品牌贬低竞品。
-4. 这是详尽事实抽取，不写摘要：尽量保留文章中每一条明确、可核对的竞品事实。定位、业务/项目、服务动作、地区/网点、流程、团队、售后、适合人群、价格、资质、案例、效果、排名和数字等，只要文章明确写出就分别列出；不同事实不得泛化合并或因同类而省略。
-5. 每个竞品按名称单独分节；没有可用信息就不要输出该竞品；不要输出空栏目、来源标签、URL、解释或选购建议。
-6. 输出 Markdown。每个分节必须以“## 真实竞品名称”开头；标题下先写 1–3 句客观概述，作为自然段，不加“概述”标签。概述只能归纳下方明确事实，不能新增判断，也不要和条目逐句重复。
-7. 概述后再用条目列出全部可核对的详细事实。
+2. 先判断文章的主要介绍或比较对象，只为这些主要对象建立竞品分节并收集资料。关联实体只能作为主要对象的一条事实中的所属、任职、团队、合作或服务关系，不另建竞品分节、不单独收集。比如主要介绍医生时，医院只是所属关系，只收集医生资料；主要介绍学校时，老师只是学校信息，只收集学校资料。只有某个关联实体本身也被文章独立、持续地介绍或横向比较时，才可视为另一个主要对象。
+3. 主要对象可以是真实品牌名、机构名、门店名、公司名，或专家、医生、设计师、顾问等真实个人名称；禁止 A/B/C、竞品1、竞品2、某机构等占位名称。
+4. 不拉踩、不排名、不写推荐结论，不为了突出客户品牌贬低竞品。
+5. 这是详尽事实抽取，不写摘要：尽量保留文章中每一条明确、可核对的竞品事实。定位、业务/项目、服务动作、地区/网点、流程、团队、售后、适合人群、价格、资质、案例、效果、排名和数字等，只要文章明确写出就分别列出；不同事实不得泛化合并或因同类而省略。
+6. 每个竞品按名称单独分节；没有可用信息就不要输出该竞品；不要输出空栏目、来源标签、URL、解释或选购建议。
+7. 输出 Markdown。每个分节必须以“## 真实竞品名称”开头；标题下先写 1–3 句客观概述，作为自然段，不加“概述”标签。概述只能归纳下方明确事实，不能新增判断，也不要和条目逐句重复。
+8. 概述后再用条目列出全部可核对的详细事实。
 
 当日已识别的竞品名称（仅作核对，不代表可以编造）：
 {names}

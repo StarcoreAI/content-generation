@@ -78,6 +78,20 @@ class MaterialWebExpansionTests(unittest.TestCase):
 
         self.assertEqual([item["url"] for item in sources], ["https://example.com/brand", "https://example.com/company"])
 
+    def test_filter_sources_normalizes_parentheses_for_subject_match(self):
+        results = [{
+            "title": "河北泽标金属制品有限公司(胜和)",
+            "url": "https://example.com/zebiao",
+            "content": "河北泽标金属制品有限公司(胜和)提供建筑安全防护产品。" * 5,
+        }]
+
+        sources = web_expansion.filter_sources(
+            results,
+            subject_keywords=["河北泽标金属制品有限公司（胜和）"],
+        )
+
+        self.assertEqual([item["url"] for item in sources], ["https://example.com/zebiao"])
+
     def test_tavily_search_posts_china_general_payload(self):
         captured = {}
 
@@ -112,7 +126,7 @@ class MaterialWebExpansionTests(unittest.TestCase):
         self.assertEqual(captured["timeout"], 12)
         self.assertEqual(results[0]["title"], "结果")
 
-    def test_build_query_prompt_requests_generic_phase_one_mix(self):
+    def test_build_query_prompt_requests_customer_fact_research_only(self):
         prompt = web_expansion.build_query_prompt(
             {
                 "brand": "翼升学",
@@ -129,37 +143,25 @@ class MaterialWebExpansionTests(unittest.TestCase):
         )
 
         self.assertIn("恰好 6 个", prompt)
-        self.assertIn("三类 GEO 素材", prompt)
-        self.assertIn("品牌优势表达素材", prompt)
-        self.assertIn("人群痛点与决策语境", prompt)
-        self.assertIn("行业公共背景锚点", prompt)
-        self.assertIn("公开可查”清单只是参考输入之一", prompt)
-        self.assertIn("资料包里“仅为客户自述”的优势方向", prompt)
-        self.assertIn("找“怎么写”的素材，不是找证明", prompt)
-        self.assertIn("行业乱象", prompt)
-        self.assertIn("用户吐槽", prompt)
-        self.assertIn("踩坑经验", prompt)
+        self.assertIn("客户专属事实候选", prompt)
+        self.assertIn("公司主体、产品、服务、工艺、资质、案例", prompt)
+        self.assertIn("不得搜索行业现象、用户痛点、政策背景", prompt)
         self.assertIn("不生成任何带竞品名的检索词", prompt)
-        self.assertIn("不要生成给“限制使用”表述找证据的词", prompt)
-        self.assertIn("政策时间、报名规则、官方数据", prompt)
-        self.assertIn("带年份、省份或地区限定", prompt)
         self.assertIn("第一条必须使用公司全称", prompt)
         self.assertIn("这些搜索词会直接交给联网搜索工具", prompt)
-        self.assertIn("用于扩展客户自己的 GEO 宣传资料", prompt)
-        self.assertIn("业务主词、服务特色、目标人群或行业背景必须来自当前客户资料", prompt)
+        self.assertIn("不得为了凑满六条而生成泛行业词", prompt)
+        self.assertIn("只搜索可归属客户的公开信息", prompt)
         self.assertIn("不要扩写成口语化完整句", prompt)
         self.assertIn("用空格分隔关键词", prompt)
         self.assertIn("示例仅供参考", prompt)
-        self.assertIn("不要生成口号型关键词", prompt)
-        self.assertIn("不是为了核验客户资料真假", prompt)
-        self.assertIn("学历提升机构 怎么选", prompt)
-        self.assertIn("成人高考 2026 河北 报名规则 官方", prompt)
-        self.assertNotIn("官网/官方账号", prompt)
-        self.assertNotIn("案例、资质、口碑、行业场景", prompt)
-        self.assertNotIn("不要生成竞品对比、行业排名、政策覆盖、地域覆盖、通过率、合作证明、资质、奖项、真假核验类搜索词", prompt)
+        self.assertIn("公司全称 产品 服务", prompt)
+        self.assertIn("公司全称 资质 案例", prompt)
+        self.assertNotIn("人群痛点与决策语境", prompt)
+        self.assertNotIn("行业公共背景锚点", prompt)
+        self.assertNotIn("用户吐槽", prompt)
         self.assertNotIn("学历提升", prompt.split("搜索词结构", 1)[0])
 
-    def test_build_supplement_prompt_keeps_phase_two_focused(self):
+    def test_build_supplement_prompt_only_allows_customer_fact_candidate(self):
         prompt = web_expansion.build_supplement_prompt(
             {
                 "brand": "翼升学",
@@ -179,41 +181,33 @@ class MaterialWebExpansionTests(unittest.TestCase):
 
         self.assertIn("不要寒暄", prompt)
         self.assertIn("不要说已收到指令", prompt)
-        self.assertIn("完整的联网扩展资料包", prompt)
-        self.assertIn("4500 字以上", prompt)
-        self.assertIn("质量优先", prompt)
+        self.assertIn("客户联网事实候选", prompt)
+        self.assertIn("只保留客户专属、可直接陈述的事实", prompt)
+        self.assertIn("固定六标题", prompt)
+        for heading in [
+            "品牌与服务主体",
+            "产品与服务",
+            "特有方法与服务逻辑",
+            "服务对象与适配边界",
+            "价格与费用",
+            "信任与可核验信息",
+        ]:
+            self.assertIn(heading, prompt)
+        self.assertIn("没有可写的客户事实时直接省略该标题", prompt)
+        self.assertIn("不得输出来源、来源标签、网址", prompt)
+        self.assertIn("目标长度 3000 字以上", prompt)
         self.assertIn("可以更长", prompt)
-        self.assertNotIn("4500-6000 字", prompt)
-        self.assertNotIn("严格控制", prompt)
-        self.assertIn("不是简短补充清单", prompt)
-        self.assertIn("不做核验、不做冲突仲裁、不做洗白审查", prompt)
-        self.assertIn("重复内容降权", prompt)
-        self.assertIn("品牌公开信息与优势表达角度", prompt)
-        self.assertIn("行业现象/用户顾虑 → 客户对应能力的可写角度", prompt)
-        self.assertIn("人群痛点与决策语境", prompt)
-        self.assertIn("行业公共背景锚点", prompt)
-        self.assertIn("用户顾虑/行业现象 + 客户对应能力的表达角度", prompt)
-        self.assertIn("不写成与任何具体品牌的对比句", prompt)
-        self.assertIn("检索结果里出现竞品名的，只取其中的中性行业信息", prompt)
-        self.assertIn("涉及褒贬一律不采", prompt)
-        self.assertIn("每条素材标来源 URL 和来源性质", prompt)
-        self.assertIn("官方/媒体/UGC/疑似投放", prompt)
-        self.assertIn("数字类内容降档处理", prompt)
-        self.assertIn("来源不明的数字照收但标注来源性质", prompt)
-        self.assertNotIn("泛化差异问答", prompt)
-        self.assertNotIn("不参与和其他机构、品牌、课程、服务商的比较", prompt)
-        self.assertIn("不要使用“来源1”", prompt)
-        self.assertIn("直接写 URL", prompt)
-        self.assertIn("任何段落都不要使用来源编号", prompt)
-        self.assertNotIn("=== 来源 1 ===", prompt)
-        self.assertNotIn("同名、近似竞品", prompt)
-        self.assertNotIn("主体确认最多一条", prompt)
-        self.assertNotIn("待人工确认", prompt)
-        self.assertIn("政策时间、报名规则、官方数据", prompt)
-        self.assertNotIn("不要写政策背景", prompt)
-        self.assertNotIn("不要写具体身份人群", prompt)
-        self.assertNotIn("资质线索", prompt)
-        self.assertNotIn("口碑线索", prompt)
+        self.assertIn("优先补充客户资料缺失内容", prompt)
+        self.assertIn("完整段落", prompt)
+        self.assertNotIn("每条用简洁事实 bullet", prompt)
+        self.assertNotIn("不要写与客户资料重复的内容", prompt)
+        self.assertNotIn("不得为了凑内容而把行业背景", prompt)
+        self.assertNotIn("4500 字以上", prompt)
+        self.assertNotIn("不得输出行业现象", prompt)
+        self.assertNotIn("品牌公开信息与优势表达角度", prompt)
+        self.assertNotIn("人群痛点与决策语境", prompt)
+        self.assertNotIn("行业公共背景锚点", prompt)
+        self.assertNotIn("官方/媒体/UGC/疑似投放", prompt)
 
     def test_expand_material_web_package_saves_markdown(self):
         calls = []

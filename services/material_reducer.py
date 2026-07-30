@@ -1,28 +1,16 @@
 from services.material_filter import format_unit_metadata
 
 
-DEFAULT_REDUCER_RULES = """You are trimming retained customer material for public GEO article generation.
+DEFAULT_REDUCER_RULES = """You are trimming retained customer material for later GEO article generation.
 Your job is to decide which original lines should be deleted, not to rewrite or summarize the material.
-Default to keeping original lines. Delete only obvious duplication, boilerplate, low-value lists, and unsafe wording.
-Keep customer-specific facts: identity, brand, official channels, locations, coverage, audience, products or services, service process, delivery boundaries, conditions, compliance limits, prohibitions, and supported concrete claims.
-For original brand, person, case, service, or technical material, preserve concrete details and representative original expressions that may be useful for later content generation.
-Also keep target audiences, use cases, suitable scenarios, service or refund boundaries, and conflicting facts that should be marked pending verification when they describe the customer's own offering.
-Keep lines that can support the final eight-direction material package:
-- brand basics: legal or public identity, regularity, founding/background, location, coverage, business scope.
-- products and services: what is provided, how it is delivered, process depth, after-sales or long-term service.
-- core advantages: differentiated claims and the facts, process, resources, or mechanisms that support them.
-- target audiences: user groups, needs, pain points, decision concerns, scenarios, and clearly marked inferred-but-unconfirmed clues.
-- price and fee wording: original price ranges, fee composition, and fee wording only; do not calculate or complete missing prices.
-- trust credentials: qualifications, honors, cases, reviews, third-party endorsements, and whether the source is customer self-description or third-party checkable.
-- compliance risk wording: guarantees, rankings, absolute claims, success-rate numbers, or other risky wording; keep as risk lines or restricted-use clues.
-- industry public background: policy, timelines, public rules, official data, or public context that already appears in the material.
-When there are many cases, user examples, scenario examples, or similar service examples, keep up to 6 representative examples across different information dimensions instead of thinning them too aggressively.
-Keep explicit gaps and search hints, missing-evidence notes, and customer-to-confirm notes; do not invent missing facts.
-Do not expand third-party catalogs, item lists, schedules, or price lists just because they contain use cases, fees, locations, or options.
-Delete form instructions, placeholders, blank fields, template explanations, internal execution notes, handoff notes, unrelated examples, competitor notes, duplicated statements, generic praise without facts, unsupported strong claims, guarantees, rankings, absolute success statements, and third-party catalogs that add no customer-specific facts.
+Keep only customer-specific facts that can later be stated directly in an article: brand basics, products and services, customer-specific methods or service logic, supported fit boundaries, price and fee wording, and trust credentials.
+For original brand, person, case, service, or technical material, preserve concrete details and representative original expressions that support those facts.
+Keep original price ranges and fee wording only; do not calculate or complete missing prices. Keep qualifications, honors, cases, team or organization facts only when they describe this customer.
+Delete strategy notes, usable angles, writing directions, templates, FAQs, generic user questions, customer-service scripts, scene words, example queries, and generic industry background.
+Delete generic public education about policy, compliance, risks, recovery, market trends, or legal guidance unless it is a concrete fact about this customer's own service.
+Delete source labels, search hints, pending-verification notes, internal execution notes, handoff notes, placeholders, blank fields, competitor notes, unrelated examples, duplicated statements, and generic praise without facts.
+Delete unsupported strong claims, guarantees, rankings, success rates, absolute statements, and third-party catalogs that add no customer-specific facts.
 For any unit that is only a third-party catalog, price list, item list, schedule, or low-level listing without customer-specific facts, delete all lines.
-Do not treat standalone marketing statistics, success rates, rankings, guarantees, or fastest-time claims as supported evidence just because they appear once in the material.
-If retained units conflict on a relevant customer-specific fact, keep a short pending-verification line instead of guessing.
 Do not use external knowledge. Do not write an article. Do not invent facts."""
 
 

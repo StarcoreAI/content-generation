@@ -27,18 +27,21 @@ def read_frontend_source():
 
 
 class FrontendCrawlOrderTests(unittest.TestCase):
-    def test_content_choices_live_on_content_generation_page(self):
+    def test_content_generation_selects_query_from_a_question_group(self):
         html = read_frontend_source()
 
         content_page = html.split('id="page-content"', 1)[1].split('id="page-clients"', 1)[0]
-        clients_page = html.split('id="page-clients"', 1)[1]
-        self.assertIn('id="content-choice-options"', content_page)
-        self.assertIn("document.querySelectorAll('[id^=\"client-content-options-\"]').forEach(el => el.remove())", html)
-        self.assertIn("loadClientContentOptions", html)
-        self.assertIn("toggleClientChoice", html)
-        self.assertIn("item.enabled ? '停用' : '启用'", html)
-        self.assertIn("setClientCompetitorRule", html)
-        self.assertIn("/content-options", html)
+        self.assertIn('id="contentGroupSelect"', content_page)
+        self.assertIn('id="contentQuerySelect"', content_page)
+        self.assertNotIn('id="contentQuery"', content_page)
+        self.assertIn('id="useCustomerMaster"', content_page)
+        self.assertIn('id="useContentUploads"', content_page)
+        self.assertIn('id="contentCompetitorPicker"', content_page)
+        self.assertIn("loadContentQueryOptions", html)
+        self.assertIn("loadContentCompetitorPicker", html)
+        self.assertIn("selectedContentCompetitorNames", html)
+        self.assertIn("selected_competitor_names", html)
+        self.assertNotIn('id="content-choice-options"', content_page)
     def test_frontend_css_and_js_are_static_assets(self):
         html = read_index_html()
 
@@ -231,30 +234,35 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("async function generateDailyEntities(", html)
         self.assertNotIn("/api/daily/entities/generate", html)
 
-    def test_reference_intelligence_page_is_wired(self):
+    def test_reference_intelligence_page_uses_group_query_and_article_url_only(self):
         html = read_frontend_source()
 
         self.assertIn("引用情报分析", html)
         self.assertIn("navTo('reference'", html)
         self.assertIn('id="page-reference"', html)
         self.assertNotIn('id="referencePluginList"', html)
-        self.assertIn("async function loadReferenceIntelligence(", html)
-        self.assertIn("async function analyzeReferenceIntelligence(", html)
-        self.assertNotIn("/api/reference_intelligence/plugins", html)
-        self.assertIn("/api/reference_intelligence/analyze", html)
-        self.assertIn("/api/reference_intelligence/analyze_status", html)
-        self.assertIn("/api/reference_intelligence/analyze_cancel", html)
-        self.assertNotIn("renderReferencePlugins", html)
-        self.assertIn('id="referenceAnalyzeProgress"', html)
-        self.assertIn("cancelReferenceAnalysis", html)
+        self.assertIn('id="routeAnalysisGroupSelect"', html)
+        self.assertIn('id="routeAnalysisQuerySelect"', html)
+        self.assertIn('id="routeAnalysisUrl"', html)
+        self.assertNotIn('id="routeAnalysisQuery"', html)
+        self.assertNotIn('id="routeAnalysisTitle"', html)
+        self.assertNotIn('id="routeAnalysisContent"', html)
+        self.assertNotIn('id="routeAnalysisExisting"', html)
+        self.assertNotIn('id="routeAnalysisConfirmed"', html)
+        self.assertIn("async function analyzeConfirmedReference(", html)
+        self.assertIn("/api/content-routes/analyze", html)
+        self.assertIn("loadRouteAnalysisQuestionOptions", html)
+        self.assertIn("article: {url}", html)
+        self.assertIn("async function loadContentRoutes(", html)
+        self.assertNotIn('id="referenceAnalyzeProgress"', html)
 
-    def test_pattern_library_is_embedded_in_reference_page_not_navigation(self):
+    def test_content_route_library_is_embedded_in_reference_page_not_navigation(self):
         html = read_frontend_source()
 
         self.assertNotIn("navTo('pattern-library'", html)
         reference_start = html.index('id="page-reference"')
         reference_end = html.index('id="page-materials"')
-        library_start = html.index('id="patternLibraryContent"')
+        library_start = html.index('id="contentRouteList"')
         self.assertGreater(library_start, reference_start)
         self.assertLess(library_start, reference_end)
 
@@ -286,7 +294,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
 
         self.assertIn("stats.top_articles_by_ai", html)
         self.assertIn("renderDailyTopArticleRows", html)
-        self.assertIn("Top12", html)
+        self.assertIn("Top20", html)
 
     def test_daily_top_articles_show_competitor_match_status(self):
         html = read_frontend_source()
@@ -355,11 +363,11 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertIn("article_type: selectedContentArticleType", html)
         self.assertNotIn("article_subtype: selectedContentArticleSubtype", html)
         self.assertNotIn("article_subtype_plugin: getSelectedContentSubtypePlugin()", html)
-        self.assertIn('id="useMaterialPackage"', html)
-        self.assertIn('id="useMaterialWebSupplement"', html)
-        self.assertIn("use_material_package: document.getElementById('useMaterialPackage')?.checked !== false", html)
-        self.assertIn("use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false", html)
-        self.assertNotIn("selectedContentArticleType !== '对比型'", html)
+        self.assertIn('id="useCustomerMaster"', html)
+        self.assertIn('id="useContentUploads"', html)
+        self.assertIn("use_customer_master: document.getElementById('useCustomerMaster')?.checked === true", html)
+        self.assertIn("use_content_uploads: document.getElementById('useContentUploads')?.checked === true", html)
+        self.assertIn("selectedContentArticleType === '对比型'", html)
         self.assertNotIn("<label>对比型子类型</label>", html)
         self.assertNotIn("loadContentTop20Samples()", html)
         self.assertNotIn("getSelectedContentTopArticles()", html)

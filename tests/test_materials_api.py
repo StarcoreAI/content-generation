@@ -145,7 +145,7 @@ class MaterialApiTests(unittest.TestCase):
 
                 output = Path(output_dir)
                 output.mkdir(parents=True, exist_ok=True)
-                markdown = "# 客户资料注入包\n\n测试结果"
+                markdown = "# 客户资料注入包\n\n## 产品与服务\n\n- 测试结果"
                 (output / "latest_injection.md").write_text(markdown, encoding="utf-8")
                 status = {
                     "ok": True,
@@ -177,6 +177,7 @@ class MaterialApiTests(unittest.TestCase):
                 analyzed_body = analyzed.get_json()
                 self.assertTrue(analyzed_body["ok"])
                 self.assertIn("测试结果", analyzed_body["markdown"])
+                self.assertEqual(analyzed_body["knowledge_merge"]["merged_count"], 1)
 
                 latest = client.get("/api/materials/client-1/package-result")
                 self.assertEqual(latest.status_code, 200)
@@ -278,6 +279,11 @@ class MaterialApiTests(unittest.TestCase):
             def fake_analyze(package_dir, output_dir, competitors, ask_text):
                 captured["package_dir"] = package_dir
                 captured["competitors"] = competitors
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / "latest_upload_competitors.md").write_text(
+                    "# 竞品上传资料整理包\n\n## 第一竞品\n\n- 上传新增事实。",
+                    encoding="utf-8",
+                )
                 return {
                     "ok": True,
                     "status": "completed",
@@ -302,6 +308,7 @@ class MaterialApiTests(unittest.TestCase):
 
             self.assertEqual(response.status_code, 200)
             self.assertTrue(response.get_json()["ok"])
+            self.assertEqual(response.get_json()["knowledge_merge"]["merged_count"], 1)
             self.assertEqual(captured["competitors"], ["第一竞品", "第二竞品"])
         finally:
             geo_app.analyze_competitor_upload_package = original

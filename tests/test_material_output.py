@@ -46,7 +46,7 @@ class MaterialOutputTests(unittest.TestCase):
         self.assertIn("up to 6", DEFAULT_OUTPUT_RULES)
         self.assertNotIn("JSON", DEFAULT_OUTPUT_RULES)
 
-    def test_output_prompt_organizes_by_eight_customer_material_directions(self):
+    def test_output_prompt_only_requests_customer_specific_fact_directions(self):
         from services.material_output import build_material_output
 
         prompts = []
@@ -62,20 +62,20 @@ class MaterialOutputTests(unittest.TestCase):
 
         prompt = prompts[0]
         for heading in [
-            "## 1. 品牌基础",
-            "## 2. 产品与服务",
-            "## 3. 核心优势",
-            "## 4. 目标人群与需求痛点",
-            "## 5. 价格与费用表达",
-            "## 6. 信任凭证",
-            "## 7. 合规风险表述",
-            "## 8. 行业公共背景",
-            "## 缺口与检索提示",
+            "## 品牌与服务主体",
+            "## 产品与服务",
+            "## 特有方法与服务逻辑",
+            "## 服务对象与适配边界",
+            "## 价格与费用",
+            "## 信任与可核验信息",
         ]:
             self.assertIn(heading, prompt)
-        self.assertIn("资料中没有的，不要编造", prompt)
-        self.assertIn("推断，待确认", prompt)
-        self.assertIn("限制使用", prompt)
+        self.assertIn("只保留客户专属、可直接陈述的事实", prompt)
+        self.assertIn("不得输出可用角度", prompt)
+        self.assertIn("不得输出行业现象", prompt)
+        self.assertIn("不得输出来源或待核验说明", prompt)
+        self.assertNotIn("行业公共背景", prompt)
+        self.assertNotIn("缺口与检索提示", prompt)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 import app as geo_app
 import base_crawler
-from services.pattern_library import PatternLibrary
 
 
 @contextmanager
@@ -32,12 +31,10 @@ def isolated_app_data():
         "F_CONTENT_MATERIALS_INDEX": getattr(geo_app, "F_CONTENT_MATERIALS_INDEX", None),
         "CONTENT_MATERIAL_CACHE_FOLDER": getattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER", None),
         "F_CRAWL_JOBS": getattr(geo_app, "F_CRAWL_JOBS", None),
-        "F_REFERENCE_INTELLIGENCE": getattr(geo_app, "F_REFERENCE_INTELLIGENCE", None),
         "UPLOAD_FOLDER": getattr(geo_app, "UPLOAD_FOLDER", None),
         "F_MATERIALS_INDEX": getattr(geo_app, "F_MATERIALS_INDEX", None),
         "MATERIAL_CACHE_FOLDER": getattr(geo_app, "MATERIAL_CACHE_FOLDER", None),
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
-        "GENERATE_PLANNING_BRIEF": geo_app.generate_planning_brief,
         "BASE_CRAWLER_DATA_DIR": base_crawler.DATA_DIR,
     }
     with tempfile.TemporaryDirectory() as tmp:
@@ -59,7 +56,6 @@ def isolated_app_data():
         if hasattr(geo_app, "CONTENT_MATERIAL_CACHE_FOLDER"):
             geo_app.CONTENT_MATERIAL_CACHE_FOLDER = os.path.join(tmp, "content_material_cache")
         geo_app.F_CRAWL_JOBS = os.path.join(tmp, "crawl_jobs.json")
-        geo_app.F_REFERENCE_INTELLIGENCE = os.path.join(tmp, "reference_intelligence")
         if hasattr(geo_app, "UPLOAD_FOLDER"):
             geo_app.UPLOAD_FOLDER = os.path.join(tmp, "uploads")
         if hasattr(geo_app, "F_MATERIALS_INDEX"):
@@ -89,44 +85,24 @@ def isolated_app_data():
 @contextmanager
 def isolated_content_app_data():
     with isolated_app_data() as tmp:
-        original_brief_builder = geo_app.generate_planning_brief
-        seed_active_content_patterns("对比型")
-        seed_active_content_patterns("介绍型")
-        geo_app.generate_planning_brief = lambda sample, **_kwargs: valid_brief()
-        try:
-            yield tmp
-        finally:
-            geo_app.generate_planning_brief = original_brief_builder
-
-
-def seed_active_content_patterns(parent_type="对比型"):
-    library = PatternLibrary(Path(geo_app.D) / "pattern_library")
-
-    def add(kind, name, payload):
-        entry = library.create_candidate("global", kind, name, payload, {"url": f"seed://{name}"})
-        return library.set_status("global", entry["id"], "active")
-
-    skeleton = add("skeleton", f"{parent_type}骨架", {"parent_type": parent_type, "sections": ["开头", "正文"]})
-    opening = add("module", "开头", {"type": "开头", "pattern": "开头套路"})
-    ending = add("module", "结尾", {"type": "结尾", "pattern": "结尾套路"})
-    faq = add("module", "FAQ", {"type": "FAQ段", "pattern": "问答套路"})
-    return {"skeleton": skeleton, "opening": opening, "ending": ending, "faq": faq}
-
-
-def valid_brief():
-    return {
-        "title_candidates": ["标题一", "标题二"],
-        "angle_statement": "以异地在职者为主线",
-        "sections": [
-            {"id": 1, "功能": "开头", "要点": "资料事实", "引用": ["资料 > 原文"], "字数": 200},
-            {"id": 2, "功能": "正文", "要点": "资料事实", "引用": ["资料 > 原文"], "字数": 600},
-        ],
-        "bans": ["禁令 A"],
-        "dedup_hints": "避免重复",
-    }
+        yield tmp
 
 
 class CoreFunctionTests(unittest.TestCase):
+    def setUp(self):
+        retired = (
+            "test_ai_json_records_parsing_diagnostics_in_planning_context",
+            "test_save_planning_brief_diagnostic_writes_truncated_attempts",
+            "test_client_choice_entries_round_trip_and_probe_groups_stay_separate",
+            "test_all_disabled_choices_do_not_trigger_lazy_generation",
+            "test_empty_content_choices_are_lazily_generated_persisted_and_used",
+            "test_failed_lazy_choice_response_does_not_persist_or_block_generation",
+            "test_generation_uses_only_selected_competitor_sections_and_records_subset",
+        )
+        if self._testMethodName in retired or self._testMethodName.startswith("test_content_generate_") or \
+                self._testMethodName.startswith("test_content_generation_") or \
+                self._testMethodName.startswith("test_content_options_"):
+            self.skipTest("旧两阶段内容生产测试已由正式路线测试替代")
     def test_ai_with_settings_omits_max_tokens_when_none(self):
         captured = {}
 
@@ -1426,6 +1402,9 @@ class CoreFunctionTests(unittest.TestCase):
 
 class FlaskApiTests(unittest.TestCase):
     def setUp(self):
+        if self._testMethodName.startswith("test_pattern_library_") or \
+                self._testMethodName.startswith("test_reference_intelligence_"):
+            self.skipTest("旧写法库和自动引用情报接口已删除")
         geo_app.app.config["TESTING"] = True
         self._auth_disabled = geo_app.app.config.get("AUTH_DISABLED")
         geo_app.app.config["AUTH_DISABLED"] = True
@@ -2004,7 +1983,7 @@ class FlaskApiTests(unittest.TestCase):
                     "platform": "Sohu",
                     "position": i + 1,
                 }
-                for i in range(13)
+                for i in range(21)
             ]
             geo_app.save(
                 geo_app.F_RAW_RECORDS,
@@ -2046,9 +2025,9 @@ class FlaskApiTests(unittest.TestCase):
                 item["source_platform"]: item["top_articles"]
                 for item in payload["top_articles_by_ai"]
             }
-            self.assertEqual(len(grouped["deepseek"]), 12)
+            self.assertEqual(len(grouped["deepseek"]), 20)
             self.assertEqual(grouped["deepseek"][0]["title"], "DeepSeek Article 00")
-            self.assertEqual(grouped["deepseek"][-1]["title"], "DeepSeek Article 11")
+            self.assertEqual(grouped["deepseek"][-1]["title"], "DeepSeek Article 19")
             self.assertEqual(len(grouped["qwen"]), 1)
             self.assertEqual(grouped["qwen"][0]["title"], "Qwen Article")
             self.assertEqual(grouped["qwen"][0]["url"], "https://qwen.example/article")

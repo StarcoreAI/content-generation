@@ -4,7 +4,7 @@ function navTo(page, el) {
   document.querySelectorAll('.s-nav').forEach(n => n.classList.remove('on'));
   document.querySelectorAll('.t-ni').forEach(n => n.classList.remove('on'));
   document.getElementById('page-' + page)?.classList.add('on');
-  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'knowledge-quality';
+  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'knowledge-routes' || page === 'knowledge-scenes' || page === 'knowledge-quality';
   const activeNav = knowledgePage ? document.querySelector('[data-nav="knowledge"]') : el;
   if (activeNav) activeNav.classList.add('on');
   // page-specific load
@@ -14,11 +14,13 @@ function navTo(page, el) {
   if (page === 'resources') loadResourcePage();
   if (page === 'daily') loadDailyPage();
   if (page === 'records') loadRecordsLibraryViews();
-  if (page === 'reference') loadReferenceIntelligence();
+  if (page === 'reference') loadContentRoutes();
   if (page === 'materials') loadMaterialAnalysis();
   if (page === 'competitors') loadCompetitorAnalysis();
   if (page === 'knowledge-customer') loadCustomerKnowledge();
   if (page === 'knowledge-competitors') loadCompetitorKnowledge();
+  if (page === 'knowledge-routes') loadKnowledgeRoutes();
+  if (page === 'knowledge-scenes') loadKnowledgeScenes();
   if (page === 'knowledge-quality') loadQualityPolicy();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
@@ -511,14 +513,15 @@ function onClientChange() {
   if (document.getElementById('page-competitors')?.classList.contains('on')) loadCompetitorAnalysis();
   if (document.getElementById('page-knowledge-customer')?.classList.contains('on')) loadCustomerKnowledge();
   if (document.getElementById('page-knowledge-competitors')?.classList.contains('on')) loadCompetitorKnowledge();
+  if (document.getElementById('page-knowledge-routes')?.classList.contains('on')) loadKnowledgeRoutes();
+  if (document.getElementById('page-knowledge-scenes')?.classList.contains('on')) loadKnowledgeScenes();
   if (document.getElementById('page-reference')?.classList.contains('on')) {
-    loadReferenceIntelligence();
+    loadContentRoutes();
   }
   // 全局刷新模板提示条（当日整理顶部）和内容生产模板列表
   loadTemplatesForContent();
   loadMaterials();
 }
-const clientContentOptions = {};
 async function loadClients() {
   const clients = await api('/api/clients');
   const el = document.getElementById('clientList');
@@ -536,78 +539,10 @@ async function loadClients() {
           ${CRAWL_PLATFORM_ORDER.map(id => platformCheckboxHtml(id, (c.contract_platforms || []).includes(id), `client-${c.id}`)).join('')}
           <button class="btn btn-o btn-sm" onclick="saveClientPlatforms('${c.id}')">保存平台</button>
         </div>
-        <div id="client-content-options-${c.id}" style="margin-top:10px;padding-top:10px;border-top:1px solid var(--border2);font-size:11px;color:var(--text3)">加载内容选择项…</div>
       </div>
       <span class="badge badge-p">${c.created}</span>
       <button class="btn btn-danger" onclick="delClient('${c.id}')">删除</button>
     </div>`).join('');
-  document.querySelectorAll('[id^="client-content-options-"]').forEach(el => el.remove());
-}
-async function loadClientContentOptions(id) {
-  const el = document.getElementById('content-choice-options');
-  if (!id) {
-    if (el) el.textContent = '请选择客户后配置人群角度、FAQ 与竞品规则';
-    return;
-  }
-  const data = await api('/api/clients/' + encodeURIComponent(id) + '/content-options');
-  if (data.error) return;
-  clientContentOptions[id] = data;
-  renderClientContentOptions(id);
-}
-function renderClientContentOptions(id) {
-  const data = clientContentOptions[id];
-  const el = document.getElementById('content-choice-options');
-  if (!data || !el) return;
-  const choices = (field, label) => {
-    const items = data[field] || [];
-    const rows = items.map((item, index) => `<div style="display:flex;align-items:center;gap:6px;margin:4px 0"><button class="btn btn-o btn-sm" onclick="toggleClientChoice('${id}','${field}',${index})">${item.enabled ? '停用' : '启用'}</button><span style="flex:1;${item.enabled ? '' : 'opacity:.45;text-decoration:line-through'}">${escHtml(item.text)}</span>${item.source === 'ai' ? '<span class="badge badge-p">AI</span>' : ''}<button class="btn btn-danger btn-sm" onclick="deleteClientChoice('${id}','${field}',${index})">删除</button></div>`).join('') || '<span style="color:var(--text3)">暂无，首次生成会自动补齐</span>';
-    return `<div style="margin-top:8px"><b>${label}</b>${rows}<div style="display:flex;gap:6px;margin-top:4px"><input id="choice-new-${id}-${field}" placeholder="手动新增" style="max-width:240px;padding:5px 7px"><button class="btn btn-o btn-sm" onclick="addClientChoice('${id}','${field}')">添加</button></div></div>`;
-  };
-  const rules = data.competitor_rules || {must_use:[], banned:[]};
-  const candidateRows = (data.competitor_candidates || []).map(name => {
-    const state = rules.must_use.includes(name) ? 'must' : rules.banned.includes(name) ? 'banned' : 'random';
-    return `<div style="display:flex;align-items:center;gap:8px;margin:4px 0"><span style="flex:1">${escHtml(name)}</span><select onchange="setClientCompetitorRule('${id}',decodeURIComponent('${encodeURIComponent(name)}'),this.value)" style="width:auto;padding:4px"><option value="random" ${state === 'random' ? 'selected' : ''}>随机池</option><option value="must" ${state === 'must' ? 'selected' : ''}>必须用</option><option value="banned" ${state === 'banned' ? 'selected' : ''}>禁止用</option></select></div>`;
-  }).join('') || '<span style="color:var(--text3)">暂无竞品 Markdown 标题</span>';
-  el.innerHTML = `<div style="font-weight:800;color:var(--text2)">内容生产选择项</div>${choices('audience_angles','人群角度')}${choices('faq_questions','FAQ 问题')}<div style="margin-top:8px"><b>竞品规则</b>${candidateRows}</div>`;
-}
-async function saveClientContentOptionField(id, field) {
-  const data = clientContentOptions[id];
-  const result = await api('/api/clients/' + encodeURIComponent(id), 'PUT', {[field]: data[field]});
-  if (result.error) { toast(result.error, 'err'); return; }
-  clientContentOptions[id][field] = result.client[field] || [];
-  renderClientContentOptions(id);
-}
-async function toggleClientChoice(id, field, index) {
-  const item = clientContentOptions[id]?.[field]?.[index];
-  if (!item) return;
-  item.enabled = !item.enabled;
-  await saveClientContentOptionField(id, field);
-}
-async function deleteClientChoice(id, field, index) {
-  if (!clientContentOptions[id]) return;
-  clientContentOptions[id][field].splice(index, 1);
-  await saveClientContentOptionField(id, field);
-}
-async function addClientChoice(id, field) {
-  const input = document.getElementById(`choice-new-${id}-${field}`);
-  const text = input?.value.trim();
-  if (!text) return;
-  const items = clientContentOptions[id][field];
-  if (!items.some(item => item.text === text)) items.push({text, enabled:true, source:'manual'});
-  await saveClientContentOptionField(id, field);
-}
-async function setClientCompetitorRule(id, name, state) {
-  const data = clientContentOptions[id];
-  if (!data) return;
-  const rules = data.competitor_rules || {must_use:[], banned:[]};
-  rules.must_use = rules.must_use.filter(item => item !== name);
-  rules.banned = rules.banned.filter(item => item !== name);
-  if (state === 'must') rules.must_use.push(name);
-  if (state === 'banned') rules.banned.push(name);
-  const result = await api('/api/clients/' + encodeURIComponent(id), 'PUT', {competitor_rules:rules});
-  if (result.error) { toast(result.error, 'err'); return; }
-  data.competitor_rules = result.client.competitor_rules || rules;
-  renderClientContentOptions(id);
 }
 async function addClient() {
   const name = document.getElementById('cl-name').value.trim();
@@ -667,8 +602,9 @@ function doubaoLogin() { platformLogin('doubao'); }
 // ── Content ───────────────────────────────────────────
 async function loadContent() {
   ensureContentHistoryDate();
+  loadContentQueryOptions();
   loadContentMaterials();
-  loadClientContentOptions(currentClientId);
+  loadContentCompetitorPicker();
   loadContentGenerations();
 }
 
@@ -688,6 +624,56 @@ function getLocalDateString() {
   const m = String(d.getMonth() + 1).padStart(2, '0');
   const day = String(d.getDate()).padStart(2, '0');
   return `${y}-${m}-${day}`;
+}
+
+async function loadQuestionGroupOptions(groupSelectId, querySelectId) {
+  const groupSelect = document.getElementById(groupSelectId);
+  const querySelect = document.getElementById(querySelectId);
+  if (!groupSelect || !querySelect) return;
+  if (!currentClientId) {
+    groupSelect.innerHTML = '<option value="">请先选择客户</option>';
+    querySelect.innerHTML = '<option value="">请先选择问题组</option>';
+    return;
+  }
+  const previousGroupId = groupSelect.value;
+  const previousQuery = querySelect.value;
+  const groups = await api('/api/groups/' + encodeURIComponent(currentClientId));
+  groupSelect._queryGroups = Array.isArray(groups) ? groups : [];
+  groupSelect.innerHTML = '<option value="">请选择问题组</option>' + groupSelect._queryGroups.map(group => `<option value="${escHtml(group.id)}">${escHtml(group.name)}（${(group.questions || []).length}题）</option>`).join('');
+  groupSelect.value = groupSelect._queryGroups.some(group => group.id === previousGroupId) ? previousGroupId : (groupSelect._queryGroups[0]?.id || '');
+  populateQuestionOptions(groupSelectId, querySelectId, previousQuery);
+}
+
+function populateQuestionOptions(groupSelectId, querySelectId, previousQuery='') {
+  const groupSelect = document.getElementById(groupSelectId);
+  const querySelect = document.getElementById(querySelectId);
+  if (!groupSelect || !querySelect) return;
+  const group = (groupSelect._queryGroups || []).find(item => item.id === groupSelect.value);
+  const questions = group?.questions || [];
+  querySelect.innerHTML = questions.length
+    ? '<option value="">请选择问题</option>' + questions.map(question => `<option value="${escHtml(question)}">${escHtml(question)}</option>`).join('')
+    : '<option value="">该问题组暂无问题</option>';
+  querySelect.value = questions.includes(previousQuery) ? previousQuery : (questions[0] || '');
+}
+
+async function loadContentQueryOptions() {
+  await loadQuestionGroupOptions('contentGroupSelect', 'contentQuerySelect');
+}
+
+function onContentGroupChange() {
+  populateQuestionOptions('contentGroupSelect', 'contentQuerySelect');
+}
+
+async function loadRouteAnalysisQuestionOptions() {
+  await loadQuestionGroupOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
+}
+
+function onRouteAnalysisGroupChange() {
+  populateQuestionOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
+}
+
+function selectedContentQuery() {
+  return document.getElementById('contentQuerySelect')?.value.trim() || '';
 }
 
 async function loadContentMaterials() {
@@ -755,6 +741,7 @@ async function toggleContentMaterialUsage(id, confirmed) {
 }
 
 let selectedContentArticleType = '对比型';
+let selectedContentCompetitorNames = [];
 let activeContentBatchJobId = '';
 let contentBatchPollTimer = null;
 function selectContentArticleType(type) {
@@ -765,10 +752,46 @@ function selectContentArticleType(type) {
     compareBtn.className = selectedContentArticleType === '对比型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
     introBtn.className = selectedContentArticleType === '介绍型' ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm';
   }
+  loadContentCompetitorPicker();
+}
+
+async function loadContentCompetitorPicker() {
+  const el = document.getElementById('contentCompetitorPicker');
+  if (!el) return;
+  if (selectedContentArticleType !== '对比型') {
+    el.style.display = 'none';
+    return;
+  }
+  el.style.display = 'block';
+  if (!currentClientId) {
+    el.textContent = '请先选择客户后读取可选竞品资料。';
+    return;
+  }
+  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId));
+  if (result.error) { el.textContent = result.error; return; }
+  const names = Array.from(String(result.content || '').matchAll(/^##\s+(.+?)\s*$/gm)).map(match => match[1].trim()).filter(Boolean);
+  selectedContentCompetitorNames = selectedContentCompetitorNames.filter(name => names.includes(name));
+  if (!names.length) {
+    el.innerHTML = '<b>对比对象</b><div style="margin-top:6px;color:var(--text3)">暂无独立竞品资料。对比型文章需先在竞品知识库中整理至少两位对象。</div>';
+    return;
+  }
+  el.innerHTML = `<b>对比对象</b><div style="margin-top:6px;color:var(--text3)">对比型必须手动选择至少两位对象；不会随机补齐。</div><div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">${names.map((name, index) => `<label style="display:inline-flex;align-items:center;gap:5px"><input type="checkbox" data-content-competitor="${index}" ${selectedContentCompetitorNames.includes(name) ? 'checked' : ''} onchange="toggleContentCompetitor(${index})" style="width:auto;accent-color:var(--pri)">${escHtml(name)}</label>`).join('')}</div>`;
+  el._competitorNames = names;
+}
+
+function toggleContentCompetitor(index) {
+  const el = document.getElementById('contentCompetitorPicker');
+  const name = el?._competitorNames?.[index];
+  const checked = el?.querySelector(`[data-content-competitor="${index}"]`)?.checked;
+  if (!name) return;
+  selectedContentCompetitorNames = selectedContentCompetitorNames.filter(value => value !== name);
+  if (checked) selectedContentCompetitorNames.push(name);
 }
 
 async function generateContentArticle() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
+  if (!selectedContentQuery()) { toast('请选择本次 Query', 'err'); return; }
+  if (selectedContentArticleType === '对比型' && selectedContentCompetitorNames.length < 2) { toast('对比型请至少选择两位竞品', 'err'); return; }
   if (Number(document.getElementById('contentGenerationCount')?.value || 1) > 1) {
     return generateContentBatch();
   }
@@ -791,10 +814,12 @@ function contentGenerationPayload() {
   return {
     client_id: currentClientId,
     history_date: getContentHistoryDate(),
+    group_id: document.getElementById('contentGroupSelect')?.value || '',
+    query: selectedContentQuery(),
     article_type: selectedContentArticleType,
-    use_material_package: document.getElementById('useMaterialPackage')?.checked !== false,
-    use_material_web_supplement: document.getElementById('useMaterialWebSupplement')?.checked !== false,
-    use_competitors: document.getElementById('useCompetitorMaterials')?.checked !== false
+    use_customer_master: document.getElementById('useCustomerMaster')?.checked === true,
+    use_content_uploads: document.getElementById('useContentUploads')?.checked === true,
+    selected_competitor_names: selectedContentArticleType === '对比型' ? selectedContentCompetitorNames : []
   };
 }
 function renderContentBatchProgress(job) {
@@ -811,6 +836,8 @@ function renderContentBatchProgress(job) {
 }
 async function generateContentBatch() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
+  if (!selectedContentQuery()) { toast('请选择本次 Query', 'err'); return; }
+  if (selectedContentArticleType === '对比型' && selectedContentCompetitorNames.length < 2) { toast('对比型请至少选择两位竞品', 'err'); return; }
   const count = Number(document.getElementById('contentGenerationCount')?.value || 5);
   spin('spContentGenerate', true);
   disableBtn('btnContentGenerate', true);
@@ -1622,8 +1649,50 @@ async function loadRecordsLibraryViews() {
   loadRecordArticlePool();
   loadRecordSourceTrend();
   loadQueryScenes();
+  loadSelectionSurfaceReports();
   populateRecordQuestionArticleFilter();
   loadRecordQuestionArticles();
+}
+
+function renderSelectionSurfaceReports(reports) {
+  const list = document.getElementById('selectionSurfaceReports');
+  const preview = document.getElementById('selectionSurfaceReportPreview');
+  if (!list) return;
+  if (!reports?.length) {
+    list.innerHTML = '<span style="font-size:12px;color:var(--text3)">当前客户暂无临时报告</span>';
+    if (preview) preview.style.display = 'none';
+    return;
+  }
+  list.innerHTML = reports.map(report => `<button type="button" class="btn btn-o btn-sm" data-selection-surface-report="${escHtml(report.id)}">${escHtml(report.name)}</button>`).join('');
+  list.querySelectorAll('[data-selection-surface-report]').forEach(button => {
+    button.addEventListener('click', () => viewSelectionSurfaceReport(button.dataset.selectionSurfaceReport));
+  });
+}
+
+async function loadSelectionSurfaceReports() {
+  const list = document.getElementById('selectionSurfaceReports');
+  if (!list || !currentClientId) return;
+  try {
+    const data = await api('/api/records/selection-reports/' + encodeURIComponent(currentClientId));
+    if (data?.error) throw new Error(data.error);
+    renderSelectionSurfaceReports(data.reports || []);
+  } catch (error) {
+    list.innerHTML = '<span style="font-size:12px;color:var(--text3)">临时报告暂不可用</span>';
+  }
+}
+
+async function viewSelectionSurfaceReport(reportId) {
+  const preview = document.getElementById('selectionSurfaceReportPreview');
+  if (!preview || !currentClientId || !reportId) return;
+  preview.style.display = 'block';
+  preview.textContent = '正在读取报告...';
+  try {
+    const data = await api('/api/records/selection-reports/' + encodeURIComponent(currentClientId) + '/' + encodeURIComponent(reportId));
+    if (data?.error) throw new Error(data.error);
+    preview.textContent = data.content || '报告为空';
+  } catch (error) {
+    preview.textContent = '报告读取失败';
+  }
 }
 
 function populateRecordQuestionArticleFilter() {
@@ -2001,27 +2070,15 @@ async function loadCustomerKnowledge() {
     return;
   }
   renderCustomerKnowledgeSections(result.content || '');
-  setCustomerKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '可直接编辑并保存已确认口径');
-}
-
-async function syncCustomerKnowledge(overwrite=false) {
-  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId) + '/sync', 'POST', {overwrite});
-  if (result?.error) { toast(result.error, 'err'); return; }
-  if (result.source_update_available && !overwrite) {
-    setCustomerKnowledgeStatus('上游资料已有更新，当前人工版本未被覆盖');
-    if (!confirm('上游资料已更新。是否用最新来源覆盖当前人工版本？')) return;
-    return syncCustomerKnowledge(true);
-  }
-  renderCustomerKnowledgeSections(result.content || '');
-  setCustomerKnowledgeStatus(overwrite ? '已使用最新来源重新整理' : '已整理现有资料，可继续编辑确认口径');
-  toast('客户知识库已更新');
+  setCustomerKnowledgeStatus(result.merged_count ? `已自动合并 ${result.merged_count} 条新增事实；人工内容已保留` : '未发现新增事实，可直接编辑并保存已确认口径');
 }
 
 async function saveCustomerKnowledge() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const content = buildCustomerKnowledgeContent();
-  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId), 'PUT', {content});
+  const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId), 'PUT', {
+    content, removed_sections: [...removedCustomerKnowledgeSections],
+  });
   if (result?.error) { toast(result.error, 'err'); return; }
   setCustomerKnowledgeStatus('已保存人工确认口径');
   toast('客户知识库已保存');
@@ -2029,6 +2086,7 @@ async function saveCustomerKnowledge() {
 
 const CUSTOMER_KNOWLEDGE_SECTIONS = ['品牌基础', '产品/服务', '优势', '目标人群/痛点', '价格', '信任', '合规风险', '公开背景'];
 let customerKnowledgePreamble = '# 客户总资料';
+let removedCustomerKnowledgeSections = new Set();
 
 function shouldHideKnowledgeSection(body) {
   const text = String(body || '').replace(/\s+/g, '');
@@ -2059,6 +2117,7 @@ function renderCustomerKnowledgeSections(content) {
   if (!el) return;
   const parsed = parseCustomerKnowledge(content);
   customerKnowledgePreamble = parsed.preamble;
+  removedCustomerKnowledgeSections = new Set();
   el.replaceChildren();
   CUSTOMER_KNOWLEDGE_SECTIONS.forEach(name => {
     const body = (parsed.sections[name] || []).join('\n').trim();
@@ -2084,16 +2143,28 @@ function appendCustomerKnowledgeSection(name, body='') {
   card.className = 'card';
   card.dataset.customerKnowledgeSection = name;
   card.style.cssText = 'margin:0;padding:14px;background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(248,247,255,.8))';
+  const header = document.createElement('div');
+  header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px';
   const title = document.createElement('div');
-  title.style.cssText = 'font-weight:800;color:var(--text);margin-bottom:8px';
+  title.style.cssText = 'font-weight:800;color:var(--text)';
   title.textContent = name;
+  const remove = document.createElement('button');
+  remove.className = 'btn btn-danger btn-sm';
+  remove.textContent = '移除整节';
+  remove.onclick = () => {
+    if (!confirm(`移除“${name}”整节及其全部内容？点击页面“保存已确认口径”后才会写入知识库。`)) return;
+    removedCustomerKnowledgeSections.add(name);
+    card.remove();
+    setCustomerKnowledgeStatus(`已移除“${name}”，请点击保存已确认口径。`);
+  };
+  header.append(title, remove);
   const editor = document.createElement('textarea');
   editor.rows = 1;
   editor.value = body;
   editor.placeholder = '暂无资料，可补充已确认口径';
   editor.style.cssText = 'width:100%;min-height:150px;margin:0;overflow-y:hidden;resize:vertical';
   editor.addEventListener('input', () => fitKnowledgeEditorHeight(editor));
-  card.append(title, editor);
+  card.append(header, editor);
   el.appendChild(card);
   fitKnowledgeEditorHeight(editor);
 }
@@ -2106,6 +2177,112 @@ function buildCustomerKnowledgeContent() {
     chunks.push('', `## ${name}`, '', body);
   });
   return chunks.join('\n').trim() + '\n';
+}
+
+function setKnowledgeRoutesStatus(text) {
+  const el = document.getElementById('knowledgeRoutesStatus');
+  if (el) el.textContent = text;
+}
+
+function renderKnowledgeRouteGroup(elementId, routes) {
+  const el = document.getElementById(elementId);
+  if (!el) return;
+  if (!routes?.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text3);padding:12px 0">该行业暂未沉淀此类写法路线。</div>';
+    return;
+  }
+  el.innerHTML = routes.map(route => {
+    const steps = (route.steps || []).map((step, index) => `<li>${index + 1}. ${escHtml(step.purpose)}：${escHtml(step.output_action)}</li>`).join('');
+    const sources = (route.sources || []).map(source => `<li><a href="${escHtml(source.url)}" target="_blank" rel="noopener">${escHtml(source.title || source.url)}</a></li>`).join('');
+    return `<article style="padding:12px;border:1px solid var(--border2);border-radius:var(--r-sm);background:rgba(255,255,255,.72)">
+      <div style="display:flex;gap:8px;align-items:center;justify-content:space-between"><strong style="font-size:12px;color:var(--text2)">${escHtml(route.name)}</strong><button class="btn btn-danger btn-sm" onclick="deleteKnowledgeRoute('${escHtml(route.id)}')">删除</button></div>
+      <div style="font-size:11px;color:var(--text3);margin-top:6px">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div>
+      <details style="margin-top:8px;font-size:11px;color:var(--text2)"><summary style="cursor:pointer">查看路线与来源证据</summary><div style="margin-top:7px"><b>路线特征：</b>${escHtml(route.signature)}</div>${route.risk_notes ? `<div style="margin-top:5px"><b>适用边界：</b>${escHtml(route.risk_notes)}</div>` : ''}<ol style="margin:7px 0;padding-left:18px">${steps}</ol>${sources ? `<div><b>来源：</b><ul style="margin:5px 0;padding-left:18px">${sources}</ul></div>` : ''}</details>
+    </article>`;
+  }).join('');
+}
+
+async function deleteKnowledgeRoute(routeId) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  if (!confirm('删除这条写法路线？删除后不可恢复。')) return;
+  const result = await api('/api/content-routes/' + encodeURIComponent(routeId) + '?client_id=' + encodeURIComponent(currentClientId), 'DELETE');
+  if (result?.error) { toast(result.error, 'err'); return; }
+  toast('写法路线已删除');
+  loadKnowledgeRoutes();
+}
+
+async function loadKnowledgeRoutes() {
+  if (!currentClientId) {
+    renderKnowledgeRouteGroup('knowledgeIntroRoutes', []);
+    renderKnowledgeRouteGroup('knowledgeComparisonRoutes', []);
+    setKnowledgeRoutesStatus('请选择客户后查看');
+    return;
+  }
+  const result = await api('/api/knowledge/routes/' + encodeURIComponent(currentClientId));
+  if (result?.error) {
+    renderKnowledgeRouteGroup('knowledgeIntroRoutes', []);
+    renderKnowledgeRouteGroup('knowledgeComparisonRoutes', []);
+    setKnowledgeRoutesStatus(result.error);
+    return;
+  }
+  renderKnowledgeRouteGroup('knowledgeIntroRoutes', result.groups?.['介绍型'] || []);
+  renderKnowledgeRouteGroup('knowledgeComparisonRoutes', result.groups?.['对比型'] || []);
+  setKnowledgeRoutesStatus(`${result.industry || '当前'}行业；写法库只提供文章组织方式，生成时仍按文章类型使用对应路线。`);
+}
+
+async function loadKnowledgeScenes() {
+  const el = document.getElementById('knowledgeSceneRows');
+  const status = document.getElementById('knowledgeScenesStatus');
+  if (!el) return;
+  if (!currentClientId) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text3)">请选择客户后查看。</div>';
+    if (status) status.textContent = '请选择客户后查看';
+    return;
+  }
+  const result = await api('/api/records/selection-evidence/' + encodeURIComponent(currentClientId));
+  if (result?.error) {
+    el.innerHTML = `<div style="font-size:12px;color:var(--danger)">${escHtml(result.error)}</div>`;
+    if (status) status.textContent = '加载失败';
+    return;
+  }
+  const groups = {};
+  (result.rows || []).forEach(row => {
+    const groupId = String(row.group_id || '未归类');
+    const groupName = String(row.group_name || groupId);
+    if (!groups[groupId]) groups[groupId] = {name: groupName, rows: []};
+    groups[groupId].rows.push(row);
+  });
+  const entries = Object.values(groups);
+  if (!entries.length) {
+    el.innerHTML = '<div style="font-size:12px;color:var(--text3)">暂无已整理的场景词。</div>';
+    if (status) status.textContent = '暂无场景词';
+    return;
+  }
+  el.innerHTML = entries.map(group => `<section style="padding:12px 0;border-bottom:1px solid var(--border2)">
+    <strong style="font-size:13px;color:var(--text2)">${escHtml(group.name)}</strong>
+    <div style="display:grid;gap:8px;margin-top:9px">${group.rows.map(row => `<div data-knowledge-scene-row data-group-id="${escHtml(row.group_id || '')}" data-query="${escHtml(row.query || '')}" style="padding:9px 10px;background:rgba(255,255,255,.72);border:1px solid var(--border2);border-radius:var(--r-sm)">
+      <div style="font-size:12px;font-weight:750;color:var(--text2)">${escHtml(row.query || '')}</div>
+      <textarea data-knowledge-scene-terms rows="2" style="width:100%;margin-top:7px;font-size:11px">${escHtml((row.scene_terms || []).join('、'))}</textarea>
+      <div style="margin-top:6px"><button class="btn btn-o btn-sm" data-save-knowledge-scene>保存场景词</button></div>
+    </div>`).join('')}</div>
+  </section>`).join('');
+  el.querySelectorAll('[data-knowledge-scene-row]').forEach(card => {
+    const input = card.querySelector('[data-knowledge-scene-terms]');
+    card.querySelector('[data-save-knowledge-scene]').onclick = () => saveKnowledgeSceneTerms(
+      card.dataset.groupId, card.dataset.query, input?.value || '',
+    );
+  });
+  if (status) status.textContent = '按问题组与 Query 展示；内容生产以当前 Query 为主，同组场景词只作可选提醒。';
+}
+
+async function saveKnowledgeSceneTerms(groupId, query, rawTerms) {
+  const scene_terms = String(rawTerms || '').split(/[、，,\n]/).map(term => term.trim()).filter(Boolean);
+  const result = await api('/api/records/selection-evidence/' + encodeURIComponent(currentClientId), 'POST', {
+    group_id: groupId, query, scene_terms,
+  });
+  if (result?.error) { toast(result.error, 'err'); return; }
+  toast('场景词已保存');
+  loadKnowledgeScenes();
 }
 
 let competitorKnowledgePreamble = '# 竞品总资料';
@@ -2189,7 +2366,7 @@ async function loadCompetitorKnowledge() {
     return;
   }
   renderCompetitorKnowledgeSections(result.content || '');
-  setCompetitorKnowledgeStatus(result.source_update_available ? '上游资料已有更新：请主动确认是否覆盖当前人工版本' : '按竞品名称分节维护，可直接编辑保存');
+  setCompetitorKnowledgeStatus(result.merged_count ? `已自动合并 ${result.merged_count} 条新增竞品事实；人工内容已保留` : '未发现新增竞品事实，可直接编辑保存');
 }
 
 function addCompetitorKnowledgeSection() {
@@ -2912,300 +3089,37 @@ function startReferenceSmoothProgress() {
   }, 200);
 }
 
-async function loadReferenceIntelligence() {
-  getReferenceDate();
-  loadPatternLibrary();
+async function loadContentRoutes() {
+  const list = document.getElementById('contentRouteList');
+  if (!list) return;
+  loadRouteAnalysisQuestionOptions();
+  if (!currentClientId) { list.textContent = '请先选择客户后查看行业路线。'; return; }
+  const result = await api('/api/content-routes?client_id=' + encodeURIComponent(currentClientId));
+  if (result.error) { list.textContent = result.error; return; }
+  const routes = result.routes || [];
+  list.innerHTML = routes.length ? routes.map(route => `<div style="padding:10px 0;border-bottom:1px solid var(--border2)"><div style="font-weight:800;color:var(--text2)">${escHtml(route.name)} <span class="badge badge-p">${escHtml(route.parent_type)}</span></div><div style="margin-top:5px;color:var(--text3)">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div></div>`).join('') : '本行业暂无路线。先提交一篇已确认精读文章建立路线。';
 }
 
-async function analyzeReferenceIntelligence() {
+async function analyzeConfirmedReference() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const date = getReferenceDate();
-  stopReferenceAnalyzeTimers();
-  referenceAnalyzeJobId = '';
-  referenceBackendProgress = 3;
-  referenceBackendStage = 'fetch';
-  referenceDisplayProgress = 0;
-  setReferenceProgressVisible(true);
-  renderReferenceProgress('抓取文章...');
-  startReferenceSmoothProgress();
-  spin('spReferenceAnalyze', true);
-  disableBtn('btnReferenceAnalyze', true);
-  try {
-    const data = await api('/api/reference_intelligence/analyze', 'POST', {
-      client_id: currentClientId,
-      date
-    });
-    if (data.error) {
-      toast(data.message || data.error, 'err');
-      stopReferenceAnalyzeTimers();
-      setReferenceProgressVisible(false);
-      spin('spReferenceAnalyze', false);
-      disableBtn('btnReferenceAnalyze', false);
-      return;
-    }
-    referenceAnalyzeJobId = data.job_id || '';
-    referenceBackendProgress = Number(data.progress || 3);
-    referenceBackendStage = data.stage || 'fetch';
-    pollReferenceAnalysisStatus();
-    referenceAnalyzePollTimer = setInterval(pollReferenceAnalysisStatus, 1500);
-  } catch(e) {
-    toast('生成失败：' + e.message, 'err');
-    stopReferenceAnalyzeTimers();
-    setReferenceProgressVisible(false);
-    spin('spReferenceAnalyze', false);
-    disableBtn('btnReferenceAnalyze', false);
-  }
-}
-
-async function pollReferenceAnalysisStatus() {
-  if (!referenceAnalyzeJobId) return;
-  try {
-    const data = await api(`/api/reference_intelligence/analyze_status?job_id=${referenceAnalyzeJobId}`);
-    referenceBackendProgress = Number(data.progress || referenceBackendProgress || 0);
-    referenceBackendStage = data.stage || referenceBackendStage;
-    if (data.status === 'completed') {
-      referenceBackendProgress = 100;
-      referenceDisplayProgress = 100;
-      renderReferenceProgress('已完成');
-      stopReferenceAnalyzeTimers();
-      spin('spReferenceAnalyze', false);
-      disableBtn('btnReferenceAnalyze', false);
-      await loadReferenceIntelligence();
-      toast('引用情报已生成');
-      setTimeout(() => setReferenceProgressVisible(false), 800);
-    } else if (data.status === 'failed') {
-      stopReferenceAnalyzeTimers();
-      renderReferenceProgress('生成失败');
-      spin('spReferenceAnalyze', false);
-      disableBtn('btnReferenceAnalyze', false);
-      toast(data.error || '生成失败，请稍后重试或联系技术排查', 'err');
-    } else if (data.status === 'canceled') {
-      stopReferenceAnalyzeTimers();
-      renderReferenceProgress('已终止');
-      spin('spReferenceAnalyze', false);
-      disableBtn('btnReferenceAnalyze', false);
-      toast('已终止生成');
-    } else {
-      renderReferenceProgress(referenceStageText() + '...');
-    }
-  } catch(e) {
-    stopReferenceAnalyzeTimers();
-    renderReferenceProgress('生成失败');
-    spin('spReferenceAnalyze', false);
-    disableBtn('btnReferenceAnalyze', false);
-    toast('生成失败：' + e.message, 'err');
-  }
-}
-
-async function cancelReferenceAnalysis() {
-  if (!referenceAnalyzeJobId) return;
-  try {
-    const data = await api('/api/reference_intelligence/analyze_cancel', 'POST', {
-      job_id: referenceAnalyzeJobId
-    });
-    referenceBackendProgress = Number(data.progress || referenceBackendProgress || 0);
-    renderReferenceProgress('已终止');
-  } catch(e) {
-    toast('终止失败：' + e.message, 'err');
-  }
+  const groupId = document.getElementById('routeAnalysisGroupSelect')?.value || '';
+  const query = document.getElementById('routeAnalysisQuerySelect')?.value.trim();
+  const url = document.getElementById('routeAnalysisUrl')?.value.trim();
+  if (!groupId || !query || !url) { toast('请选择问题组、Query 并填写文章链接', 'err'); return; }
+  const status = document.getElementById('routeAnalysisStatus');
+  if (status) status.textContent = '正在抓取文章并分析来源证据…';
+  const result = await api('/api/content-routes/analyze', 'POST', {
+    client_id: currentClientId, group_id: groupId, query,
+    article: {url},
+  });
+  if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
+  if (status) status.textContent = result.entry ? `已沉淀：${result.entry.name}` : (result.analysis?.library_decision?.reason || '该文章未入库');
+  await loadContentRoutes();
 }
 
 // ══════════════════════════════════════════════════════
 // 当日数据整理模块
 // ══════════════════════════════════════════════════════
-function patternLibraryStatusLabel(status) {
-  return ({candidate: '候选', active: '已转正', retired: '已退役'})[status] || status || '未知';
-}
-
-function patternLibraryDomainCount(sources) {
-  const domains = new Set();
-  (sources || []).forEach(source => {
-    try {
-      const hostname = new URL(source.url || '').hostname;
-      if (hostname) domains.add(hostname);
-    } catch (_) {}
-  });
-  return domains.size;
-}
-
-function patternLibraryRiskMarks(entry) {
-  return [...new Set((entry.sources || []).flatMap(source => source.risk_marks || []).filter(Boolean))];
-}
-
-function patternLibrarySafeUrl(url) {
-  try {
-    const parsed = new URL(String(url || ''));
-    return ['http:', 'https:'].includes(parsed.protocol) ? parsed.href : '';
-  } catch (_) {
-    return '';
-  }
-}
-
-function patternLibraryEmpty(message) {
-  return `<div class="empty"><i class="ti ti-books"></i><p>${escHtml(message)}</p></div>`;
-}
-
-function renderPatternLibraryDetail(entry) {
-  const payload = entry.payload || {};
-  if (entry.kind === 'skeleton') {
-    const sections = Array.isArray(payload.sections) ? payload.sections : [];
-    return `
-      ${sections.length ? `<div class="pattern-detail-block"><strong>章节序列</strong><ol>${sections.map(section => `<li>${escHtml(section)}</li>`).join('')}</ol></div>` : ''}
-      ${payload.signature ? `<div class="pattern-detail-block"><strong>识别特征</strong><p>${escHtml(payload.signature)}</p></div>` : ''}
-      ${payload.risk_notes ? `<div class="pattern-detail-block pattern-risk-note"><strong>风险提示</strong><p>${escHtml(payload.risk_notes)}</p></div>` : ''}`;
-  }
-  if (entry.kind === 'module') {
-    const storedExamples = Array.isArray(payload.excerpts) ? payload.excerpts : [];
-    const examples = storedExamples.length ? storedExamples : (payload.excerpt ? [{excerpt: payload.excerpt, excerpt_verified: payload.excerpt_verified}] : []);
-    return `
-      ${payload.pattern ? `<div class="pattern-detail-block"><strong>套路描述</strong><p>${escHtml(payload.pattern)}</p></div>` : ''}
-      ${examples.length ? `<div class="pattern-detail-block"><strong>摘录例句</strong>${examples.map(example => `<blockquote>${escHtml(example.excerpt || '')}${example.excerpt_verified ? '<span class="pattern-verified">原文已核验</span>' : ''}</blockquote>`).join('')}</div>` : ''}
-      ${payload.risk_notes ? `<div class="pattern-detail-block pattern-risk-note"><strong>风险提示</strong><p>${escHtml(payload.risk_notes)}</p></div>` : ''}`;
-  }
-  const labels = Array.isArray(payload.raw_labels) ? payload.raw_labels : [payload.feature || entry.name].filter(Boolean);
-  return `<div class="pattern-detail-block"><strong>归并前原始措辞</strong><div class="pattern-label-list">${labels.map(label => `<span>${escHtml(label)}</span>`).join('')}</div></div>`;
-}
-
-function renderPatternLibrarySources(sources) {
-  if (!sources.length) return '';
-  return `<div class="pattern-sources"><strong>来源</strong>${sources.map(source => {
-    const url = patternLibrarySafeUrl(source.url);
-    const title = escHtml(source.title || source.url || '未命名文章');
-    const risks = Array.isArray(source.risk_marks) ? source.risk_marks : [];
-    const aliases = Array.isArray(source.alias_urls) ? source.alias_urls : [];
-    return `<div class="pattern-source">
-      <div>${url ? `<a href="${escHtml(url)}" target="_blank" rel="noopener noreferrer">${title}</a>` : title}</div>
-      <div class="pattern-source-meta">引用 ${Number(source.citation_count || 0)} 次${risks.length ? ` · ${escHtml(risks.join('、'))}` : ''}${aliases.length ? ` · 同稿 ${aliases.length} 个 URL` : ''}</div>
-    </div>`;
-  }).join('')}</div>`;
-}
-
-function renderPatternLibraryEntry(entry, canWrite = false) {
-  const sources = Array.isArray(entry.sources) ? entry.sources : [];
-  const risks = patternLibraryRiskMarks(entry);
-  const allSourcesRisky = sources.length > 0 && sources.every(source => (source.risk_marks || []).length > 0);
-  const action = entry.status === 'candidate'
-    ? {status: 'active', label: '转正', className: 'btn btn-p btn-sm'}
-    : entry.status === 'active'
-      ? {status: 'retired', label: '退役', className: 'btn btn-danger btn-sm'}
-      : {status: 'candidate', label: '恢复为候选', className: 'btn btn-o btn-sm'};
-  const moduleType = entry.kind === 'module' && entry.payload?.type ? `<span class="badge badge-p">${escHtml(entry.payload.type)}</span>` : '';
-  return `<article class="pattern-entry ${entry.status === 'retired' ? 'is-retired' : ''}">
-    <div class="pattern-entry-top">
-      <div class="pattern-entry-title"><span>${escHtml(entry.name || '未命名条目')}</span>${moduleType}</div>
-      <div class="pattern-entry-actions">
-        <span class="pattern-status status-${escHtml(entry.status)}">${escHtml(patternLibraryStatusLabel(entry.status))}</span>
-        ${canWrite ? `<button class="${action.className}" data-pattern-entry="${escHtml(entry.id)}" data-pattern-status="${action.status}">${action.label}</button>` : ''}
-      </div>
-    </div>
-    <div class="pattern-entry-meta">
-      <span>证据 ${Number(entry.evidence_count || 0)}</span>
-      <span>来源域名 ${patternLibraryDomainCount(sources)}</span>
-      ${risks.length ? risks.map(risk => `<span class="pattern-risk-chip">${escHtml(risk)}</span>`).join('') : '<span>无风险标记</span>'}
-    </div>
-    ${entry.status === 'candidate' && allSourcesRisky ? '<p class="pattern-risk-warning">全部来源带风险标记，请确认结构可复用后再转正。</p>' : ''}
-    <details class="pattern-entry-details">
-      <summary>查看详情与来源</summary>
-      ${renderPatternLibraryDetail(entry)}
-      ${renderPatternLibrarySources(sources)}
-    </details>
-  </article>`;
-}
-
-function renderPatternLibraryEntries(data) {
-  const entries = Array.isArray(data?.entries) ? data.entries : [];
-  const byKind = {
-    skeleton: entries.filter(entry => entry.kind === 'skeleton'),
-    module: entries.filter(entry => entry.kind === 'module'),
-    checklist: entries.filter(entry => entry.kind === 'checklist'),
-  };
-  const counts = entries.reduce((total, entry) => {
-    total[entry.status] = (total[entry.status] || 0) + 1;
-    return total;
-  }, {candidate: 0, active: 0, retired: 0});
-  const summary = document.getElementById('patternLibrarySummary');
-  if (summary) {
-    summary.innerHTML = [
-      ['条目总数', entries.length, 'total'], ['候选', counts.candidate, 'candidate'],
-      ['已转正', counts.active, 'active'], ['已退役', counts.retired, 'retired'],
-    ].map(([label, value, type]) => `<div class="pattern-library-stat stat-${type}"><span>${label}</span><strong>${value}</strong></div>`).join('');
-  }
-  const recent = data?.recent_ingest;
-  const ingest = document.getElementById('patternLibraryIngest');
-  if (ingest) {
-    ingest.textContent = recent
-      ? `最近入库：${recent.cards} 张卡，新建 ${recent.created} / 归并 ${recent.matched}，错误 ${recent.errors}${recent.date ? `（${recent.date}）` : ''}`
-      : '暂无 stage2 入库报告。';
-  }
-  const groups = [
-    ['Skeletons', 'SkeletonCount', byKind.skeleton, '暂无骨架条目'],
-    ['Modules', 'ModuleCount', byKind.module, '暂无段落模式条目'],
-    ['Checklists', 'ChecklistCount', byKind.checklist, '暂无引用友好清单条目'],
-  ];
-  groups.forEach(([listSuffix, countSuffix, group, empty]) => {
-    const list = document.getElementById(`patternLibrary${listSuffix}`);
-    const count = document.getElementById(`patternLibrary${countSuffix}`);
-    if (count) count.textContent = `${group.length} 条`;
-    if (list) list.innerHTML = group.length ? group.map(entry => renderPatternLibraryEntry(entry, Boolean(data?.can_write))).join('') : patternLibraryEmpty(empty);
-  });
-  document.querySelectorAll('[data-pattern-status]').forEach(button => {
-    button.addEventListener('click', () => updatePatternLibraryStatus(button.dataset.patternEntry, button.dataset.patternStatus));
-  });
-}
-
-function renderPatternLibraryUnavailable(message) {
-  const content = document.getElementById('patternLibraryContent');
-  const summary = document.getElementById('patternLibrarySummary');
-  if (summary) summary.innerHTML = '';
-  if (content) content.innerHTML = patternLibraryEmpty(message);
-}
-
-async function loadPatternLibrary() {
-  const scopeSelect = document.getElementById('patternLibraryScope');
-  if (!scopeSelect) return;
-  try {
-    const data = await api('/api/pattern-library/scopes');
-    if (data.error) throw new Error(data.error);
-    const scopes = Array.isArray(data.scopes) ? data.scopes : [];
-    const previous = scopeSelect.value;
-    scopeSelect.innerHTML = scopes.map(item => `<option value="${escHtml(item.scope)}">${escHtml(item.scope)}（${Number(item.entry_count || 0)} 条）</option>`).join('');
-    if (!scopes.length) {
-      renderPatternLibraryUnavailable('暂无写法库条目');
-      return;
-    }
-    scopeSelect.value = scopes.some(item => item.scope === previous) ? previous : scopes[0].scope;
-    await loadPatternLibraryEntries();
-  } catch (error) {
-    renderPatternLibraryUnavailable(`写法库加载失败：${error.message}`);
-  }
-}
-
-async function loadPatternLibraryEntries() {
-  const scopeSelect = document.getElementById('patternLibraryScope');
-  const scope = scopeSelect?.value;
-  if (!scope) return;
-  try {
-    const data = await api(`/api/pattern-library/entries?scope=${encodeURIComponent(scope)}`);
-    if (data.error) throw new Error(data.error);
-    renderPatternLibraryEntries(data);
-  } catch (error) {
-    renderPatternLibraryUnavailable(`写法库加载失败：${error.message}`);
-  }
-}
-
-async function updatePatternLibraryStatus(entryId, status) {
-  const scope = document.getElementById('patternLibraryScope')?.value;
-  if (!scope || !entryId) return;
-  try {
-    const data = await api('/api/pattern-library/status', 'POST', {scope, entry_id: entryId, status});
-    if (data.error) throw new Error(data.error);
-    toast(`已更新为${patternLibraryStatusLabel(status)}`);
-    await loadPatternLibraryEntries();
-  } catch (error) {
-    toast(`状态更新失败：${error.message}`, 'err');
-  }
-}
-
 let dailySelectedIds = new Set();
 
 
@@ -3486,13 +3400,13 @@ async function loadDailyTopArticles(date, groupId, taskId='') {
     const ta = document.getElementById('dailyTopArticles');
     if (stats.top_articles_by_ai?.length) {
       const groupsHtml = stats.top_articles_by_ai.map(group => {
-        const articles = (group.top_articles || []).slice(0, 12);
+        const articles = (group.top_articles || []).slice(0, 20);
         if (!articles.length) return '';
         const groupTotal = group.total_records || totalRecords;
         return `
           <div style="padding:8px 0 12px;border-bottom:1.5px solid var(--border2);margin-bottom:8px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
-              <span style="font-size:12px;font-weight:900;color:#312e81">${escHtml(group.platform_name || group.source_platform)} 高频引用文章 Top12</span>
+              <span style="font-size:12px;font-weight:900;color:#312e81">${escHtml(group.platform_name || group.source_platform)} 高频引用文章 Top20</span>
               <span style="font-size:10px;color:var(--text3);font-weight:800">记录 ${escHtml(groupTotal)}</span>
             </div>
             ${renderDailyTopArticleRows(articles, groupTotal)}

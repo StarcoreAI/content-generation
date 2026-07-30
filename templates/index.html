@@ -133,7 +133,7 @@
 
   <!-- 高频引用文章 -->
   <div class="card">
-    <div class="card-hd"><span class="card-title">高频引用文章（按 AI 平台 Top12）</span></div>
+    <div class="card-hd"><span class="card-title">高频引用文章（按 AI 平台 Top20）</span></div>
     <div id="dailyTopArticles"><div class="empty"><i class="ti ti-file-text"></i><p>加载中...</p></div></div>
   </div>
 
@@ -252,6 +252,12 @@
   </div>
 
   <div class="card">
+    <div class="card-hd"><div><span class="card-title">选择层分析报告</span><div class="card-sub">临时只读展示，不进入知识库、不做字段提取</div></div></div>
+    <div id="selectionSurfaceReports" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:12px;color:var(--text3)">加载中...</span></div>
+    <div id="selectionSurfaceReportPreview" style="display:none;white-space:pre-wrap;max-height:680px;overflow:auto;padding:12px;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm);font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace"></div>
+  </div>
+
+  <div class="card">
     <div class="card-hd">
       <div><span class="card-title">问题组场景词提示</span><div class="card-sub">基于 Query 与高引用文章表面提取；仅作运营写作提示</div></div>
       <button class="btn btn-p btn-sm" id="btnRefreshQueryScenes" onclick="refreshQueryScenes(false)">提取 / 更新场景词</button>
@@ -296,54 +302,16 @@
   <div class="pg-hd">
     <div>
       <div class="pg-title">✦ <em>引用情报分析</em></div>
-      <div class="pg-sub">从高频引用文章筛选可学写法、逐篇解剖并沉淀到待审核写法库</div>
-    </div>
-    <div class="acts">
-      <input type="date" id="referenceDate" onchange="loadReferenceIntelligence()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
-      <button class="btn btn-o btn-sm" onclick="loadReferenceIntelligence()">刷新</button>
-      <button class="btn btn-p btn-sm" id="btnReferenceAnalyze" onclick="analyzeReferenceIntelligence()">
-        <span class="spin" id="spReferenceAnalyze" style="display:none"></span>
-        生成引用情报
-      </button>
+      <div class="pg-sub">选择实际问题后提交文章链接；系统抓取正文，仅分析运营确认已被实际精读的文章。</div>
     </div>
   </div>
-  <div id="referenceAnalyzeProgress" style="display:none;background:rgba(109,92,247,.06);border:1.5px solid rgba(109,92,247,.15);border-radius:var(--r-sm);padding:12px 14px;margin-bottom:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px">
-      <span id="referenceAnalyzeProgressText" style="font-size:12px;font-weight:800;color:var(--pri)">抓取文章...</span>
-      <button type="button" class="btn btn-danger btn-sm" id="btnReferenceCancel" onclick="cancelReferenceAnalysis()">终止生成</button>
-    </div>
-    <div style="height:9px;background:rgba(109,92,247,.1);border-radius:20px;overflow:hidden">
-      <div id="referenceAnalyzeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,var(--pri),var(--pri-l));border-radius:20px;transition:width .25s linear"></div>
-    </div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">提交确认精读文章</span><div class="card-sub">运营只需选择问题并粘贴文章链接；标题和正文由系统抓取。</div></div></div>
+    <div class="form-row col2"><div class="fld"><label>问题组</label><select id="routeAnalysisGroupSelect" onchange="onRouteAnalysisGroupChange()"><option value="">请选择问题组</option></select></div><div class="fld"><label>对应问题</label><select id="routeAnalysisQuerySelect"><option value="">请先选择问题组</option></select></div></div>
+    <div class="fld"><label>文章链接</label><input id="routeAnalysisUrl" placeholder="https://..."></div>
+    <button class="btn btn-p" onclick="analyzeConfirmedReference()">分析并沉淀路线</button><span id="routeAnalysisStatus" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
   </div>
-  <section class="reference-pattern-library">
-  <div class="pg-hd">
-    <div>
-      <div class="pg-title"><em>写法沉淀</em></div>
-      <div class="pg-sub">审核跨文章积累的可复用写作结构，人工决定哪些候选条目可供生产侧使用。</div>
-    </div>
-    <div class="acts">
-      <select id="patternLibraryScope" onchange="loadPatternLibraryEntries()" aria-label="写法库范围"></select>
-      <button class="btn btn-o btn-sm" onclick="loadPatternLibrary()" title="刷新写法库"><i class="ti ti-refresh"></i></button>
-    </div>
-  </div>
-  <div id="patternLibraryIngest" class="info-banner">正在读取最近入库动态…</div>
-  <div id="patternLibrarySummary" class="pattern-library-summary"></div>
-  <div id="patternLibraryContent">
-    <section class="pattern-library-group">
-      <div class="pattern-library-group-hd"><h2>骨架</h2><span id="patternLibrarySkeletonCount"></span></div>
-      <div id="patternLibrarySkeletons"></div>
-    </section>
-    <section class="pattern-library-group">
-      <div class="pattern-library-group-hd"><h2>段落模式</h2><span id="patternLibraryModuleCount"></span></div>
-      <div id="patternLibraryModules"></div>
-    </section>
-    <section class="pattern-library-group">
-      <div class="pattern-library-group-hd"><h2>引用友好清单</h2><span id="patternLibraryChecklistCount"></span></div>
-      <div id="patternLibraryChecklists"></div>
-    </section>
-  </div>
-  </section>
+  <div class="card"><div class="card-hd"><span class="card-title">行业完整路线</span><button class="btn btn-o btn-sm" onclick="loadContentRoutes()">刷新</button></div><div id="contentRouteList" style="font-size:12px;color:var(--text3)">请选择客户后查看。</div></div>
 </div>
 
 <!-- ═══ 客户资料解析 ═══ -->
@@ -411,10 +379,9 @@
     <div><div class="pg-title">✦ <em>客户知识库</em></div><div class="pg-sub">将客户资料解析与 AI 联网补充整理为一份可编辑总资料；不会自动参与内容生产</div></div>
     <div class="acts">
       <button class="btn btn-o btn-sm" onclick="loadCustomerKnowledge()">刷新</button>
-      <button class="btn btn-p btn-sm" onclick="syncCustomerKnowledge()">整理现有资料</button>
     </div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">保存已确认口径</button></div>
     <div id="knowledgeCustomerSections" style="display:grid;grid-template-columns:1fr;gap:12px"></div>
@@ -429,10 +396,39 @@
       <button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
     </div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">竞品总资料</span><div class="card-sub" id="knowledgeCompetitorStatus">请选择客户后查看</div></div><div class="acts"><button class="btn btn-o btn-sm" onclick="addCompetitorKnowledgeSection()">新增竞品</button><button class="btn btn-p btn-sm" onclick="saveCompetitorKnowledge()">保存</button></div></div>
     <div id="knowledgeCompetitorSections"><div style="font-size:12px;color:var(--text3)">请选择客户后查看</div></div>
+  </div>
+</div>
+
+<!-- ═══ 行业写法库 ═══ -->
+<div class="page" id="page-knowledge-routes">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>行业写法库</em></div><div class="pg-sub">按当前客户所属行业沉淀写作组织方式；不属于客户资料或竞品资料，也不会自动参与内容生产。</div></div>
+    <button class="btn btn-o btn-sm" onclick="loadKnowledgeRoutes()">刷新</button>
+  </div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">当前行业路线</span><div class="card-sub" id="knowledgeRoutesStatus">请选择客户后查看</div></div></div>
+    <div class="two-col">
+      <section><div style="font-size:13px;font-weight:800;color:var(--text2);margin-bottom:10px">介绍型写法库</div><div id="knowledgeIntroRoutes" style="display:grid;gap:10px"></div></section>
+      <section><div style="font-size:13px;font-weight:800;color:var(--text2);margin-bottom:10px">对比型写法库</div><div id="knowledgeComparisonRoutes" style="display:grid;gap:10px"></div></section>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ 场景词库 ═══ -->
+<div class="page" id="page-knowledge-scenes">
+  <div class="pg-hd">
+    <div><div class="pg-title">✦ <em>场景词库</em></div><div class="pg-sub">复用爬取记录库已整理的场景词，按问题组与 Query 展示；可编辑后保存，不新增或复制一份独立数据。</div></div>
+    <button class="btn btn-o btn-sm" onclick="loadKnowledgeScenes()">刷新</button>
+  </div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="card">
+    <div class="card-hd"><div><span class="card-title">Query 场景词</span><div class="card-sub" id="knowledgeScenesStatus">请选择客户后查看</div></div></div>
+    <div id="knowledgeSceneRows"><div style="font-size:12px;color:var(--text3)">请选择客户后查看</div></div>
   </div>
 </div>
 
@@ -442,7 +438,7 @@
     <div><div class="pg-title">✦ <em>质量门禁知识库</em></div><div class="pg-sub">维护通用与行业审核规则；这里只编辑规则，不处理具体文章。</div></div>
     <button class="btn btn-o btn-sm" onclick="loadQualityPolicy()">刷新</button>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；保存前会要求确认。</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">保存通用规则</button></div>
     <div class="form-row col2"><div class="fld"><label>违禁词（每行一个）</label><textarea id="qualityCommonBanned" rows="6"></textarea></div><div class="fld"><label>必须做（每行一条）</label><textarea id="qualityCommonMustDo" rows="6"></textarea></div></div>
@@ -458,14 +454,14 @@
 <!-- ═══ 内容生产 ═══ -->
 <div class="page" id="page-content">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">抽样 → 简报 → 写作 → 质量门禁</div></div>
+    <div><div class="pg-title">✦ <em>内容生产</em></div><div class="pg-sub">显式选择资料 → 行业路线 → 单阶段写作 → 质量提醒</div></div>
   </div>
   <!-- 深度分析导入提示 -->
   <div id="ct-import-banner" style="display:none;padding:10px 14px;background:linear-gradient(135deg,rgba(109,92,247,.08),rgba(244,114,182,.06));border:1.5px solid rgba(109,92,247,.2);border-radius:var(--r-sm);margin-bottom:14px;font-size:12px;font-weight:700;color:var(--pri)"></div>
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">生成参考资料</span><div class="card-sub">仅供内容生产使用，上传后默认参与文章生成，可逐份关闭</div></div>
+      <div><span class="card-title">生成参考资料</span><div class="card-sub">内容上传资料仅在本次明确勾选后参与生成</div></div>
       <button class="btn btn-o btn-sm" onclick="document.getElementById('contentMaterialUpload').click()">
         上传资料
         <input type="file" id="contentMaterialUpload" accept=".txt,.md,.pdf,.doc,.docx,.xlsx,.xls" multiple style="display:none" onchange="uploadContentMaterial(this)">
@@ -473,13 +469,10 @@
     </div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
       <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
-        <input type="checkbox" id="useMaterialPackage" checked style="width:auto;accent-color:var(--pri)">使用 AI解析资料包
+        <input type="checkbox" id="useCustomerMaster" checked style="width:auto;accent-color:var(--pri)">使用客户内容资料
       </label>
       <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
-        <input type="checkbox" id="useMaterialWebSupplement" checked style="width:auto;accent-color:var(--pri)">使用 AI联网扩展资料
-      </label>
-      <label style="display:inline-flex;align-items:center;gap:6px;font-size:11px;font-weight:800;color:var(--text2)">
-        <input type="checkbox" id="useCompetitorMaterials" checked style="width:auto;accent-color:var(--pri)">使用竞品资料
+        <input type="checkbox" id="useContentUploads" style="width:auto;accent-color:var(--pri)">使用本页上传资料
       </label>
     </div>
     <div id="contentMaterialList"><div style="font-size:11px;color:var(--text3)">暂无内容生产资料</div></div>
@@ -487,9 +480,12 @@
 
   <div class="card">
     <div class="card-hd">
-      <div><span class="card-title">生成配置</span><div class="card-sub">系统会基于已选资料抽样、生成简报并写作，再运行质量门禁；文章修改请到质量门禁操作。</div></div>
+      <div><span class="card-title">生成配置</span><div class="card-sub">从问题组选择本次 Query，系统只读取下方明确勾选的资料；路线只决定组织方式。</div></div>
     </div>
-    <div id="content-choice-options" style="margin:0 0 14px;padding:10px 0;border-bottom:1px solid var(--border2);font-size:11px;color:var(--text3)">请选择客户后配置人群角度、FAQ 与竞品规则</div>
+    <div class="form-row col2">
+      <div class="fld"><label>问题组</label><select id="contentGroupSelect" onchange="onContentGroupChange()"><option value="">请选择问题组</option></select></div>
+      <div class="fld"><label>本次 Query</label><select id="contentQuerySelect"><option value="">请先选择问题组</option></select></div>
+    </div>
     <div class="form-row">
       <div class="fld">
         <label>文章类型</label>
@@ -516,6 +512,7 @@
       </button>
       <span style="font-size:11px;color:var(--text3)" id="contentGenerateStatus"></span>
     </div>
+    <div id="contentCompetitorPicker" style="display:none;margin:0 0 14px;padding:10px 0;border-top:1px solid var(--border2);font-size:12px;color:var(--text2)"></div>
     <div id="contentBatchProgress" style="display:none;margin-top:10px"></div>
   </div>
   <div class="card">

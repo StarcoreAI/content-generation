@@ -137,3 +137,43 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertNotIn("contentGenerationSubtypeLabel", script)
         self.assertNotIn("子类型：", script)
         self.assertNotIn("文章子类型：", script)
+
+    def test_knowledge_base_has_separate_intro_and_comparison_route_library(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="page-knowledge-routes"', template)
+        self.assertIn("openKnowledge('routes')", template)
+        self.assertIn("介绍型写法库", template)
+        self.assertIn("对比型写法库", template)
+        self.assertIn("loadKnowledgeRoutes", script)
+        self.assertIn("/api/knowledge/routes/", script)
+        self.assertIn("deleteKnowledgeRoute", script)
+        self.assertNotIn("route.status === 'retired'", script)
+
+    def test_customer_knowledge_uses_refresh_without_a_duplicate_manual_sync_button(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertNotIn("整理现有资料", template)
+        self.assertNotIn("syncCustomerKnowledge", script)
+
+    def test_knowledge_base_exposes_query_grouped_scene_term_library(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="page-knowledge-scenes"', template)
+        self.assertIn("openKnowledge('scenes')", template)
+        self.assertIn("loadKnowledgeScenes", script)
+        self.assertIn("saveKnowledgeSceneTerms", script)
+        self.assertIn("可编辑后保存", template)
+        self.assertIn("/api/records/selection-evidence/", script)
+
+    def test_frontend_removes_legacy_pattern_library_controls(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        styles = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")
+
+        self.assertNotIn("function patternLibraryStatusLabel", script)
+        self.assertNotIn("function loadPatternLibrary", script)
+        self.assertNotIn("/api/pattern-library/", script)
+        self.assertNotIn(".pattern-library-", styles)

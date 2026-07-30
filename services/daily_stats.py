@@ -90,7 +90,7 @@ def build_daily_ref_stats(records, platform_names=None, platform_order=None):
                 "ai_platforms": [ai_platform],
             }
             for key, info in ai_article_info[ai_platform].items()
-        ], key=lambda x: x["count"], reverse=True)[:12]
+        ], key=lambda x: x["count"], reverse=True)[:20]
         top_articles_by_ai.append({
             "source_platform": ai_platform,
             "platform_name": platform_names.get(ai_platform, ai_platform),

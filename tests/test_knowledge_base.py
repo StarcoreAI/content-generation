@@ -3,6 +3,7 @@ import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import app as geo_app
 from services.auth import create_user
@@ -17,7 +18,6 @@ def isolated_knowledge_app():
         "F_USERS": geo_app.F_USERS,
         "F_RAW_RECORDS": geo_app.F_RAW_RECORDS,
         "F_COMPETITOR_ARTICLE_BODY_HITS": geo_app.F_COMPETITOR_ARTICLE_BODY_HITS,
-        "F_REFERENCE_INTELLIGENCE": geo_app.F_REFERENCE_INTELLIGENCE,
         "AUTH_DISABLED": geo_app.app.config.get("AUTH_DISABLED"),
         "SECRET_KEY": geo_app.app.config.get("SECRET_KEY"),
     }
@@ -27,7 +27,6 @@ def isolated_knowledge_app():
         geo_app.F_USERS = str(Path(tmp) / "users.json")
         geo_app.F_RAW_RECORDS = str(Path(tmp) / "raw_records.json")
         geo_app.F_COMPETITOR_ARTICLE_BODY_HITS = str(Path(tmp) / "competitor_article_body_hits.json")
-        geo_app.F_REFERENCE_INTELLIGENCE = str(Path(tmp) / "reference_intelligence")
         geo_app.app.config["AUTH_DISABLED"] = False
         geo_app.app.config["SECRET_KEY"] = "knowledge-test-secret"
         try:
@@ -44,7 +43,7 @@ def isolated_knowledge_app():
 
 
 class CustomerMasterTests(unittest.TestCase):
-    def test_sync_builds_clean_structured_master_for_model_use(self):
+    def test_sync_builds_customer_facts_master_without_web_background(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             package_dir = root / "material_packages" / "client-a"
@@ -72,12 +71,12 @@ class CustomerMasterTests(unittest.TestCase):
             result = service.sync_customer_master("client-a", package_dir)
 
             content = result["content"]
-            for heading in ("品牌基础", "产品/服务", "优势", "信任", "公开背景"):
+            for heading in ("品牌与服务主体", "产品与服务", "特有方法与服务逻辑"):
                 self.assertIn(f"## {heading}", content)
-            self.assertNotIn("## 目标人群/痛点", content)
+            self.assertNotIn("## 服务对象与适配边界", content)
             self.assertIn("客户品牌为星河教育。", content)
-            self.assertIn("2026 年报名规则以官方通知为准。", content)
-            self.assertIn("使用限制：具体报名要求以当年通知为准。", content)
+            self.assertNotIn("2026 年报名规则以官方通知为准。", content)
+            self.assertNotIn("使用限制：具体报名要求以当年通知为准。", content)
             self.assertNotIn("[客户资料解析]", content)
             self.assertNotIn("[AI 联网补充]", content)
             self.assertNotIn("来源 URL", content)
@@ -97,8 +96,8 @@ class CustomerMasterTests(unittest.TestCase):
             package_dir.mkdir(parents=True)
             (package_dir / "latest_injection.md").write_text(
                 "# 客户资料解析\n\n"
-                "## 品牌基础\n客户品牌为星河教育。\n\n"
-                "## 优势\n暂无资料。\n\n"
+                "## 品牌与服务主体\n客户品牌为星河教育。\n\n"
+                "## 特有方法与服务逻辑\n暂无资料。\n\n"
                 "## 运营备注与已确认口径\n暂无资料。\n",
                 encoding="utf-8",
             )
@@ -107,31 +106,154 @@ class CustomerMasterTests(unittest.TestCase):
                 "client-a", package_dir,
             )["content"]
 
-            self.assertIn("## 品牌基础", content)
-            self.assertNotIn("## 优势", content)
+            self.assertIn("## 品牌与服务主体", content)
+            self.assertNotIn("## 特有方法与服务逻辑", content)
             self.assertNotIn("## 运营备注与已确认口径", content)
 
-    def test_changed_source_does_not_overwrite_manually_saved_master_without_confirmation(self):
+    def test_customer_facts_validation_rejects_editorial_sections(self):
+        from services.knowledge_base import validate_customer_content_facts
+
+        result = validate_customer_content_facts(
+            "# 客户内容资料\n\n## 产品与服务\n\n提供服务。\n\n## 可用角度\n\n后续可写成咨询入口。"
+        )
+
+        self.assertFalse(result["usable_for_generation"])
+        self.assertIn("可用角度", result["forbidden_headings"])
+
+    def test_customer_facts_validation_requires_brand_or_product_section(self):
+        from services.knowledge_base import validate_customer_content_facts
+
+        result = validate_customer_content_facts("## 信任与可核验信息\n\n已有资质。")
+
+        self.assertFalse(result["usable_for_generation"])
+
+    def test_prepare_then_confirm_customer_fact_migration_does_not_write_early(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_injection.md").write_text(
+                "# 客户内容资料\n\n## 产品与服务\n\n提供咨询服务。", encoding="utf-8",
+            )
+            service = KnowledgeBaseService(root / "knowledge_base")
+            service.save_customer_master("client-a", "# 客户总资料\n\n## 可用角度\n\n旧策划内容。")
+
+            preview = service.prepare_customer_fact_migration("client-a", package_dir)
+
+            self.assertIn("提供咨询服务", preview["candidate_content"])
+            self.assertIn("可用角度", preview["deletion_headings"])
+            self.assertIn("旧策划内容", service.load_customer_master("client-a")["content"])
+            confirmed = service.confirm_customer_fact_migration("client-a", preview["candidate_content"], package_dir)
+            self.assertIn("提供咨询服务", confirmed["content"])
+
+    def test_changed_customer_sources_incrementally_merge_without_overwriting_manual_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             package_dir = root / "material_packages" / "client-a"
             package_dir.mkdir(parents=True)
             source = package_dir / "latest_injection.md"
-            source.write_text("# 客户资料注入包\n\n## 品牌基础\n旧资料。", encoding="utf-8")
+            source.write_text("# 客户资料注入包\n\n## 产品与服务\n- 旧资料。", encoding="utf-8")
             service = KnowledgeBaseService(root / "knowledge_base")
             service.sync_customer_master("client-a", package_dir)
-            service.save_customer_master("client-a", "# 客户总资料\n\n人工确认后的口径。")
-            source.write_text("# 客户资料注入包\n\n## 品牌基础\n上游新资料。", encoding="utf-8")
+            service.save_customer_master("client-a", "# 客户内容资料\n\n## 产品与服务\n\n- 人工确认事实。")
+            source.write_text("# 客户资料注入包\n\n## 产品与服务\n- 上游新增事实。", encoding="utf-8")
+            (package_dir / "latest_web_supplement.md").write_text(
+                "# 客户联网事实候选\n\n## 信任与可核验信息\n\n- 联网新增事实。",
+                encoding="utf-8",
+            )
 
-            pending = service.sync_customer_master("client-a", package_dir)
+            merged = service.sync_customer_master("client-a", package_dir)
 
-            self.assertTrue(pending["source_update_available"])
-            self.assertEqual(pending["content"], "# 客户总资料\n\n人工确认后的口径。")
-            refreshed = service.sync_customer_master("client-a", package_dir, overwrite=True)
-            self.assertIn("上游新资料。", refreshed["content"])
+            self.assertFalse(merged["source_update_available"])
+            self.assertIn("人工确认事实。", merged["content"])
+            self.assertIn("上游新增事实。", merged["content"])
+            self.assertIn("联网新增事实。", merged["content"])
+            self.assertEqual(merged["merged_count"], 2)
+            self.assertEqual(service.sync_customer_master("client-a", package_dir)["merged_count"], 0)
+
+    def test_removed_customer_section_stays_suppressed_after_auto_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            source = package_dir / "latest_injection.md"
+            source.write_text(
+                "# 客户资料\n\n## 产品与服务\n\n- 定制服务。\n\n## 服务对象与适配边界\n\n- 面向首次咨询用户。",
+                encoding="utf-8",
+            )
+            service = KnowledgeBaseService(root / "knowledge_base")
+            initial = service.sync_customer_master("client-a", package_dir)["content"]
+            service.save_customer_master("client-a", initial.replace(
+                "\n\n## 服务对象与适配边界\n\n- 面向首次咨询用户。", "",
+            ), removed_sections=["服务对象与适配边界"])
+            source.write_text(
+                "# 客户资料\n\n## 产品与服务\n\n- 定制服务。\n\n## 服务对象与适配边界\n\n- 面向首次咨询用户。\n- 关注恢复期顾虑。",
+                encoding="utf-8",
+            )
+
+            merged = service.sync_customer_master("client-a", package_dir)["content"]
+
+        self.assertNotIn("服务对象与适配边界", merged)
+        self.assertNotIn("恢复期顾虑", merged)
+
+    def test_removing_last_customer_section_stays_suppressed_after_auto_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package_dir = root / "material_packages" / "client-a"
+            package_dir.mkdir(parents=True)
+            (package_dir / "latest_injection.md").write_text(
+                "# 客户资料\n\n## 服务对象与适配边界\n\n- 面向首次咨询用户。",
+                encoding="utf-8",
+            )
+            service = KnowledgeBaseService(root / "knowledge_base")
+            initial = service.sync_customer_master("client-a", package_dir)["content"]
+            service.save_customer_master("client-a", initial.replace(
+                "\n\n## 服务对象与适配边界\n\n- 面向首次咨询用户。", "",
+            ), removed_sections=["服务对象与适配边界"])
+
+            merged = service.sync_customer_master("client-a", package_dir)["content"]
+
+        self.assertNotIn("服务对象与适配边界", merged)
 
 
 class CustomerMasterApiTests(unittest.TestCase):
+    def test_generated_customer_and_competitor_web_facts_auto_merge_into_masters(self):
+        with isolated_knowledge_app() as root:
+            geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "name": "客户", "industry": "教育"}])
+            material_dir = root / "material_packages" / "client-a"
+            material_dir.mkdir(parents=True)
+            (material_dir / "latest_injection.md").write_text(
+                "# 客户资料\n\n## 产品与服务\n\n- 客户原有事实。", encoding="utf-8",
+            )
+
+            def customer_expand(*, output_dir, **_kwargs):
+                (output_dir / "latest_web_supplement.md").write_text(
+                    "# 客户联网事实候选\n\n## 信任与可核验信息\n\n- 客户联网新增事实。",
+                    encoding="utf-8",
+                )
+                return {"ok": True}
+
+            def competitor_expand(*, output_dir, **_kwargs):
+                output_dir.mkdir(parents=True, exist_ok=True)
+                (output_dir / "latest_web_competitors.md").write_text(
+                    "# 竞品联网资料补充包\n\n## 竞品甲\n\n- 竞品联网新增事实。",
+                    encoding="utf-8",
+                )
+                return {"ok": True}
+
+            with patch.object(geo_app, "get_settings", return_value={"tavily_api_key": "test"}), \
+                    patch.object(geo_app, "get_tavily_api_key", return_value="test"), \
+                    patch.object(geo_app, "expand_material_web_package", side_effect=customer_expand), \
+                    patch.object(geo_app, "expand_competitor_web_package", side_effect=competitor_expand):
+                customer_result = geo_app.run_client_material_web_expansion("client-a")
+                competitor_result = geo_app.run_client_competitor_web_expansion("client-a", ["竞品甲"])
+
+            self.assertEqual(customer_result["knowledge_merge"]["merged_count"], 1)
+            self.assertEqual(competitor_result["knowledge_merge"]["merged_count"], 1)
+            service = geo_app.knowledge_base_service()
+            self.assertIn("客户联网新增事实。", service.load_customer_master("client-a")["content"])
+            self.assertIn("竞品联网新增事实。", service.load_competitor_master("client-a")["content"])
+
     def test_quality_policy_edits_common_and_industry_without_client_policy(self):
         with isolated_knowledge_app():
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
@@ -254,7 +376,7 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertIn("第二批事实", content)
             self.assertEqual(content.count("共同事实"), 1)
 
-    def test_customer_knowledge_get_builds_master_from_parsed_and_web_sources(self):
+    def test_customer_knowledge_get_builds_master_from_parsed_source_only(self):
         with isolated_knowledge_app() as root:
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
             geo_app.save(geo_app.F_CLIENTS, [{"id": "client-a", "owner_username": "owner", "brand": "客户品牌"}])
@@ -277,7 +399,7 @@ class CustomerMasterApiTests(unittest.TestCase):
             body = response.get_json()
             self.assertNotIn("citation_summary", body)
             self.assertIn("解析得到的品牌资料。", body["content"])
-            self.assertIn("联网补充的公开资料。", body["content"])
+            self.assertNotIn("联网补充的公开资料。", body["content"])
             self.assertNotIn("[客户资料解析]", body["content"])
             self.assertNotIn("[AI 联网补充]", body["content"])
 
@@ -304,7 +426,8 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertEqual(saved.status_code, 200)
             loaded = client.get("/api/knowledge/customer/client-a")
             self.assertEqual(loaded.status_code, 200)
-            self.assertEqual(loaded.get_json()["content"], "# 客户总资料\n\n人工口径")
+            self.assertIn("人工口径", loaded.get_json()["content"])
+            self.assertIn("星河教育。", loaded.get_json()["content"])
 
     def test_other_operator_gets_404_for_customer_master(self):
         with isolated_knowledge_app() as root:
@@ -414,6 +537,19 @@ class CustomerMasterApiTests(unittest.TestCase):
             self.assertNotIn("来源 URL", content)
             self.assertNotIn("https://", content)
 
+            client.put(
+                "/api/knowledge/competitors/client-a",
+                json={"content": "# 竞品总资料\n\n## 竞品乙\n人工确认事实。"},
+            )
+            (package_dir / "latest_web_competitors.md").write_text(
+                "# 竞品联网扩展\n\n## 竞品乙\n联网刷新新增事实。",
+                encoding="utf-8",
+            )
+            refreshed = client.get("/api/knowledge/competitors/client-a")
+
+            self.assertIn("人工确认事实。", refreshed.get_json()["content"])
+            self.assertIn("联网刷新新增事实。", refreshed.get_json()["content"])
+
     def test_competitor_master_omits_short_placeholder_sections(self):
         with isolated_knowledge_app() as root:
             create_user(geo_app.F_USERS, "owner", "secret-pass", role="operator")
@@ -458,8 +594,12 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertIn("function shouldHideKnowledgeSection(", script)
         self.assertNotIn("function renderKnowledgeCitationSummary(", script)
         self.assertIn("navTo('knowledge-' + section, null)", script)
-        self.assertIn("function syncCustomerKnowledge(", script)
+        self.assertNotIn("function syncCustomerKnowledge(", script)
         self.assertIn("function saveCustomerKnowledge()", script)
+        self.assertIn("移除整节", script)
+        self.assertIn("card.remove()", script)
+        self.assertIn("removedCustomerKnowledgeSections", script)
+        self.assertIn("removed_sections", script)
         self.assertIn("/api/knowledge/customer/", script)
         page = template.split('id="page-knowledge-customer"', 1)[1].split('id="page-content"', 1)[0]
         self.assertNotIn("generateContentArticle", page)
@@ -515,6 +655,9 @@ class CompetitorMasterTests(unittest.TestCase):
         self.assertIn("竞品甲提供到店试听。", prompt)
         self.assertIn("不使用外部知识", prompt)
         self.assertIn("## 真实竞品名称", prompt)
+        self.assertIn("主要介绍或比较对象", prompt)
+        self.assertIn("医院只是所属关系", prompt)
+        self.assertIn("老师只是学校信息", prompt)
 
     def test_detailed_competitor_prompt_requires_an_overview_before_facts(self):
         from services.competitor_knowledge import build_high_frequency_competitor_prompt
@@ -562,20 +705,19 @@ class CompetitorMasterTests(unittest.TestCase):
         self.assertNotIn("竞品 A", content)
         self.assertNotIn("客户品牌", content)
 
-    def test_manual_competitor_master_is_not_silently_overwritten(self):
+    def test_changed_competitor_facts_incrementally_merge_without_overwriting_manual_facts(self):
         with tempfile.TemporaryDirectory() as tmp:
             service = KnowledgeBaseService(Path(tmp) / "knowledge_base")
             service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n旧资料。")
             service.save_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n人工确认资料。")
 
-            pending = service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n上游新资料。")
+            merged = service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n上游新资料。")
 
-            self.assertTrue(pending["source_update_available"])
-            self.assertIn("人工确认资料。", pending["content"])
-            replaced = service.sync_competitor_master(
-                "client-a", "# 竞品总资料\n\n## 竞品甲\n上游新资料。", overwrite=True
-            )
-            self.assertIn("上游新资料。", replaced["content"])
+            self.assertFalse(merged["source_update_available"])
+            self.assertIn("人工确认资料。", merged["content"])
+            self.assertIn("上游新资料。", merged["content"])
+            self.assertEqual(merged["merged_count"], 1)
+            self.assertEqual(service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n上游新资料。")["merged_count"], 0)
 
 
 if __name__ == "__main__":

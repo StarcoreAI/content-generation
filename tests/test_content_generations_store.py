@@ -18,15 +18,16 @@ def article(article_id, created_at="2026-01-01 10:00:00"):
 
 
 class ContentGenerationStoreTests(unittest.TestCase):
-    def test_provenance_columns_are_idempotent_and_round_trip(self):
+    def test_route_context_columns_are_idempotent_and_round_trip(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
             with store._connection() as conn:
                 columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_articles)")}
             self.assertTrue({
-                "parent_id", "root_id", "batch_id", "brief_json", "provenance_json",
+                "parent_id", "root_id", "batch_id", "route_context_json",
                 "gate_report_json", "modify_instruction",
             }.issubset(columns))
+            self.assertFalse({"article_subtype", "brief_json", "provenance_json"}.intersection(columns))
 
             store.append_generation(
                 "client-a",
@@ -35,8 +36,7 @@ class ContentGenerationStoreTests(unittest.TestCase):
                     "parent_id": "parent-1",
                     "root_id": "root-1",
                     "batch_id": "batch-1",
-                    "brief": {"sections": [{"id": 1}]},
-                    "provenance": {"skeleton_id": "s1"},
+                    "route_context": {"route_id": "route-1"},
                     "gate_report": {"ok": True},
                     "modify_instruction": "只改标题",
                 },
@@ -48,8 +48,7 @@ class ContentGenerationStoreTests(unittest.TestCase):
             self.assertEqual(saved["parent_id"], "parent-1")
             self.assertEqual(saved["root_id"], "root-1")
             self.assertEqual(saved["batch_id"], "batch-1")
-            self.assertEqual(saved["brief"], {"sections": [{"id": 1}]})
-            self.assertEqual(saved["provenance"], {"skeleton_id": "s1"})
+            self.assertEqual(saved["route_context"], {"route_id": "route-1"})
             self.assertEqual(saved["gate_report"], {"ok": True})
             self.assertEqual(saved["modify_instruction"], "只改标题")
 
@@ -125,25 +124,31 @@ class ContentGenerationStoreTests(unittest.TestCase):
             self.assertEqual([item["id"] for item in session["articles"]], ["today"])
             self.assertEqual([item["content"] for item in messages], ["today request", "today article"])
 
-    def test_load_session_preserves_article_subtype_for_result_badge(self):
+    def test_legacy_two_stage_columns_are_migrated_without_losing_article(self):
         with tempfile.TemporaryDirectory() as tmp:
-            store = ContentGenerationStore(os.path.join(tmp, "content.sqlite3"))
+            db_path = os.path.join(tmp, "content.sqlite3")
+            import sqlite3
+            conn = sqlite3.connect(db_path)
+            try:
+                conn.execute("""CREATE TABLE content_articles (
+                    id TEXT, client_id TEXT, sequence INTEGER, title TEXT, content TEXT, model TEXT,
+                    material_count INTEGER, article_type TEXT, article_subtype TEXT, created_at TEXT,
+                    brief_json TEXT, provenance_json TEXT, route_context_json TEXT
+                )""")
+                conn.execute("""INSERT INTO content_articles VALUES
+                    ('a1', 'client-a', 1, 'Title', 'Body', 'model', 1, '介绍型', '旧子类型',
+                     '2026-01-01 10:00:00', '{}', '{}', '{"route_id":"route-a"}')""")
+                conn.commit()
+            finally:
+                conn.close()
+            store = ContentGenerationStore(db_path)
+            saved = store.load_session("client-a")["articles"][0]
+            with store._connection() as conn:
+                columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_articles)")}
 
-            store.append_generation(
-                "client-a",
-                {
-                    **article("a1", "2026-01-01 10:00:00"),
-                    "article_type": "对比型",
-                    "article_subtype": "本地机构筛选标准型",
-                },
-                {"role": "user", "content": "request", "created_at": "2026-01-01 10:00:00"},
-                {"role": "assistant", "content": "article", "created_at": "2026-01-01 10:00:00", "article_id": "a1"},
-            )
-
-            session = store.load_session("client-a")
-
-            self.assertEqual(session["articles"][0]["article_type"], "对比型")
-            self.assertEqual(session["articles"][0]["article_subtype"], "本地机构筛选标准型")
+            self.assertEqual(saved["content"], "Body")
+            self.assertEqual(saved["route_context"], {"route_id": "route-a"})
+            self.assertFalse({"article_subtype", "brief_json", "provenance_json"}.intersection(columns))
 
     def test_delete_generation_removes_article_and_messages(self):
         with tempfile.TemporaryDirectory() as tmp:

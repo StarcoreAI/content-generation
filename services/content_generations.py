@@ -198,6 +198,7 @@ class ContentGenerationStore:
         return conn
 
     def _ensure_schema(self, conn):
+        self._migrate_retired_article_columns(conn)
         conn.execute(
             """
             CREATE TABLE IF NOT EXISTS content_articles (
@@ -209,13 +210,11 @@ class ContentGenerationStore:
                 model TEXT NOT NULL DEFAULT '',
                 material_count INTEGER NOT NULL DEFAULT 0,
                 article_type TEXT NOT NULL DEFAULT '',
-                article_subtype TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL DEFAULT '',
                 parent_id TEXT,
                 root_id TEXT,
                 batch_id TEXT,
-                brief_json TEXT,
-                provenance_json TEXT,
+                route_context_json TEXT,
                 gate_report_json TEXT,
                 generation_status TEXT,
                 modify_instruction TEXT,
@@ -237,12 +236,10 @@ class ContentGenerationStore:
             """
         )
         self._ensure_column(conn, "content_articles", "article_type", "TEXT NOT NULL DEFAULT ''")
-        self._ensure_column(conn, "content_articles", "article_subtype", "TEXT NOT NULL DEFAULT ''")
         self._ensure_column(conn, "content_articles", "parent_id", "TEXT")
         self._ensure_column(conn, "content_articles", "root_id", "TEXT")
         self._ensure_column(conn, "content_articles", "batch_id", "TEXT")
-        self._ensure_column(conn, "content_articles", "brief_json", "TEXT")
-        self._ensure_column(conn, "content_articles", "provenance_json", "TEXT")
+        self._ensure_column(conn, "content_articles", "route_context_json", "TEXT")
         self._ensure_column(conn, "content_articles", "gate_report_json", "TEXT")
         self._ensure_column(conn, "content_articles", "generation_status", "TEXT")
         self._ensure_column(conn, "content_articles", "modify_instruction", "TEXT")
@@ -259,6 +256,47 @@ class ContentGenerationStore:
             ON content_messages(client_id, id ASC)
             """
         )
+
+    def _migrate_retired_article_columns(self, conn):
+        """Drop retired two-stage fields without losing the article record itself."""
+        exists = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'content_articles'"
+        ).fetchone()
+        if not exists:
+            return
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(content_articles)")}
+        retired = {"article_subtype", "brief_json", "provenance_json"}
+        if not retired.intersection(columns):
+            return
+        target = [
+            ("id", "TEXT NOT NULL"), ("client_id", "TEXT NOT NULL"), ("sequence", "INTEGER NOT NULL"),
+            ("title", "TEXT NOT NULL DEFAULT ''"), ("content", "TEXT NOT NULL DEFAULT ''"),
+            ("model", "TEXT NOT NULL DEFAULT ''"), ("material_count", "INTEGER NOT NULL DEFAULT 0"),
+            ("article_type", "TEXT NOT NULL DEFAULT ''"), ("created_at", "TEXT NOT NULL DEFAULT ''"),
+            ("parent_id", "TEXT"), ("root_id", "TEXT"), ("batch_id", "TEXT"),
+            ("route_context_json", "TEXT"), ("gate_report_json", "TEXT"),
+            ("generation_status", "TEXT"), ("modify_instruction", "TEXT"),
+        ]
+        defaults = {
+            "id": "''", "client_id": "''", "sequence": "0", "title": "''", "content": "''",
+            "model": "''", "material_count": "0", "article_type": "''", "created_at": "''",
+            "parent_id": "NULL", "root_id": "NULL", "batch_id": "NULL", "route_context_json": "NULL",
+            "gate_report_json": "NULL", "generation_status": "NULL", "modify_instruction": "NULL",
+        }
+        column_sql = ",\n                ".join(f"{name} {definition}" for name, definition in target)
+        conn.execute(f"""
+            CREATE TABLE content_articles_migrating (
+                {column_sql},
+                PRIMARY KEY (client_id, id)
+            )
+        """)
+        names = ", ".join(name for name, _definition in target)
+        select = ", ".join(name if name in columns else defaults[name] for name, _definition in target)
+        conn.execute(
+            f"INSERT INTO content_articles_migrating ({names}) SELECT {select} FROM content_articles"
+        )
+        conn.execute("DROP TABLE content_articles")
+        conn.execute("ALTER TABLE content_articles_migrating RENAME TO content_articles")
 
     def _import_legacy_client(self, conn, client_id):
         if not self.legacy_json_path or not os.path.exists(self.legacy_json_path):
@@ -326,10 +364,10 @@ class ContentGenerationStore:
             """
             INSERT OR REPLACE INTO content_articles (
                 id, client_id, sequence, title, content, model,
-                material_count, article_type, article_subtype, created_at,
-                parent_id, root_id, batch_id, brief_json, provenance_json, gate_report_json, generation_status, modify_instruction
+                material_count, article_type, created_at,
+                parent_id, root_id, batch_id, route_context_json, gate_report_json, generation_status, modify_instruction
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 str(article.get("id") or ""),
@@ -340,13 +378,11 @@ class ContentGenerationStore:
                 str(article.get("model") or ""),
                 int(article.get("material_count") or 0),
                 self._normalize_article_type(article.get("article_type")),
-                str(article.get("article_subtype") or "").strip(),
                 str(article.get("created_at") or ""),
                 self._optional_text(article.get("parent_id")),
                 self._optional_text(article.get("root_id")),
                 self._optional_text(article.get("batch_id")),
-                self._dumps_optional(article.get("brief")),
-                self._dumps_optional(article.get("provenance")),
+                self._dumps_optional(article.get("route_context")),
                 self._dumps_optional(article.get("gate_report")),
                 str(article.get("generation_status") or ""),
                 self._optional_text(article.get("modify_instruction")),
@@ -383,13 +419,11 @@ class ContentGenerationStore:
             "model": row["model"],
             "material_count": row["material_count"],
             "article_type": row["article_type"],
-            "article_subtype": row["article_subtype"],
             "created_at": row["created_at"],
             "parent_id": row["parent_id"],
             "root_id": row["root_id"],
             "batch_id": row["batch_id"],
-            "brief": self._loads_optional(row["brief_json"]),
-            "provenance": self._loads_optional(row["provenance_json"]),
+            "route_context": self._loads_optional(row["route_context_json"]),
             "gate_report": self._loads_optional(row["gate_report_json"]),
             "generation_status": row["generation_status"],
             "modify_instruction": row["modify_instruction"],

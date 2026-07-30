@@ -171,6 +171,28 @@ class QueryEvidenceTests(unittest.TestCase):
             self.assertFalse((root / "client-1" / "article_surfaces.json").exists())
             self.assertFalse((root / "client-1" / "query_scenes.json").exists())
 
+    def test_operator_can_replace_existing_query_scene_terms_without_losing_evidence(self):
+        from services.selection_evidence import SelectionEvidenceService
+        from services.storage import save_json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "client-1" / "query_scenes.json"
+            path.parent.mkdir(parents=True)
+            save_json(path, {"entries": {"group-1\n问题一": {
+                "group_id": "group-1", "group_name": "问题组", "query": "问题一",
+                "evidence_fingerprint": "kept", "scene_terms": ["旧场景"],
+            }}})
+            service = SelectionEvidenceService(root)
+            result = service.save_query_scene_terms(
+                "client-1", "group-1", "问题组", "问题一", [" 新场景 ", "新场景", "补充场景"],
+            )
+            loaded = service.load_query_scene_rows("client-1")
+
+        self.assertEqual(result["scene_terms"], ["新场景", "补充场景"])
+        self.assertEqual(result["evidence_fingerprint"], "kept")
+        self.assertEqual(loaded[0]["scene_terms"], ["新场景", "补充场景"])
+
     def test_builds_each_query_from_three_highest_cited_distinct_article_surfaces(self):
         from services.selection_evidence import SelectionEvidenceService
 

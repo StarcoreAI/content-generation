@@ -52,7 +52,6 @@ class BatchGenerationJobs:
             return deepcopy(job)
 
     def run(self, job_id):
-        used_pairs, used_competitors = [], []
         with self._lock:
             job = self._jobs.get(str(job_id or ""))
             if not job:
@@ -85,9 +84,6 @@ class BatchGenerationJobs:
                 article = self._run_generation_fn(
                     payload,
                     batch_id=batch_id,
-                    avoid_skeleton_opening_pairs=list(used_pairs),
-                    avoid_competitor_names=list(used_competitors),
-                    skip_lazy_choices=True,
                     created_by=created_by,
                 )
             except Exception as exc:
@@ -97,13 +93,6 @@ class BatchGenerationJobs:
                     job["updated_at"] = self._now_fn()
                 continue
 
-            pair = _sample_pair(article)
-            if pair:
-                used_pairs.append(pair)
-            used_competitors.extend(
-                name for name in ((article.get("provenance") or {}).get("competitor_names") or [])
-                if name not in used_competitors
-            )
             with self._lock:
                 item["article_id"] = str(article.get("id") or "")
                 item["title"] = str(article.get("title") or "")
@@ -114,10 +103,3 @@ class BatchGenerationJobs:
             job["status"] = "cancelled" if job["cancel_requested"] else "completed"
             job["updated_at"] = self._now_fn()
             return deepcopy(job)
-
-
-def _sample_pair(article):
-    entries = ((article or {}).get("provenance") or {}).get("entries") or {}
-    skeleton_id = str((entries.get("skeleton") or {}).get("id") or "")
-    opening_id = str((entries.get("opening_module") or {}).get("id") or "")
-    return (skeleton_id, opening_id) if skeleton_id else None

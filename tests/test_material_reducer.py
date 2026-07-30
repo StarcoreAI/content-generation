@@ -73,33 +73,30 @@ class MaterialReducerTests(unittest.TestCase):
 
         self.assertIn("customer", DEFAULT_REDUCER_RULES)
         self.assertIn("delete", DEFAULT_REDUCER_RULES.lower())
-        self.assertIn("standalone marketing statistics", DEFAULT_REDUCER_RULES)
-        self.assertIn("target audiences", DEFAULT_REDUCER_RULES)
-        self.assertIn("use cases", DEFAULT_REDUCER_RULES)
-        self.assertIn("conflicting facts", DEFAULT_REDUCER_RULES)
+        self.assertIn("customer-specific methods", DEFAULT_REDUCER_RULES)
+        self.assertIn("generic user questions", DEFAULT_REDUCER_RULES)
+        self.assertIn("source labels", DEFAULT_REDUCER_RULES)
+        self.assertIn("third-party catalogs", DEFAULT_REDUCER_RULES)
         self.assertIn("not to rewrite or summarize", DEFAULT_REDUCER_RULES)
         self.assertIn("representative original expressions", DEFAULT_REDUCER_RULES)
-        self.assertNotIn("education", DEFAULT_REDUCER_RULES.lower())
         self.assertNotIn("province", DEFAULT_REDUCER_RULES.lower())
         self.assertNotIn("school", DEFAULT_REDUCER_RULES.lower())
 
-    def test_default_rules_keep_eight_direction_inputs_and_gaps(self):
+    def test_default_rules_keep_customer_facts_not_strategy_or_generic_background(self):
         from services.material_reducer import DEFAULT_REDUCER_RULES
 
         for keyword in [
             "brand basics",
             "products and services",
-            "core advantages",
-            "target audiences",
+            "customer-specific methods",
+            "customer-specific facts",
             "price and fee wording",
             "trust credentials",
-            "compliance risk wording",
-            "industry public background",
         ]:
             self.assertIn(keyword, DEFAULT_REDUCER_RULES)
-        self.assertIn("gaps and search hints", DEFAULT_REDUCER_RULES)
-        self.assertIn("do not invent missing facts", DEFAULT_REDUCER_RULES)
-        self.assertIn("up to 6 representative examples", DEFAULT_REDUCER_RULES)
+        self.assertIn("Delete strategy notes", DEFAULT_REDUCER_RULES)
+        self.assertIn("generic industry background", DEFAULT_REDUCER_RULES)
+        self.assertNotIn("gaps and search hints", DEFAULT_REDUCER_RULES)
 
 
 if __name__ == "__main__":

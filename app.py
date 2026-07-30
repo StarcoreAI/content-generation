@@ -2,7 +2,6 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import contextvars
 import json, os, re, asyncio, threading, glob, random, uuid
 from datetime import datetime, date, timedelta
 from collections import defaultdict
@@ -12,7 +11,6 @@ from openai import OpenAI
 from services import crawl_tasks as crawl_task_store
 from services import crawl_jobs as crawl_job_store
 from services import records as record_store
-from services import reference_intelligence as reference_intel
 from services.auth import authenticate_user, create_user, find_user
 from services.article_structure import analyze_article_structure
 from services.article_fetcher import fetch_article_text
@@ -28,19 +26,6 @@ from services.quality_gate import (
     run_quality_gate,
     save_quality_policy,
 )
-from services.content_choices import (
-    active_choice_texts,
-    choice_state,
-    filter_competitor_markdown,
-    normalize_choice_items,
-    normalize_competitor_rules,
-    select_competitor_names,
-)
-from services.content_prompts import (
-    build_content_generation_messages,
-    extract_generated_title,
-)
-from services.brief_builder import build_brief_sample, generate_planning_brief
 from services.materials import MaterialService
 from services.material_pipeline import load_latest_material_package_result, run_material_package_pipeline
 from services.material_web_expansion import expand_material_web_package, tavily_search
@@ -61,14 +46,19 @@ from services.record_trends import (
     build_source_trend,
 )
 from services.selection_evidence import SelectionEvidenceService
-from services.knowledge_base import KnowledgeBaseService
+from services.knowledge_base import KnowledgeBaseService, validate_customer_content_facts
+from services.content_route_library import ContentRouteLibrary
+from services.content_route_generation import (
+    generate_content_route_draft,
+    route_context as content_route_context,
+)
+from services.content_route_analysis import analyze_content_route_article, ingest_content_route_analysis
 from services.competitor_knowledge import (
     build_competitor_master_input,
     build_high_frequency_competitor_prompt,
     collect_high_frequency_article_sources,
     merge_competitor_master_markdown,
 )
-from services.pattern_library import PatternLibrary
 from services.storage import load_json, save_json, update_json
 from scripts.run_material_filter import choose_material_filter_model
 from scripts.run_material_output import choose_material_output_model
@@ -81,13 +71,9 @@ NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen", "kimi
 CLIENT_CONTRACT_PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
 crawl_platform_locks_guard = threading.Lock()
 crawl_platform_locks = {}
-reference_analysis_jobs_guard = threading.RLock()
-reference_analysis_jobs = {}
 content_batch_jobs_guard = threading.RLock()
 content_batch_jobs = None
 content_generation_lock = threading.RLock()
-PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS = 1200
-planning_brief_diagnostic_context = contextvars.ContextVar("planning_brief_diagnostic_context", default=None)
 
 
 def get_crawl_platform_lock(platform):
@@ -96,6 +82,14 @@ def get_crawl_platform_lock(platform):
         if platform not in crawl_platform_locks:
             crawl_platform_locks[platform] = threading.Lock()
         return crawl_platform_locks[platform]
+
+
+def extract_generated_title(content):
+    for line in str(content or "").splitlines():
+        title = re.sub(r"^[#\s《》「」\"']+|[#\s《》「」\"']+$", "", line.strip())
+        if title:
+            return title[:80]
+    return "未命名文章"
 
 # ── 数据文件路径 ────────────────────────────────────────
 D = "data"
@@ -115,7 +109,6 @@ F_DISTRIBUTION_FAVORITES = f"{D}/distribution_favorites"
 F_DISTRIBUTION_MATCH_JOBS = f"{D}/distribution_match_jobs"
 F_DISTRIBUTION_CATALOG = f"{D}/distribution_catalog/rwmeiti_catalog.json"
 F_DISTRIBUTION_CATALOG_JOBS = f"{D}/distribution_catalog_jobs"
-F_REFERENCE_INTELLIGENCE = f"{D}/reference_intelligence"
 F_CRAWL_JOBS = f"{D}/crawl_jobs.json"
 
 ANONYMOUS_ENDPOINTS = {
@@ -236,47 +229,6 @@ def load(path, default):
 
 def save(path, data):
     save_json(path, data)
-
-
-def _append_planning_brief_attempt(attempt):
-    context = planning_brief_diagnostic_context.get()
-    if context is not None:
-        context.setdefault("attempts", []).append(dict(attempt))
-
-
-def _update_latest_planning_brief_attempt(**changes):
-    context = planning_brief_diagnostic_context.get()
-    if context and context.get("attempts"):
-        context["attempts"][-1].update(changes)
-
-
-def planning_brief_diagnostic_path(cid):
-    safe_cid = re.sub(r"[^A-Za-z0-9_.-]", "_", str(cid or "")) or "unknown"
-    return os.path.join(D, "content_generation_diagnostics", safe_cid, "latest_planning_brief.json")
-
-
-def save_planning_brief_diagnostic(cid, run_id, record):
-    path = planning_brief_diagnostic_path(cid)
-    saved_record = dict(record or {})
-    attempts = []
-    for item in saved_record.get("attempts") or []:
-        entry = dict(item or {})
-        if "response_preview" in entry:
-            entry["response_preview"] = str(entry["response_preview"] or "")[:PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS]
-        attempts.append(entry)
-    saved_record["attempts"] = attempts
-    current = load(path, {})
-    if current.get("run_id") != str(run_id or ""):
-        current = {
-            "schema_version": 1,
-            "client_id": str(cid or ""),
-            "run_id": str(run_id or ""),
-            "records": [],
-        }
-    current["updated_at"] = now_str()
-    current.setdefault("records", []).append(saved_record)
-    save(path, current)
-    return path
 
 
 def normalize_platform_filter(platform):
@@ -763,16 +715,7 @@ def get_tavily_api_key(settings=None):
 
 def ai(prompt, max_tokens=2000):
     s = get_settings()
-    try:
-        raw, diagnostics = ai_with_settings_response(prompt, max_tokens, s)
-    except Exception as exc:
-        _append_planning_brief_attempt({"status": "request_error", "error": str(exc)})
-        raise
-    _append_planning_brief_attempt({
-        "status": "received",
-        **diagnostics,
-        "response_preview": raw[:PLANNING_BRIEF_RESPONSE_PREVIEW_CHARS],
-    })
+    raw, _diagnostics = ai_with_settings_response(prompt, max_tokens, s)
     return raw
 
 
@@ -812,14 +755,7 @@ def ai_deepseek_pro(messages, max_tokens=6000):
     return resp.choices[0].message.content.strip()
 
 def ai_json(prompt, max_tokens=1500):
-    raw = ai(prompt, max_tokens)
-    try:
-        result = parse_ai_json(raw)
-    except json.JSONDecodeError as exc:
-        _update_latest_planning_brief_attempt(status="invalid_json", error=str(exc))
-        raise
-    _update_latest_planning_brief_attempt(status="parsed")
-    return result
+    return parse_ai_json(ai(prompt, max_tokens))
 
 
 def ai_json_with_settings(prompt, max_tokens=1500, settings=None):
@@ -1056,9 +992,6 @@ def add_client():
     c = {"id": uid(), "name": d["name"], "brand": d["brand"],
          "industry": d.get("industry",""), "goal": d.get("goal",""),
          "contract_platforms": normalize_contract_platforms(d.get("contract_platforms", [])),
-         "audience_angles": normalize_choice_items(d.get("audience_angles", [])),
-         "faq_questions": normalize_choice_items(d.get("faq_questions", [])),
-         "competitor_rules": normalize_competitor_rules(d.get("competitor_rules", {})),
          "owner_username": owner_username,
          "created": today_str()}
     clients.append(c)
@@ -1069,6 +1002,9 @@ def add_client():
 def update_client(cid):
     clients = load(F_CLIENTS, [])
     d = request.json or {}
+    legacy_fields = {"audience_angles", "faq_questions", "competitor_rules"}
+    if legacy_fields.intersection(d):
+        return jsonify({"error": "legacy_content_options_removed"}), 400
     updated = None
     for client in clients:
         if client["id"] != cid:
@@ -1077,12 +1013,6 @@ def update_client(cid):
             return jsonify({"error": "client_not_found"}), 404
         if "contract_platforms" in d:
             client["contract_platforms"] = normalize_contract_platforms(d.get("contract_platforms", []))
-        if "audience_angles" in d:
-            client["audience_angles"] = normalize_choice_items(d.get("audience_angles", []))
-        if "faq_questions" in d:
-            client["faq_questions"] = normalize_choice_items(d.get("faq_questions", []))
-        if "competitor_rules" in d:
-            client["competitor_rules"] = normalize_competitor_rules(d.get("competitor_rules", {}))
         for key in ["name", "brand", "industry", "goal"]:
             if key in d:
                 client[key] = d.get(key, "")
@@ -1092,22 +1022,6 @@ def update_client(cid):
         return jsonify({"error": "client_not_found"}), 404
     save(F_CLIENTS, clients)
     return jsonify({"ok": True, "client": updated})
-
-
-@app.route("/api/clients/<cid>/content-options", methods=["GET"])
-def get_client_content_options(cid):
-    client = require_client_access(cid)
-    if not client:
-        return jsonify({"error": "client_not_found"}), 404
-    markdown = read_content_generation_sources(cid, include_material_package=False,
-        include_material_web_supplement=False, include_content_uploads=False)["competitor_markdown"]
-    return jsonify({
-        "ok": True,
-        "audience_angles": normalize_choice_items(client.get("audience_angles", [])),
-        "faq_questions": normalize_choice_items(client.get("faq_questions", [])),
-        "competitor_rules": normalize_competitor_rules(client.get("competitor_rules", {})),
-        "competitor_candidates": quality_gate_competitor_names(markdown),
-    })
 
 @app.route("/api/clients/<cid>", methods=["DELETE"])
 def del_client(cid):
@@ -1392,6 +1306,42 @@ def selection_evidence_service():
     return SelectionEvidenceService(Path(D) / "selection_evidence", fetch_article=fetch_article_text)
 
 
+def selection_surface_report_paths(cid):
+    root = (Path(D) / "selection_surface_reports").resolve()
+    client_dir = (root / str(cid)).resolve()
+    if client_dir.parent != root or not client_dir.is_dir():
+        return []
+    return sorted(
+        (path for path in client_dir.iterdir()
+         if path.is_file() and path.name.endswith("_selection_surface.md")),
+        key=lambda path: path.name,
+        reverse=True,
+    )
+
+
+@app.route("/api/records/selection-reports/<cid>", methods=["GET"])
+def list_selection_surface_reports(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    reports = [{
+        "id": path.name,
+        "name": path.name,
+        "updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
+    } for path in selection_surface_report_paths(cid)]
+    return jsonify({"client_id": cid, "reports": reports})
+
+
+@app.route("/api/records/selection-reports/<cid>/<report_id>", methods=["GET"])
+def read_selection_surface_report(cid, report_id):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    allowed_reports = {path.name: path for path in selection_surface_report_paths(cid)}
+    path = allowed_reports.get(report_id)
+    if path is None:
+        return jsonify({"error": "report_not_found"}), 404
+    return jsonify({"client_id": cid, "id": path.name, "content": path.read_text(encoding="utf-8", errors="replace")})
+
+
 @app.route("/api/records/selection-evidence/<cid>", methods=["GET"])
 def get_selection_evidence(cid):
     if not require_client_access(cid):
@@ -1399,6 +1349,25 @@ def get_selection_evidence(cid):
     return jsonify({"client_id": cid, "rows": selection_evidence_service().load_query_scene_rows(
         cid, load(F_GROUPS, {}).get(cid, []),
     )})
+
+
+@app.route("/api/records/selection-evidence/<cid>", methods=["POST"])
+def save_selection_evidence(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    payload = request.get_json(silent=True) or {}
+    group_id = str(payload.get("group_id") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    group = next((item for item in load(F_GROUPS, {}).get(cid, []) if item.get("id") == group_id), None)
+    if not group or query not in (group.get("questions") or []):
+        return jsonify({"error": "scene_query_not_found"}), 404
+    try:
+        row = selection_evidence_service().save_query_scene_terms(
+            cid, group_id, group.get("name", ""), query, payload.get("scene_terms") or [],
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 404
+    return jsonify({"client_id": cid, "row": row})
 
 
 @app.route("/api/records/selection-evidence/<cid>/refresh", methods=["POST"])
@@ -1570,9 +1539,7 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     article_cache_path = competitor_knowledge_article_cache_path(cid)
     article_cache_body = load_json(article_cache_path, {"articles": {}}) if article_cache_path.exists() else {"articles": {}}
     local_cache = article_cache_body.get("articles", {}) if isinstance(article_cache_body, dict) else {}
-    stage_dir = reference_intel.reference_stage_dir(F_REFERENCE_INTELLIGENCE, cid, source_date, today_str)
     cached = dict(local_cache) if isinstance(local_cache, dict) else {}
-    cached.update(reference_intel.load_reference_fetch_cache(stage_dir, load))
     fetch_fn = fetch_fn or (lambda url: fetch_article_text(url, timeout=25, max_chars=12000, browser_fallback=True))
     articles = collect_high_frequency_article_sources(records, cached, fetch_fn, limit=12)
     saved_cache = dict(local_cache) if isinstance(local_cache, dict) else {}
@@ -1628,7 +1595,7 @@ def run_client_material_package_analysis(cid):
         "reducer": choose_material_reducer_model(settings),
         "output": choose_material_output_model(settings),
     }
-    return run_material_package_pipeline(
+    result = run_material_package_pipeline(
         package_dir,
         material_package_output_dir(cid),
         ask_filter_json=material_package_ask_json(settings, models["filter"]),
@@ -1636,6 +1603,11 @@ def run_client_material_package_analysis(cid):
         ask_output_text=material_package_ask_text(settings, models["output"]),
         models=models,
     )
+    if result.get("ok"):
+        result["knowledge_merge"] = knowledge_base_service().sync_customer_master(
+            cid, material_package_output_dir(cid),
+        )
+    return result
 
 def client_material_web_context(cid):
     client = next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None) or {"id": cid}
@@ -1647,19 +1619,23 @@ def client_material_web_context(cid):
 
 def run_client_material_web_expansion(cid):
     client, output_dir, injection_markdown = client_material_web_context(cid)
+    knowledge_base_service().sync_customer_master(cid, output_dir)
     settings = get_settings()
     tavily_key = get_tavily_api_key(settings)
     if not tavily_key:
         raise ValueError("missing_tavily_api_key")
     ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
     search_fn = lambda query: tavily_search(query, tavily_key)
-    return expand_material_web_package(
+    result = expand_material_web_package(
         client=client,
         injection_markdown=injection_markdown,
         output_dir=output_dir,
         ask_text=ask_text,
         search_fn=search_fn,
     )
+    if result.get("ok"):
+        result["knowledge_merge"] = knowledge_base_service().sync_customer_master(cid, output_dir)
+    return result
 
 def default_competitor_entities(cid, date_str=None, limit=10, group_id="", task_id="", platform=""):
     client = next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None) or {}
@@ -1701,17 +1677,24 @@ def run_client_competitor_web_expansion(cid, competitors, qualifier="", force=No
     search_fn = lambda query: tavily_search(query, tavily_key, max_results=5)
     material_path = material_package_output_dir(cid) / "latest_injection.md"
     competitor_path = competitor_package_output_dir(cid) / "latest_upload_competitors.md"
-    return expand_competitor_web_package(
+    package_dir = competitor_package_output_dir(cid)
+    knowledge_base_service().sync_competitor_master(cid, competitor_knowledge_context(cid)[3])
+    result = expand_competitor_web_package(
         client=client,
         competitors=competitors,
         qualifier=qualifier,
-        output_dir=competitor_package_output_dir(cid),
+        output_dir=package_dir,
         ask_text=ask_text,
         search_fn=search_fn,
         force=force,
         customer_context=material_path.read_text(encoding="utf-8", errors="ignore") if material_path.exists() else "",
         competitor_context=competitor_path.read_text(encoding="utf-8", errors="ignore") if competitor_path.exists() else "",
     )
+    if result.get("ok"):
+        result["knowledge_merge"] = knowledge_base_service().sync_competitor_master(
+            cid, competitor_knowledge_context(cid)[3],
+        )
+    return result
 
 @app.route("/api/materials/<cid>", methods=["GET"])
 def get_materials(cid):
@@ -1940,6 +1923,10 @@ def analyze_competitor_upload(cid):
         )
     except Exception as exc:
         return jsonify({"ok": False, "error": str(exc)}), 500
+    if result.get("ok"):
+        result["knowledge_merge"] = knowledge_base_service().sync_competitor_master(
+            cid, competitor_knowledge_context(cid)[3],
+        )
     return jsonify(result)
 
 @app.route("/api/competitors/<cid>/expand-web", methods=["POST"])
@@ -1997,6 +1984,28 @@ def save_customer_knowledge_master(cid):
         result = knowledge_base_service().save_customer_master(
             cid,
             str((request.get_json(silent=True) or {}).get("content") or ""),
+            (request.get_json(silent=True) or {}).get("removed_sections") or [],
+        )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/customer/<cid>/migration", methods=["GET"])
+def prepare_customer_knowledge_migration(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    result = knowledge_base_service().prepare_customer_fact_migration(cid, material_package_output_dir(cid))
+    return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/customer/<cid>/migration", methods=["POST"])
+def confirm_customer_knowledge_migration(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        result = knowledge_base_service().confirm_customer_fact_migration(
+            cid, str((request.get_json(silent=True) or {}).get("content") or ""), material_package_output_dir(cid),
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
@@ -2008,10 +2017,8 @@ def get_competitor_knowledge_master(cid):
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     service = knowledge_base_service()
-    result = service.load_competitor_master(cid)
-    if not result["content"]:
-        _source_date, _records, _entities, existing_materials = competitor_knowledge_context(cid)
-        result = service.sync_competitor_master(cid, existing_materials)
+    _source_date, _records, _entities, existing_materials = competitor_knowledge_context(cid)
+    result = service.sync_competitor_master(cid, existing_materials)
     return jsonify({"ok": True, **result})
 
 
@@ -2189,6 +2196,55 @@ def read_content_generation_sources(cid, include_material_package=True, include_
         "files": list(content_bundle.get("files") or []) + package_files,
     }
 
+
+def read_selected_competitor_facts(cid, selected_names):
+    """Read only operator-selected competitor sections from the independent competitor master."""
+    selected = [str(name or "").strip() for name in selected_names or [] if str(name or "").strip()]
+    master = knowledge_base_service().load_competitor_master(cid).get("content", "")
+    sections = list(re.finditer(r"(?m)^##\s+(.+?)\s*$", master))
+    available = {}
+    for index, match in enumerate(sections):
+        name = match.group(1).strip()
+        end = sections[index + 1].start() if index + 1 < len(sections) else len(master)
+        facts = master[match.end():end].strip()
+        if name and facts:
+            available[name] = facts
+    missing = [name for name in selected if name not in available]
+    if missing:
+        raise ValueError("selected_competitor_not_found:" + ",".join(missing))
+    return [{"name": name, "facts": available[name]} for name in selected]
+
+
+def _clean_scene_terms(value):
+    terms = []
+    for item in value or []:
+        term = str(item or "").strip()
+        if term and term not in terms:
+            terms.append(term[:80])
+    return terms
+
+
+def content_generation_scene_terms(cid, group_id, query):
+    """Keep the selected Query primary, with same-group terms as optional context."""
+    query = str(query or "").strip()
+    group_id = str(group_id or "").strip()
+    primary = []
+    supplementary = []
+    for row in selection_evidence_service().load_query_scene_rows(cid):
+        row_query = str(row.get("query") or "").strip()
+        terms = _clean_scene_terms(row.get("scene_terms"))
+        if row_query == query:
+            primary = terms
+        elif group_id and str(row.get("group_id") or "").strip() == group_id and row_query and terms:
+            supplementary.append({"query": row_query, "scene_terms": terms})
+    return {"primary": primary, "supplementary": supplementary}
+
+
+def content_query_scene_terms(cid, query):
+    """Compatibility helper for callers that only need the exact Query terms."""
+    return content_generation_scene_terms(cid, "", query)["primary"]
+
+
 def get_client(cid):
     return next((c for c in load(F_CLIENTS, []) if c.get("id") == cid), None)
 
@@ -2198,120 +2254,6 @@ def normalize_content_history_date(value):
         return ""
     y, m, d = value[:4], value[5:7], value[8:10]
     return value if y.isdigit() and m.isdigit() and d.isdigit() else ""
-
-
-def normalize_audience_angles(value):
-    return active_choice_texts(value)
-
-
-def load_client_faq_questions(cid):
-    client = get_client(cid) or {}
-    return active_choice_texts(client.get("faq_questions", []))
-
-
-def load_probe_group_questions(cid):
-    questions = []
-    for group in load(F_GROUPS, {}).get(cid, []):
-        for question in group.get("questions") or []:
-            question = str(question or "").strip()
-            if question and question not in questions:
-                questions.append(question)
-    return questions
-
-
-def _save_client_content_options(cid, fields):
-    if not fields:
-        return get_client(cid) or {}
-    clients = load(F_CLIENTS, [])
-    for client in clients:
-        if client.get("id") == cid:
-            client.update(fields)
-            save(F_CLIENTS, clients)
-            return client
-    return {}
-
-
-def _content_choice_prompt(client, sources, probe_questions, need_angles, need_faq):
-    material = str(sources.get("customer_material_text") or sources.get("content_upload_text") or "").strip()
-    fallback = f"行业：{client.get('industry') or '未提供'}；品牌：{client.get('brand') or client.get('name') or '未提供'}"
-    return f"""你负责初始化内容生产的稳定选择项。只输出 JSON，不要 Markdown。
-资料摘要：{material[:12000] or fallback}
-探测问题组：{json.dumps(probe_questions, ensure_ascii=False)}
-需要生成人群角度：{need_angles}；需要生成 FAQ：{need_faq}。
-输出 schema：{{"audience_angles":["谁带着什么顾虑在问"],"faq_questions":["面向读者的信息型问题"]}}。
-人群角度生成 5-8 条，必须写成“谁带着什么顾虑在问”的稳定枚举；FAQ 生成 4-6 条。
-若探测问题组非空，FAQ 必须将其中的推荐/比较式提问改写为中立的信息型问题（例如“哪家靠谱”改为“怎么判断是否靠谱”），去重合并；不得保留自卖自夸问法。只返回本次需要的字段，缺失资料不得编造具体事实。"""
-
-
-def ensure_content_generation_choices(cid, client, sources, *, ai_json_fn=None, include_audience=True,
-                                      allow_generation=True):
-    """Migrate legacy entries and fail-open generate only genuinely absent choice lists."""
-    client = dict(client or {})
-    fields = {}
-    raw_angles = client.get("audience_angles", [])
-    raw_faq = client.get("faq_questions", [])
-    normalized_angles = normalize_choice_items(raw_angles)
-    normalized_faq = normalize_choice_items(raw_faq)
-    if raw_angles != normalized_angles and raw_angles:
-        fields["audience_angles"] = normalized_angles
-    if raw_faq != normalized_faq and raw_faq:
-        fields["faq_questions"] = normalized_faq
-    need_angles = include_audience and choice_state(raw_angles) == "missing"
-    need_faq = choice_state(raw_faq) == "missing"
-    if allow_generation and (need_angles or need_faq):
-        try:
-            response = (ai_json_fn or ai_json)(_content_choice_prompt(
-                client, sources, load_probe_group_questions(cid), need_angles, need_faq,
-            ), 4000)
-            if not isinstance(response, dict):
-                raise ValueError("invalid_content_choices_response")
-            if need_angles:
-                generated = normalize_choice_items([
-                    {"text": value, "enabled": True, "source": "ai"}
-                    for value in response.get("audience_angles", [])
-                ])
-                if generated:
-                    fields["audience_angles"] = generated
-            if need_faq:
-                generated = normalize_choice_items([
-                    {"text": value, "enabled": True, "source": "ai"}
-                    for value in response.get("faq_questions", [])
-                ])
-                if generated:
-                    fields["faq_questions"] = generated
-        except Exception:
-            pass
-    return _save_client_content_options(cid, fields) if fields else get_client(cid) or client
-
-
-def recent_content_sampling_history(cid, days=7):
-    cutoff = (date.today() - timedelta(days=max(1, int(days)) - 1)).isoformat()
-    combos, endings = [], []
-    for article in load_content_session(cid).get("articles", []):
-        if str(article.get("created_at") or "")[:10] < cutoff:
-            continue
-        provenance = article.get("provenance") or {}
-        fingerprint = str(provenance.get("fingerprint") or "").strip()
-        ending_id = str((((provenance.get("entries") or {}).get("ending_module") or {}).get("id") or "")).strip()
-        if fingerprint:
-            combos.append(fingerprint)
-        if ending_id:
-            endings.append(ending_id)
-    return {"recent_combos": combos, "recent_endings": endings}
-
-
-def sampled_entry_provenance(sample):
-    fields = ("skeleton", "opening_module", "ending_module", "faq_module", "table_module")
-    entries = {
-        field: ({"id": entry.get("id", ""), "name": entry.get("name", "")} if entry else None)
-        for field in fields
-        for entry in [sample.get(field)]
-    }
-    entries["body_modules"] = [
-        {"id": entry.get("id", ""), "name": entry.get("name", "")}
-        for entry in sample.get("body_modules") or []
-    ]
-    return entries
 
 
 def recent_content_generation_articles(cid, days=30):
@@ -2336,166 +2278,200 @@ def generate_content_draft(messages, ai_text_fn=None):
     raise ValueError("empty_content_generation_response")
 
 
-def run_content_generation(payload, audience_angles=None, created_by="", batch_id="",
-                           avoid_skeleton_opening_pairs=None, avoid_competitor_names=None,
-                           skip_lazy_choices=False):
+def run_content_generation(payload, created_by="", batch_id=""):
     with content_generation_lock:
-        return _run_content_generation(
-            payload,
-            audience_angles=audience_angles,
-            created_by=created_by,
-            batch_id=batch_id,
-            avoid_skeleton_opening_pairs=avoid_skeleton_opening_pairs,
-            avoid_competitor_names=avoid_competitor_names,
-            skip_lazy_choices=skip_lazy_choices,
-        )
+        return _run_content_generation(payload, created_by=created_by, batch_id=batch_id)
 
 
-def _run_content_generation(payload, audience_angles=None, created_by="", batch_id="",
-                            avoid_skeleton_opening_pairs=None, avoid_competitor_names=None,
-                            skip_lazy_choices=False):
-    """Run the persisted sampling-to-writing pipeline used by the content API."""
-    d = dict(payload or {})
+def _run_content_generation(payload, created_by="", batch_id=""):
+    """Run the only supported, explicit-material content-generation path."""
+    return _run_content_route_generation(dict(payload or {}), created_by=created_by, batch_id=batch_id)
+
+
+def content_route_library_service():
+    return ContentRouteLibrary(Path(D) / "content_route_library")
+
+
+@app.route("/api/content-routes", methods=["GET"])
+def get_content_routes():
+    cid = str(request.args.get("client_id") or "").strip()
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = get_client(cid) or {}
+    industry = str(client.get("industry") or "").strip()
+    if not industry:
+        return jsonify({"error": "client_industry_required"}), 400
+    try:
+        routes = content_route_library_service().list_routes(industry)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "industry": industry, "routes": routes})
+
+
+@app.route("/api/knowledge/routes/<cid>", methods=["GET"])
+def get_knowledge_content_routes(cid):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = get_client(cid) or {}
+    industry = str(client.get("industry") or "").strip()
+    if not industry:
+        return jsonify({"error": "client_industry_required"}), 400
+    try:
+        routes = content_route_library_service().list_routes(industry)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    groups = {"介绍型": [], "对比型": []}
+    for route in routes:
+        if route.get("parent_type") in groups:
+            groups[route["parent_type"]].append(route)
+    return jsonify({"ok": True, "industry": industry, "groups": groups})
+
+
+@app.route("/api/content-routes/analyze", methods=["POST"])
+def analyze_and_ingest_content_route():
+    payload = request.get_json(silent=True) or {}
+    cid = str(payload.get("client_id") or "").strip()
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = get_client(cid) or {}
+    industry = str(client.get("industry") or "").strip()
+    if not industry:
+        return jsonify({"error": "client_industry_required"}), 400
+    article_payload = payload.get("article") if isinstance(payload.get("article"), dict) else {}
+    url = str(article_payload.get("url") or "").strip()
+    if not url:
+        return jsonify({"error": "article_url_required", "message": "请提供文章链接"}), 400
+    fetched_article = fetch_article_text(url, timeout=25, max_chars=12000, browser_fallback=True)
+    if not fetched_article.get("ok") or not str(fetched_article.get("content") or "").strip():
+        return jsonify({
+            "error": "article_fetch_failed",
+            "message": f"文章抓取失败：{fetched_article.get('error') or '未取得足够正文'}",
+        }), 502
+    article = {
+        "confirmed_for_route_analysis": True,
+        "url": url,
+        "title": str(fetched_article.get("title") or url).strip(),
+        "content": str(fetched_article.get("content") or "").strip(),
+    }
+    try:
+        analysis = analyze_content_route_article({
+            "query": str(payload.get("query") or "").strip(),
+            "final_entities": payload.get("final_entities") or [],
+        }, article, ai_json)
+        entry = None
+        if analysis["library_decision"]["eligible"]:
+            entry = ingest_content_route_analysis(
+                analysis, industry, content_route_library_service(), payload.get("existing_route_id") or "",
+            )
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "analysis": analysis, "entry": entry})
+
+
+@app.route("/api/content-routes/<route_id>", methods=["DELETE"])
+def delete_content_route(route_id):
+    cid = str(request.args.get("client_id") or "").strip()
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = get_client(cid) or {}
+    industry = str(client.get("industry") or "").strip()
+    try:
+        entry = content_route_library_service().delete_route(industry, str(route_id or "").strip())
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    return jsonify({"ok": True, "entry": entry})
+
+
+def _run_content_route_generation(d, *, created_by="", batch_id=""):
+    """Formal explicit-material, single-writer route generation path."""
     cid = str(d.get("client_id") or "").strip()
     if not cid:
         raise ValueError("missing_client_id")
     client = get_client(cid)
     if not client:
         raise ValueError("client_not_found")
+    article_type = d.get("article_type")
+    if article_type not in {"介绍型", "对比型"}:
+        raise ValueError("article_type_required")
+    group_id = str(d.get("group_id") or "").strip()
+    query = str(d.get("query") or "").strip()
+    if not group_id:
+        raise ValueError("query_group_required")
+    group = next((item for item in load(F_GROUPS, {}).get(cid, []) if item.get("id") == group_id), None)
+    if group is None:
+        raise ValueError("query_group_not_found")
+    if query not in (group.get("questions") or []):
+        raise ValueError("query_not_in_group")
+    use_customer_master = d.get("use_customer_master") is True
+    use_content_uploads = d.get("use_content_uploads") is True
+    if article_type == "介绍型" and not (use_customer_master or use_content_uploads):
+        raise ValueError("introduction_material_required")
+    if article_type == "对比型" and not use_customer_master:
+        raise ValueError("comparison_customer_facts_required")
 
-    use_material_package = bool(d.get("use_material_package", True))
-    use_material_web_supplement = bool(d.get("use_material_web_supplement", True))
-    use_content_uploads = bool(d.get("use_content_uploads", True))
-    use_competitors = bool(d.get("use_competitors", True))
-    sources = read_content_generation_sources(
-        cid,
-        include_material_package=use_material_package,
-        include_material_web_supplement=use_material_web_supplement,
-        include_content_uploads=use_content_uploads,
-        include_competitors=use_competitors,
-    )
-    client = ensure_content_generation_choices(
-        cid, client, sources,
-        include_audience=audience_angles is None,
-        allow_generation=not skip_lazy_choices,
-    )
-    article_type = d.get("article_type") if d.get("article_type") in {"对比型", "介绍型"} else "对比型"
-    sampling_history = recent_content_sampling_history(cid)
+    customer_facts = ""
+    if use_customer_master:
+        customer_facts = knowledge_base_service().load_customer_master(cid).get("content", "").strip()
+        validation = validate_customer_content_facts(customer_facts)
+        if not validation["usable_for_generation"]:
+            raise ValueError("customer_content_facts_migration_required")
+    uploads = ""
+    upload_files = []
+    if use_content_uploads:
+        bundle = content_material_service().build_generation_bundle(cid)
+        uploads = str(bundle.get("text") or "").strip()
+        upload_files = list(bundle.get("files") or [])
+
+    selected_names = d.get("selected_competitor_names") if isinstance(d.get("selected_competitor_names"), list) else []
+    if article_type == "介绍型" and selected_names:
+        raise ValueError("introduction_competitors_forbidden")
+    competitors = read_selected_competitor_facts(cid, selected_names) if selected_names else []
+    if article_type == "对比型" and len(competitors) < 2:
+        raise ValueError("comparison_competitors_required")
+
     industry = str(client.get("industry") or "").strip()
-    scopes = [f"client:{cid}", "global"]
-    if industry:
-        scopes.insert(1, f"industry:{industry}")
-    resolved_angles = active_choice_texts(
-        client.get("audience_angles", []) if audience_angles is None else audience_angles
-    )
-    faq_questions = load_client_faq_questions(cid)
-    competitor_candidates = quality_gate_competitor_names(sources["competitor_markdown"])
-    competitor_names = select_competitor_names(
-        competitor_candidates,
-        client.get("competitor_rules", {}),
-        rng=random.Random(),
-        avoid_names=avoid_competitor_names,
-        client_brand=client.get("brand", ""),
-    ) if use_competitors else []
-    selected_competitor_markdown = filter_competitor_markdown(
-        sources["competitor_markdown"], competitor_names, competitor_candidates,
-    ) if competitor_names else ""
-    sample = build_brief_sample(
-        library=pattern_library_service(),
-        scopes=scopes,
-        parent_type=article_type,
-        audience_angles=resolved_angles,
-        faq_questions=faq_questions,
-        recent_combos=sampling_history["recent_combos"],
-        recent_endings=sampling_history["recent_endings"],
-        avoid_skeleton_opening_pairs=avoid_skeleton_opening_pairs,
-    )
-    brief_diagnostic = {
-        "started_at": now_str(),
-        "batch_id": str(batch_id or ""),
-        "attempts": [],
-    }
-    brief_run_id = str(batch_id or uid())
-    brief_diagnostic_token = planning_brief_diagnostic_context.set(brief_diagnostic)
-    try:
-        brief = generate_planning_brief(
-            sample,
-            customer_material_text=sources["customer_material_text"],
-            content_upload_text=sources["content_upload_text"],
-            competitor_markdown=selected_competitor_markdown,
-            ai_json_fn=ai_json,
-        )
-    except Exception as exc:
-        brief_diagnostic.update({"status": "failed", "error": str(exc)})
-        save_planning_brief_diagnostic(cid, brief_run_id, brief_diagnostic)
-        raise
-    else:
-        brief_diagnostic["status"] = "success"
-        save_planning_brief_diagnostic(cid, brief_run_id, brief_diagnostic)
-    finally:
-        planning_brief_diagnostic_context.reset(brief_diagnostic_token)
-    messages = build_content_generation_messages(
-        client=client,
-        brief=brief,
-        customer_material_text=sources["customer_material_text"],
-        content_upload_text=sources["content_upload_text"],
-        competitor_markdown=selected_competitor_markdown,
-        sample=sample,
-    )
-    content = generate_content_draft(messages)
-    created_at = now_str()
-    provenance = {
-        "parent_type": article_type,
-        "entries": sampled_entry_provenance(sample),
-        "free_slot": sample.get("free_slot"),
-        "fingerprint": sample.get("sampling_meta", {}).get("fingerprint", ""),
-        "material_switches": {
-            "use_material_package": use_material_package,
-            "use_material_web_supplement": use_material_web_supplement,
-            "use_content_uploads": use_content_uploads,
-            "use_competitors": use_competitors,
+    if not industry:
+        raise ValueError("client_industry_required")
+    route = content_route_library_service().sample_route(industry, article_type, set())
+    scene_context = content_generation_scene_terms(cid, group_id, query)
+    bundle = {
+        "task": {
+            "query": query,
+            "article_type": article_type,
+            "title_entity_policy": str(d.get("title_entity_policy") or "实体不入标题"),
         },
-        "audience_angle": sample.get("audience_angle", ""),
-        "faq_questions": sample.get("faq_questions") or [],
-        "competitor_names": competitor_names,
+        "client": {"name": client.get("name", ""), "brand": client.get("brand", "")},
+        "route": route,
+        "customer_facts": customer_facts,
+        "content_uploads": uploads,
+        "competitors": competitors,
+        "scene_terms": scene_context["primary"],
+        "supplementary_scene_terms": scene_context["supplementary"],
     }
+    content = generate_content_route_draft(bundle, lambda messages, max_tokens: ai_deepseek_pro(messages, max_tokens))
+    route_context = content_route_context(bundle)
+    created_at = now_str()
     title = extract_generated_title(content)
+    competitor_markdown = "\n\n".join(f"## {item['name']}\n{item['facts']}" for item in competitors)
     gate_report = run_quality_gate(
-        title,
-        content,
-        brief,
-        provenance,
+        title, content, {}, route_context,
         client_brand=client.get("brand", ""),
-        competitor_names=competitor_names,
-        competitor_markdown=selected_competitor_markdown,
-        recent_articles=recent_content_generation_articles(cid),
-        ai_json_fn=ai_json,
-        customer_material_text=sources["customer_material_text"],
-        content_upload_text=sources["content_upload_text"],
-        industry=client.get("industry", ""),
-        policy=client_quality_policy(cid),
+        competitor_names=route_context["competitor_names"], competitor_markdown=competitor_markdown,
+        recent_articles=recent_content_generation_articles(cid), ai_json_fn=ai_json,
+        customer_material_text=customer_facts, content_upload_text=uploads,
+        industry=industry, policy=client_quality_policy(cid),
     )
     article = {
-        "id": uid(),
-        "client_id": cid,
-        "title": title,
-        "content": content,
+        "id": uid(), "client_id": cid, "title": title, "content": content,
         "model": get_settings().get("model", "deepseek-chat"),
-        "material_count": len(sources["files"]),
-        "article_type": article_type,
-        "batch_id": str(batch_id or ""),
-        "brief": brief,
-        "provenance": provenance,
-        "gate_report": gate_report,
-        "created_at": created_at,
-        "created_by": created_by,
+        "material_count": len(upload_files) + int(bool(customer_facts)),
+        "article_type": article_type, "batch_id": str(batch_id or ""),
+        "route_context": route_context, "gate_report": gate_report,
+        "created_at": created_at, "created_by": created_by,
     }
-    if gate_report["verdict"] == "blocked":
-        article["generation_status"] = "门禁拦截"
-    user_message = {}
     assistant_message = {"role": "assistant", "content": content, "created_at": created_at, "article_id": article["id"]}
-    article = append_content_generation(cid, article, user_message, assistant_message)
-    return {**article, "sampling": sample}
+    article = append_content_generation(cid, article, {}, assistant_message)
+    return {**article, "sampling": {"route": route}}
 
 
 def content_batch_generation_service():
@@ -2509,31 +2485,15 @@ def content_batch_generation_service():
 
 
 def _prepare_content_batch_generation(payload):
-    d = dict(payload or {})
-    cid = str(d.get("client_id") or "").strip()
-    client = get_client(cid)
-    if not client:
-        return
-    with content_generation_lock:
-        sources = read_content_generation_sources(
-            cid,
-            include_material_package=bool(d.get("use_material_package", True)),
-            include_material_web_supplement=bool(d.get("use_material_web_supplement", True)),
-            include_content_uploads=bool(d.get("use_content_uploads", True)),
-            include_competitors=bool(d.get("use_competitors", True)),
-        )
-        ensure_content_generation_choices(cid, client, sources)
+    """The formal route payload is already complete; there are no lazy choices."""
+    return None
 
 
-def _run_content_batch_article(payload, *, batch_id, avoid_skeleton_opening_pairs,
-                               avoid_competitor_names=None, skip_lazy_choices=False, created_by):
+def _run_content_batch_article(payload, *, batch_id, created_by):
     return run_content_generation(
         payload,
         created_by=created_by,
         batch_id=batch_id,
-        avoid_skeleton_opening_pairs=avoid_skeleton_opening_pairs,
-        avoid_competitor_names=avoid_competitor_names,
-        skip_lazy_choices=skip_lazy_choices,
     )
 
 
@@ -2584,22 +2544,24 @@ def append_content_generation(cid, article, user_message, assistant_message):
 
 def content_article_gate_report(cid, article, ai_json_fn=None):
     client = get_client(cid) or {}
-    sources = read_content_generation_sources(cid)
-    provenance = dict(article.get("provenance") or {})
-    provenance.setdefault("parent_type", article.get("article_type") or "")
-    competitor_names = quality_gate_competitor_names(sources["competitor_markdown"])
+    route = dict(article.get("route_context") or {})
+    route.setdefault("parent_type", article.get("article_type") or "")
+    customer_facts = knowledge_base_service().load_customer_master(cid).get("content", "").strip()
+    competitor_names = route.get("competitor_names") or []
+    competitors = read_selected_competitor_facts(cid, competitor_names) if competitor_names else []
+    competitor_markdown = "\n\n".join(f"## {item['name']}\n{item['facts']}" for item in competitors)
     return run_quality_gate(
         article.get("title") or extract_generated_title(article.get("content", "")),
         article.get("content", ""),
-        article.get("brief") or {},
-        provenance,
+        {},
+        route,
         client_brand=client.get("brand", ""),
         competitor_names=competitor_names,
-        competitor_markdown=sources["competitor_markdown"],
+        competitor_markdown=competitor_markdown,
         recent_articles=[item for item in recent_content_generation_articles(cid) if item.get("id") != article.get("id")],
         ai_json_fn=ai_json_fn or ai_json,
-        customer_material_text=sources["customer_material_text"],
-        content_upload_text=sources["content_upload_text"],
+        customer_material_text=customer_facts,
+        content_upload_text="",
         industry=client.get("industry", ""),
         policy=client_quality_policy(cid),
     )
@@ -3091,261 +3053,6 @@ def ai_modify_content_generation_route(article_id):
 
 
 
-def reference_intelligence_path(client_id, date_str, task_id=""):
-    return reference_intel.reference_intelligence_path(
-        F_REFERENCE_INTELLIGENCE, client_id, date_str, today_str, task_id
-    )
-
-
-def load_reference_intelligence(client_id, date_str, task_id=""):
-    return reference_intel.load_reference_intelligence(
-        F_REFERENCE_INTELLIGENCE, load, today_str, client_id, date_str, task_id
-    )
-
-
-def reference_stage_dir(client_id, date_str):
-    return reference_intel.reference_stage_dir(
-        F_REFERENCE_INTELLIGENCE, client_id, date_str, today_str
-    )
-
-
-def collect_reference_articles(records, limit=20):
-    return reference_intel.collect_reference_articles(records, limit=limit)
-
-
-def create_reference_analysis_job(client_id, date_str, task_id="", username=""):
-    return reference_intel.create_reference_analysis_job(
-        reference_analysis_jobs,
-        reference_analysis_jobs_guard,
-        uid,
-        now_str,
-        client_id,
-        date_str,
-        task_id,
-        username,
-    )
-
-
-def create_or_reuse_reference_analysis_job(client_id, date_str, task_id="", username=""):
-    return reference_intel.create_or_reuse_reference_analysis_job(
-        reference_analysis_jobs,
-        reference_analysis_jobs_guard,
-        uid,
-        now_str,
-        client_id,
-        date_str,
-        task_id,
-        username,
-    )
-
-
-def get_reference_analysis_job(job_id):
-    return reference_intel.get_reference_analysis_job(
-        reference_analysis_jobs, reference_analysis_jobs_guard, job_id
-    )
-
-
-def update_reference_analysis_job(job_id, **fields):
-    return reference_intel.update_reference_analysis_job(
-        reference_analysis_jobs, reference_analysis_jobs_guard, now_str, job_id, **fields
-    )
-
-
-def reference_analysis_cancel_requested(job_id):
-    return bool(get_reference_analysis_job(job_id).get("cancel_requested"))
-
-
-def cancel_reference_analysis_job(job_id):
-    return reference_intel.cancel_reference_analysis_job(
-        reference_analysis_jobs, reference_analysis_jobs_guard, now_str, job_id
-    )
-
-
-def _job_ai_json(username):
-    settings = get_settings(username)
-    return lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, settings)
-
-
-def load_reference_fetch_cache(stage_dir):
-    return reference_intel.load_reference_fetch_cache(stage_dir, load)
-
-
-def merge_reference_fetch_result(ref, fetched, fetch_method=None):
-    return reference_intel.merge_reference_fetch_result(ref, fetched, fetch_method=fetch_method)
-
-
-def run_reference_analysis_job(
-    job_id,
-    client_id,
-    date_str,
-    task_id="",
-    username="",
-    fetch_fn=fetch_article_text,
-    ai_json_fn=None,
-    limit=20,
-    candidate_limit=None,
-    fetch_workers=3,
-):
-    return reference_intel.run_reference_analysis_job(
-        job_id,
-        client_id,
-        date_str,
-        root_dir=F_REFERENCE_INTELLIGENCE,
-        load_fn=load,
-        save_fn=save,
-        today_fn=today_str,
-        now_fn=now_str,
-        load_client_records_fn=load_client_records,
-        load_client_fn=get_client,
-        job_ai_json_fn=_job_ai_json,
-        get_job_fn=get_reference_analysis_job,
-        update_job_fn=update_reference_analysis_job,
-        cancel_requested_fn=reference_analysis_cancel_requested,
-        fetch_fn=fetch_fn,
-        task_id=task_id,
-        username=username,
-        ai_json_fn=ai_json_fn,
-        limit=limit,
-        candidate_limit=candidate_limit,
-        fetch_workers=fetch_workers,
-    )
-
-
-def queue_reference_analysis_job(client_id, date_str, task_id="", username=""):
-    job, should_start = create_or_reuse_reference_analysis_job(client_id, date_str, task_id, username=username)
-    if not should_start:
-        return job
-    job_id = job["job_id"]
-    thread = threading.Thread(
-        target=run_reference_analysis_job,
-        kwargs={
-            "job_id": job_id,
-            "client_id": client_id,
-            "date_str": date_str,
-            "task_id": task_id,
-            "username": username,
-        },
-        daemon=True,
-    )
-    thread.start()
-    return get_reference_analysis_job(job_id)
-
-
-def pattern_library_service():
-    return PatternLibrary(Path(D) / "pattern_library")
-
-
-def list_pattern_library_scopes():
-    root = Path(D) / "pattern_library"
-    if not root.exists():
-        return []
-    scopes = []
-    for path in root.glob("*.json"):
-        if not re.fullmatch(r"(?:global|(?:industry|client)_[^.]+)\.json", path.name):
-            continue
-        body = load(str(path), {})
-        scope = str(body.get("scope") or "").strip()
-        try:
-            scope_kind, scope_value = PatternLibrary._split_scope(scope)
-        except ValueError:
-            continue
-        # 客户写法库是客户资料的一部分；行业与 global 则是共享规律层。
-        if scope_kind == "client" and not auth_disabled() and not require_client_access(scope_value):
-            continue
-        entries = body.get("entries")
-        scopes.append({"scope": scope, "entry_count": len(entries) if isinstance(entries, list) else 0})
-    return sorted(scopes, key=lambda item: item["scope"])
-
-
-def pattern_library_scope_access(scope):
-    """Return the scope kind when the current user may read it, otherwise None."""
-    try:
-        scope_kind, scope_value = PatternLibrary._split_scope(scope)
-    except ValueError:
-        return None
-    if scope_kind == "client" and not require_client_access(scope_value):
-        return None
-    return scope_kind
-
-
-def can_update_pattern_library_scope(scope):
-    scope_kind = pattern_library_scope_access(scope)
-    if not scope_kind:
-        return False
-    # 行业/global 会影响全部账户，运营账户只能查看，不能转正或退役。
-    return scope_kind == "client" or auth_disabled() or is_admin()
-
-
-def latest_pattern_library_ingest_summary():
-    root = Path(F_REFERENCE_INTELLIGENCE)
-    if not root.exists():
-        return None
-    reports = list(root.glob("*/*/stage2_ingest_report.json"))
-    if not reports:
-        return None
-    try:
-        latest = max(reports, key=lambda path: path.stat().st_mtime)
-    except OSError:
-        return None
-    report = load(str(latest), {})
-    if not isinstance(report, dict):
-        return None
-    # 行业/global 写法可共享，但最近一次入库报告仍属于来源客户。
-    if not auth_disabled() and not require_client_access(str(report.get("client_id") or "")):
-        return None
-    items = report.get("items") if isinstance(report.get("items"), list) else []
-    errors = report.get("errors") if isinstance(report.get("errors"), list) else []
-    return {
-        "client_id": str(report.get("client_id") or ""),
-        "date": str(report.get("date") or ""),
-        "cards": int(report.get("total_cards") or 0),
-        "created": sum(1 for item in items if isinstance(item, dict) and item.get("action") == "created"),
-        "matched": sum(1 for item in items if isinstance(item, dict) and item.get("action") == "matched"),
-        "errors": len(errors),
-    }
-
-
-@app.route("/api/pattern-library/scopes", methods=["GET"])
-def get_pattern_library_scopes():
-    return jsonify({"scopes": list_pattern_library_scopes()})
-
-
-@app.route("/api/pattern-library/entries", methods=["GET"])
-def get_pattern_library_entries():
-    scope = request.args.get("scope", "").strip()
-    if not scope:
-        return jsonify({"error": "scope required"}), 400
-    if not pattern_library_scope_access(scope):
-        return jsonify({"error": "scope_not_found"}), 404
-    try:
-        entries = pattern_library_service().list_entries(scope)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify({
-        "scope": scope,
-        "entries": entries,
-        "recent_ingest": latest_pattern_library_ingest_summary(),
-        "can_write": can_update_pattern_library_scope(scope),
-    })
-
-
-@app.route("/api/pattern-library/status", methods=["POST"])
-def update_pattern_library_status():
-    payload = request.json or {}
-    scope = str(payload.get("scope") or "").strip()
-    entry_id = str(payload.get("entry_id") or "").strip()
-    status = str(payload.get("status") or "").strip()
-    if not scope or not entry_id or status not in {"candidate", "active", "retired"}:
-        return jsonify({"error": "invalid_pattern_status_request"}), 400
-    if not can_update_pattern_library_scope(scope):
-        return jsonify({"error": "scope_not_found"}), 404
-    try:
-        entry = pattern_library_service().set_status(scope, entry_id, status)
-    except (ValueError, KeyError) as exc:
-        return jsonify({"error": str(exc)}), 400
-    return jsonify({"ok": True, "entry": entry})
-
-
 def latest_entity_report_status(client_id, date_str, task_id=""):
     pattern = os.path.join(get_crawl_task_dir(), f"{date_str}_*.json")
     reports = []
@@ -3380,48 +3087,6 @@ def latest_entity_report_status(client_id, date_str, task_id=""):
         "error": entity.get("error", ""),
         "message": entity.get("reason", ""),
     }
-
-
-@app.route("/api/reference_intelligence/analyze", methods=["POST"])
-def analyze_reference_intelligence():
-    payload = request.json or {}
-    client_id = (payload.get("client_id") or "").strip()
-    if not client_id:
-        return jsonify({"error": "client_id required"}), 400
-    if not require_client_access(client_id):
-        return jsonify({"error": "client_not_found"}), 404
-    date_str = (payload.get("date") or today_str()).strip()
-    task_id = (payload.get("task_id") or "").strip()
-    body = queue_reference_analysis_job(
-        client_id=client_id,
-        date_str=date_str,
-        task_id=task_id,
-        username=settings_username(),
-    )
-    return jsonify(body)
-
-
-@app.route("/api/reference_intelligence/analyze_status", methods=["GET"])
-def reference_intelligence_analyze_status():
-    job_id = request.args.get("job_id", "").strip()
-    job = get_reference_analysis_job(job_id)
-    if not job:
-        return jsonify({"error": "job_not_found"}), 404
-    if not require_client_access(str(job.get("client_id") or "")):
-        return jsonify({"error": "job_not_found"}), 404
-    return jsonify(job)
-
-
-@app.route("/api/reference_intelligence/analyze_cancel", methods=["POST"])
-def reference_intelligence_analyze_cancel():
-    job_id = str((request.json or {}).get("job_id") or "").strip()
-    existing_job = get_reference_analysis_job(job_id)
-    if not existing_job or not require_client_access(str(existing_job.get("client_id") or "")):
-        return jsonify({"error": "job_not_found"}), 404
-    job = cancel_reference_analysis_job(job_id)
-    if not job:
-        return jsonify({"error": "job_not_found"}), 404
-    return jsonify(job)
 
 
 @app.route("/api/daily/entity_status", methods=["GET"])

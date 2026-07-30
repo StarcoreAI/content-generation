@@ -156,6 +156,24 @@ class SelectionEvidenceService:
         entries = data.get("entries", {}) if isinstance(data, dict) else {}
         return self._rows(entries, groups)
 
+    def save_query_scene_terms(self, client_id, group_id, group_name, query, scene_terms):
+        path = self._scene_path(client_id)
+        data = load_json(path, {"entries": {}}) if path.exists() else {"entries": {}}
+        entries = data.get("entries", {}) if isinstance(data, dict) else {}
+        key = f"{str(group_id or '').strip()}\n{str(query or '').strip()}"
+        current = entries.get(key)
+        if not isinstance(current, dict):
+            raise ValueError("scene_terms_not_found")
+        updated = {
+            **current,
+            "group_id": str(group_id or "").strip(),
+            "group_name": str(group_name or "").strip() or "未命名问题组",
+            "query": str(query or "").strip(),
+            "scene_terms": self._clean_scene_terms(scene_terms),
+        }
+        save_json(path, {"entries": {**entries, key: updated}})
+        return updated
+
     def refresh_query_scenes(self, client_id, groups, records, ask_json, dry_run=False):
         units = self.build_group_query_evidence(client_id, groups, records, persist=not dry_run)
         scene_path = self._scene_path(client_id)

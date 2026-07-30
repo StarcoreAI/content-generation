@@ -106,9 +106,13 @@ def generate_competitor_search_queries(competitors, client=None, qualifier="", a
         if len(parts) != 2:
             continue
         name, query = (part.strip() for part in parts)
-        if name not in by_name or not query or name not in query or query in by_name[name]:
+        if name not in by_name or not query:
             continue
-        by_name[name].append(query)
+        for query_item in re.split(r"\s*[；;]\s*", query):
+            query_item = query_item.strip()
+            if not query_item or name not in query_item or query_item in by_name[name]:
+                continue
+            by_name[name].append(query_item)
 
     queries = []
     fallback_by_name = {}

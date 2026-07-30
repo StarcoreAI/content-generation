@@ -97,6 +97,22 @@ class CompetitorMaterialsTests(unittest.TestCase):
             "第一竞品 教育", "第一竞品 怎么样 靠谱", "第一竞品 简介",
         ])
 
+    def test_generated_search_queries_split_semicolon_separated_llm_output(self):
+        from services.competitor_materials import generate_competitor_search_queries
+
+        queries = generate_competitor_search_queries(
+            ["第一竞品", "第二竞品"], {"industry": "教育"}, qualifier="",
+            ask_text=lambda *args, **kwargs: "\n".join([
+                "第一竞品 | 第一竞品 服务流程；第一竞品 项目案例",
+                "第二竞品 | 第二竞品 课程服务；第二竞品 售后",
+            ]),
+        )
+
+        self.assertEqual([item["query"] for item in queries], [
+            "第一竞品 服务流程", "第一竞品 项目案例",
+            "第二竞品 课程服务", "第二竞品 售后",
+        ])
+
     def test_analyze_upload_package_writes_markdown_with_competitor_prompt_rules(self):
         from services.competitor_materials import analyze_competitor_upload_package
 

@@ -320,6 +320,19 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("/api/records/selection-evidence/", script)
         self.assertIn("问题组</th><th>Query</th><th>场景词", script)
 
+    def test_records_library_wires_read_only_selection_surface_reports(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("选择层分析报告", template)
+        self.assertIn('id="selectionSurfaceReports"', template)
+        self.assertIn('id="selectionSurfaceReportPreview"', template)
+        self.assertIn("async function loadSelectionSurfaceReports", script)
+        self.assertIn("async function viewSelectionSurfaceReport", script)
+        self.assertIn("/api/records/selection-reports/", script)
+        self.assertIn("preview.textContent =", script)
+
     def test_records_library_wires_group_trend_and_article_pool_views(self):
         root = Path(__file__).resolve().parents[1]
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")

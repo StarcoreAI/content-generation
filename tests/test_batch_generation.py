@@ -8,23 +8,23 @@ class BatchGenerationJobsTests(unittest.TestCase):
         ids = iter(["job-1", "batch-1"])
         return BatchGenerationJobs(lambda: next(ids), lambda: "2026-07-21 10:00:00", generate, prepare)
 
-    def test_runs_articles_serially_and_accumulates_used_pairs(self):
+    def test_runs_articles_serially_without_retired_template_arguments(self):
         calls = []
 
         def generate(_payload, **kwargs):
-            calls.append(list(kwargs["avoid_skeleton_opening_pairs"]))
+            calls.append(dict(kwargs))
             index = len(calls)
             return {
                 "id": f"article-{index}",
                 "title": f"标题{index}",
-                "provenance": {"entries": {"skeleton": {"id": "s-1"}, "opening_module": {"id": f"o-{index}"}}},
+                "route_context": {"route_id": f"route-{index}"},
             }
 
         jobs = self.make_jobs(generate)
         job = jobs.create({"client_id": "client-1"}, 3, created_by="tester")
         finished = jobs.run(job["job_id"])
 
-        self.assertEqual([[], [("s-1", "o-1")], [("s-1", "o-1"), ("s-1", "o-2")]], calls)
+        self.assertEqual([{"batch_id": "batch-1", "created_by": "tester"}] * 3, calls)
         self.assertEqual("completed", finished["status"])
         self.assertEqual(["完成", "完成", "完成"], [item["status"] for item in finished["items"]])
 
@@ -84,14 +84,14 @@ class BatchGenerationJobsTests(unittest.TestCase):
         self.assertEqual("门禁拦截", finished["items"][0]["status"])
         self.assertEqual("article-1", finished["items"][0]["article_id"])
 
-    def test_runs_preflight_once_and_marks_each_article_as_prepared(self):
+    def test_runs_preflight_once_without_lazy_choice_argument(self):
         prepared, received = [], []
 
         def prepare(payload):
             prepared.append(payload["client_id"])
 
         def generate(_payload, **kwargs):
-            received.append(kwargs["skip_lazy_choices"])
+            received.append(kwargs)
             return {"id": f"article-{len(received)}", "title": "正常", "provenance": {}}
 
         jobs = self.make_jobs(generate, prepare)
@@ -99,7 +99,7 @@ class BatchGenerationJobsTests(unittest.TestCase):
         jobs.run(job["job_id"])
 
         self.assertEqual(["client-1"], prepared)
-        self.assertEqual([True, True, True], received)
+        self.assertEqual([{"batch_id": "batch-1", "created_by": ""}] * 3, received)
 
 
 if __name__ == "__main__":
