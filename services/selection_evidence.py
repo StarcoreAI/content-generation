@@ -1,11 +1,16 @@
 """Cached article surfaces used by the records-library scene-term prompt."""
 import hashlib
 import json
+import re
 from pathlib import Path
 
 from services.article_fetcher import fetch_article_text
 from services.selection_surface import MISSING, aggregate_selection_articles, extract_selection_surface, first_content_block
 from services.storage import load_json, save_json
+
+
+SCENE_RULE_VERSION = "2"
+SCENE_ENTITY_SUFFIXES = ("教育", "培训", "机构", "学校", "医院", "公司", "门店", "诊所", "中心", "大学", "学院")
 
 
 def _surface_value(value):
@@ -88,6 +93,7 @@ class SelectionEvidenceService:
     @staticmethod
     def _evidence_fingerprint(unit):
         text = json.dumps({
+            "scene_rule_version": SCENE_RULE_VERSION,
             "query": unit["query"],
             "articles": [{
                 "url": item["url"],
@@ -103,7 +109,15 @@ class SelectionEvidenceService:
         cleaned = []
         for term in terms or []:
             term = str(term or "").strip()
-            if not term or term in cleaned:
+            compact = re.sub(r"\s+", "", term)
+            entity_text = re.sub(r"[（(][^（）()]*[）)]$", "", compact)
+            is_article_fact = (
+                any(char.isdigit() for char in compact)
+                or "app" in compact.lower()
+                or any(char in compact for char in "、,，；;：:")
+                or entity_text.endswith(SCENE_ENTITY_SUFFIXES)
+            )
+            if not term or term in cleaned or is_article_fact:
                 continue
             cleaned.append(term)
         return cleaned
@@ -120,7 +134,7 @@ class SelectionEvidenceService:
                 f"问题组 ID：{unit['group_id']}\n问题组：{unit['group_name']}\nQuery：{unit['query']}\n高引用文章表面：\n{articles}"
             )
         return """你是运营提示助手。AI 平台会根据 Query 生成检索关键词，再用这些关键词检索引用来源。根据每个 Query 与其高引用文章的标题、Meta、首段，提取文章已经写出的、能解释它为何被该 Query 检到并引用的具体场景表达，供运营判断怎样写。
-只保留具体人群、症状、使用场景、决策阶段或明确顾虑的原词；不要做同义词扩展。
+请直接判断：AI 为匹配用户需求时可能实际使用的检索关键词是什么。场景词既可以是用户会自然带入提问的具体人群、症状、使用场景、决策阶段或明确顾虑，也可以是能帮助召回合适文章的具体机制、流程、服务方式或判断词。不要把客户名、竞品名、机构名单、数字、比例、市场数据、APP/平台名或文章标题/正文中的名单直接复制出来；不要做同义词扩展。
 必须过滤没有实际信息的泛化词：推荐、哪个好、哪家好、怎么样、价格、排名、靠谱、对比、注意事项、怎么选。
 只返回 JSON：{\"items\":[{\"group_id\":\"...\",\"query\":\"...\",\"scene_terms\":[\"...\"]}]}。每项只对应给定的同一 group_id 和 Query。
 

@@ -48,6 +48,8 @@ class QueryEvidenceTests(unittest.TestCase):
         self.assertIn("Meta：适合评职称的在职人员", calls[0][0])
         self.assertIn("首段：这是针对工作忙", calls[0][0])
         self.assertIn("AI 平台会根据 Query 生成检索关键词", calls[0][0])
+        self.assertIn("AI 为匹配用户需求时可能实际使用的检索关键词", calls[0][0])
+        self.assertNotIn("产品/服务卖点、课程/方案/流程的条目化细节", calls[0][0])
         self.assertEqual(first["rows"][0]["scene_terms"], ["评职称", "怎么选"])
         self.assertEqual(first["rows"][1]["scene_terms"], ["工作忙", "报名"])
         self.assertEqual(second["updated"], 0)
@@ -192,6 +194,28 @@ class QueryEvidenceTests(unittest.TestCase):
         self.assertEqual(result["scene_terms"], ["新场景", "补充场景"])
         self.assertEqual(result["evidence_fingerprint"], "kept")
         self.assertEqual(loaded[0]["scene_terms"], ["新场景", "补充场景"])
+
+    def test_refresh_discards_entities_numbers_and_article_fact_fragments(self):
+        from services.selection_evidence import SelectionEvidenceService
+
+        groups = [{"id": "group-1", "name": "学历提升", "questions": ["合肥成人高考机构哪家比较靠谱？"]}]
+        records = [{"group_id": "group-1", "question": "合肥成人高考机构哪家比较靠谱？", "refs": [
+            {"title": "文章甲", "url": "https://example.com/a"},
+            {"title": "文章乙", "url": "https://example.com/b"},
+            {"title": "文章丙", "url": "https://example.com/c"},
+        ]}]
+        model_terms = [
+            "合肥翼程教育", "合肥尚书教育", "19家", "皖事通APP", "2.5年拿证",
+            "成人高考报名", "上班族时间紧张", "报名后教务跟进", "正规收费透明",
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            service = SelectionEvidenceService(Path(tmp), fetch_article=lambda *_args, **_kwargs: {})
+            result = service.refresh_query_scenes("client-1", groups, records, lambda *_args: {"items": [{
+                "group_id": "group-1", "query": "合肥成人高考机构哪家比较靠谱？", "scene_terms": model_terms,
+            }]})
+
+        self.assertEqual(result["rows"][0]["scene_terms"], ["成人高考报名", "上班族时间紧张", "报名后教务跟进", "正规收费透明"])
 
     def test_builds_each_query_from_three_highest_cited_distinct_article_surfaces(self):
         from services.selection_evidence import SelectionEvidenceService
