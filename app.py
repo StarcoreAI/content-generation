@@ -2514,13 +2514,17 @@ def analyze_and_ingest_content_route():
 
 @app.route("/api/content-routes/analyze-query-platform", methods=["POST"])
 def analyze_query_platform_content_routes():
+    trace_fields = {"trace_id": uuid.uuid4().hex[:12]}
+    _log_reference_intelligence("request_received", **trace_fields)
     payload = request.get_json(silent=True) or {}
     cid = str(payload.get("client_id") or "").strip()
+    trace_fields["client_id"] = cid
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     group_id = str(payload.get("group_id") or "").strip()
     query = str(payload.get("query") or "").strip()
     ai_platform = str(payload.get("ai_platform") or "").strip()
+    trace_fields["ai_platform"] = ai_platform
     if not group_id:
         return jsonify({"error": "query_group_required"}), 400
     groups = load(F_GROUPS, {})
@@ -2538,12 +2542,6 @@ def analyze_query_platform_content_routes():
     if not industry:
         return jsonify({"error": "client_industry_required"}), 400
 
-    trace_fields = {
-        "trace_id": uuid.uuid4().hex[:12],
-        "client_id": cid,
-        "ai_platform": ai_platform,
-    }
-    _log_reference_intelligence("request_received", **trace_fields)
     lock_wait_started_at = time.monotonic()
     _log_reference_intelligence("lock_wait_started", **trace_fields)
     with reference_intelligence_lock:

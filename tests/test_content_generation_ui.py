@@ -187,6 +187,13 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertNotIn('id="routeAnalysisUrl"', template)
         self.assertNotIn("analyzeConfirmedReference", script)
 
+    def test_reference_intelligence_shows_network_request_failures(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("async function runQueryPlatformReferenceAnalysis", script)
+        self.assertIn("} catch (error) {", script)
+        self.assertIn("引用情报分析请求失败", script)
+
     def test_frontend_removes_legacy_pattern_library_controls(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")

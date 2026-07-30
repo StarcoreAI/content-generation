@@ -78,9 +78,11 @@ class QueryPlatformReferenceApiTests(unittest.TestCase):
             geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "测试行业", "contract_platforms": ["doubao"]}])
             geo_app.save(geo_app.F_GROUPS, {cid: [{"id": gid, "questions": ["Q1"]}]})
 
-            response = geo_app.app.test_client().post("/api/content-routes/analyze-query-platform", json={
-                "client_id": cid, "group_id": gid, "query": "其他问题", "ai_platform": "doubao",
-            })
+            with patch.object(geo_app, "_log_reference_intelligence") as log_stage:
+                response = geo_app.app.test_client().post("/api/content-routes/analyze-query-platform", json={
+                    "client_id": cid, "group_id": gid, "query": "其他问题", "ai_platform": "doubao",
+                })
 
             self.assertEqual(400, response.status_code)
             self.assertEqual("query_not_in_group", response.get_json()["error"])
+            self.assertEqual("request_received", log_stage.call_args_list[0].args[0])

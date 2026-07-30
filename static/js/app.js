@@ -3164,6 +3164,11 @@ async function runQueryPlatformReferenceAnalysis() {
     const failed = (result.analyses || []).length - analyzed;
     if (status) status.textContent = `已分析 ${analyzed} 篇，路线更新 ${((result.routes || []).length)} 条${failed ? `；${failed} 篇未完成` : ''}`;
     await loadContentRoutes();
+  } catch (error) {
+    const detail = error?.message || '网络连接失败';
+    if (status) status.textContent = `引用情报分析请求失败：${detail}`;
+    toast(`引用情报分析请求失败：${detail}`, 'err');
+    console.error('引用情报分析请求失败', error);
   } finally {
     if (button) button.disabled = false;
   }
