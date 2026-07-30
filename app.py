@@ -2,7 +2,7 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import json, os, re, asyncio, threading, glob, random, uuid
+import json, os, re, asyncio, threading, glob, random, uuid, secrets
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from pathlib import Path
@@ -53,6 +53,8 @@ from services.content_route_generation import (
     route_context as content_route_context,
 )
 from services.content_route_analysis import analyze_content_route_article, ingest_content_route_analysis
+from services.query_platform_reference_intelligence import select_query_platform_articles
+from services.reference_route_batch_merge import merge_reference_route_batch
 from services.competitor_knowledge import (
     build_competitor_master_input,
     build_high_frequency_competitor_prompt,
@@ -74,6 +76,7 @@ crawl_platform_locks = {}
 content_batch_jobs_guard = threading.RLock()
 content_batch_jobs = None
 content_generation_lock = threading.RLock()
+reference_intelligence_lock = threading.RLock()
 
 
 def get_crawl_platform_lock(platform):
@@ -1491,6 +1494,37 @@ def client_quality_policy(cid):
     client = next((item for item in load(F_CLIENTS, []) if item.get("id") == cid), {})
     return effective_quality_policy(load_quality_policy(quality_policy_path()), client.get("industry", ""))
 
+@app.route("/api/quality-gate/articles/upload", methods=["POST"])
+def upload_quality_gate_article():
+    cid = str(request.form.get("client_id") or "").strip()
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    storage_file = request.files.get("file")
+    if not storage_file or not storage_file.filename:
+        return jsonify({"error": "file_required"}), 400
+    try:
+        uploaded = uploaded_publication_article(storage_file)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    client = get_client(cid) or {}
+    content = f"{uploaded['title']}\n{uploaded['content']}".strip()
+    gate_report = run_quality_gate(
+        uploaded["title"], content, {}, {"source": "operator_upload"},
+        client_brand=client.get("brand", ""), competitor_names=[], competitor_markdown="",
+        recent_articles=recent_content_generation_articles(cid), ai_json_fn=ai_json,
+        customer_material_text=knowledge_base_service().load_customer_master(cid).get("content", "").strip(),
+        content_upload_text="", industry=client.get("industry", ""), policy=client_quality_policy(cid),
+    )
+    created_at = now_str()
+    article = append_content_generation(cid, {
+        "id": uid(), "client_id": cid, "title": uploaded["title"], "content": content,
+        "model": "operator-upload", "material_count": 0, "article_type": "",
+        "route_context": {"source": "operator_upload"}, "gate_report": gate_report,
+        "created_at": created_at, "created_by": (current_user() or {}).get("username", ""),
+    }, {}, {"role": "assistant", "content": content, "created_at": created_at})
+    return jsonify({"ok": True, "article": article})
+
 def knowledge_base_service():
     return KnowledgeBaseService(Path(D) / "knowledge_base")
 
@@ -2292,6 +2326,55 @@ def content_route_library_service():
     return ContentRouteLibrary(Path(D) / "content_route_library")
 
 
+def reference_intelligence_task_path(cid):
+    return Path(D) / "reference_intelligence_tasks" / f"{cid}.json"
+
+
+def save_reference_intelligence_task(cid, task):
+    path = reference_intelligence_task_path(cid)
+    history = load(str(path), [])
+    history = history if isinstance(history, list) else []
+    history.append(task)
+    save(str(path), history[-100:])
+
+
+def reference_route_source(analysis, candidate, query, ai_platform):
+    return {
+        **dict(analysis.get("source") or {}),
+        "source_evidence": list(analysis.get("source_evidence") or []),
+        "citation_contexts": [{
+            "query": query,
+            "ai_platform": ai_platform,
+            "citation_count": int(candidate.get("citation_count") or 0),
+        }],
+    }
+
+
+def apply_reference_batch_updates(industry, library, analyses, candidates, query, ai_platform, updates):
+    routes = []
+    for update in updates:
+        indexes = update.get("analysis_indexes") if isinstance(update.get("analysis_indexes"), list) else []
+        sources = [
+            reference_route_source(analyses[index], candidates[index], query, ai_platform)
+            for index in indexes
+            if isinstance(index, int) and 0 <= index < len(analyses)
+        ]
+        if not sources:
+            continue
+        if update.get("action") == "create":
+            entry = library.create_route(industry, update["route"], sources[0])
+            for source in sources[1:]:
+                entry = library.add_or_merge_source(industry, entry["id"], source)
+            routes.append(entry)
+        elif update.get("action") == "reinforce":
+            entry = None
+            for source in sources:
+                entry = library.add_or_merge_source(industry, update["route_id"], source)
+            if entry:
+                routes.append(entry)
+    return routes
+
+
 @app.route("/api/content-routes", methods=["GET"])
 def get_content_routes():
     cid = str(request.args.get("client_id") or "").strip()
@@ -2366,6 +2449,87 @@ def analyze_and_ingest_content_route():
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True, "analysis": analysis, "entry": entry})
+
+
+@app.route("/api/content-routes/analyze-query-platform", methods=["POST"])
+def analyze_query_platform_content_routes():
+    payload = request.get_json(silent=True) or {}
+    cid = str(payload.get("client_id") or "").strip()
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    group_id = str(payload.get("group_id") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    ai_platform = str(payload.get("ai_platform") or "").strip()
+    if not group_id:
+        return jsonify({"error": "query_group_required"}), 400
+    groups = load(F_GROUPS, {})
+    group = next((item for item in groups.get(cid, []) if item.get("id") == group_id), None)
+    if group is None:
+        return jsonify({"error": "query_group_not_found"}), 400
+    if query not in (group.get("questions") or []):
+        return jsonify({"error": "query_not_in_group"}), 400
+    if ai_platform not in CRAWL_PLATFORMS:
+        return jsonify({"error": "ai_platform_required"}), 400
+    client = get_client(cid) or {}
+    if ai_platform not in normalize_contract_platforms(client.get("contract_platforms")):
+        return jsonify({"error": "ai_platform_not_configured"}), 400
+    industry = str(client.get("industry") or "").strip()
+    if not industry:
+        return jsonify({"error": "client_industry_required"}), 400
+
+    with reference_intelligence_lock:
+        records = load_client_records(cid, question=query, platform=ai_platform)
+        task = select_query_platform_articles(records, query, ai_platform, secrets.randbits(32))
+        if not task["selected"]:
+            return jsonify({"error": "query_platform_citations_not_found"}), 400
+        task.update({"id": uid(), "client_id": cid, "group_id": group_id, "created_at": now_str(), "analyses": [], "merge_results": [], "routes": []})
+        analyzed, analyzed_candidates = [], []
+        for candidate in task["selected"]:
+            fetched = fetch_article_text(candidate["url"], timeout=25, max_chars=12000, browser_fallback=True)
+            if not fetched.get("ok") or not str(fetched.get("content") or "").strip():
+                task["analyses"].append({"url": candidate["url"], "status": "fetch_failed", "error": str(fetched.get("error") or "article_fetch_failed")})
+                continue
+            article = {
+                "confirmed_for_route_analysis": True,
+                "url": candidate["url"],
+                "title": str(fetched.get("title") or candidate.get("title") or candidate["url"]).strip(),
+                "content": str(fetched.get("content") or "").strip(),
+            }
+            try:
+                analysis = analyze_content_route_article({"query": query}, article, ai_json)
+            except Exception as exc:
+                task["analyses"].append({"url": candidate["url"], "status": "analysis_failed", "error": str(exc) or type(exc).__name__})
+                continue
+            analyzed.append(analysis)
+            analyzed_candidates.append(candidate)
+            task["analyses"].append({
+                "url": candidate["url"], "title": article["title"], "status": "analyzed",
+                "citation_count": candidate["citation_count"], "classification": analysis.get("classification"),
+                "eligible": bool((analysis.get("library_decision") or {}).get("eligible")),
+                "analysis": analysis,
+            })
+
+        library = content_route_library_service()
+        created_or_updated = []
+        for parent_type in ("介绍型", "对比型"):
+            indexes = [
+                index for index, analysis in enumerate(analyzed)
+                if analysis.get("classification") == parent_type and (analysis.get("library_decision") or {}).get("eligible")
+            ]
+            if not indexes:
+                continue
+            batch_analyses = [analyzed[index] for index in indexes]
+            merged = merge_reference_route_batch(batch_analyses, library.list_routes(industry), ai_json)
+            batch_routes = apply_reference_batch_updates(
+                industry, library, batch_analyses, [analyzed_candidates[index] for index in indexes],
+                query, ai_platform, merged["updates"],
+            )
+            task["merge_results"].append({"parent_type": parent_type, **merged})
+            created_or_updated.extend(batch_routes)
+        unique_routes = {route["id"]: route for route in created_or_updated}
+        task["routes"] = list(unique_routes)
+        save_reference_intelligence_task(cid, task)
+    return jsonify({"ok": True, "task": task, "analyses": task["analyses"], "merge_results": task["merge_results"], "routes": task["routes"]})
 
 
 @app.route("/api/content-routes/<route_id>", methods=["DELETE"])

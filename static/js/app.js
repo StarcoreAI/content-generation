@@ -668,6 +668,17 @@ async function loadRouteAnalysisQuestionOptions() {
   await loadQuestionGroupOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
 }
 
+function loadRouteAnalysisPlatformOptions() {
+  const select = document.getElementById('routeAnalysisPlatformSelect');
+  if (!select) return;
+  const previous = select.value;
+  const platforms = currentClientId ? currentClientPlatforms : [];
+  select.innerHTML = platforms.length
+    ? '<option value="">请选择 AI 平台</option>' + platforms.map(id => `<option value="${escHtml(id)}">${escHtml(CRAWL_PLATFORM_NAMES[id] || id)}</option>`).join('')
+    : '<option value="">请先配置客户合同平台</option>';
+  select.value = platforms.includes(previous) ? previous : (platforms[0] || '');
+}
+
 function onRouteAnalysisGroupChange() {
   populateQuestionOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
 }
@@ -904,6 +915,30 @@ async function loadQualityGateArticles() {
   if (r.error) { toast(r.error, 'err'); return; }
   renderQualityGateArticles(r.articles || []);
 }
+async function uploadQualityGateArticle(input) {
+  const file = input?.files?.[0];
+  input.value = '';
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  if (!file) return;
+  if (!/\.(txt|md|docx)$/i.test(file.name)) { toast('请上传 txt、md 或 docx 文章', 'err'); return; }
+  const form = new FormData();
+  form.append('client_id', currentClientId);
+  form.append('file', file, file.name);
+  spin('spQualityGateUpload', true);
+  disableBtn('btnQualityGateUpload', true);
+  try {
+    const response = await fetch('/api/quality-gate/articles/upload', {method: 'POST', body: form});
+    const result = await response.json();
+    if (!response.ok || result.error) { toast(result.error || '上传检查失败', 'err'); return; }
+    toast(result.article?.gate_report?.verdict === 'pass' ? '文章已上传，审核通过' : '文章已上传，请查看审核提示');
+    await Promise.all([loadQualityGateArticles(), loadContentGenerations()]);
+  } catch (_error) {
+    toast('上传检查失败', 'err');
+  } finally {
+    spin('spQualityGateUpload', false);
+    disableBtn('btnQualityGateUpload', false);
+  }
+}
 function qualityPolicyLines(id) {
   return (document.getElementById(id)?.value || '').split('\n').map(item => item.trim()).filter(Boolean);
 }
@@ -970,6 +1005,9 @@ function qualityGateBadge(article) {
   if (verdict === 'warn') return `<span class="badge badge-a">审核提示：${escHtml(qualityGateReason(article))} · 人工判断</span>`;
   return '<span class="badge badge-a">未审核</span>';
 }
+function qualityGateArticleType(article) {
+  return article?.route_context?.source === 'operator_upload' ? '运营上传' : (article?.article_type || '未标记类型');
+}
 function contentGenerationPatternNames(a) {
   const entries = a?.provenance?.entries || {};
   return ['skeleton', 'opening_module', 'ending_module', 'faq_module', 'table_module']
@@ -1033,7 +1071,7 @@ function renderQualityGateArticles(articles) {
       : '<div class="quality-gate-details"><span style="font-size:11px;color:var(--text3)">无未通过检查项</span></div>';
     return `<div class="article-card">
       <div class="article-title">${escHtml(a.title || '未命名文章')}</div>
-      <div class="article-meta">${qualityGateBadge(a)}<span class="badge badge-p">${escHtml(a.article_type || '未标记类型')}</span><span style="font-size:10px;color:var(--text3)">${escHtml(a.created_at || '')}</span></div>
+      <div class="article-meta">${qualityGateBadge(a)}<span class="badge badge-p">${escHtml(qualityGateArticleType(a))}</span><span style="font-size:10px;color:var(--text3)">${escHtml(a.created_at || '')}</span></div>
       ${details}
       <div class="article-summary">${escHtml((a.content || '').slice(0, 160))}${(a.content || '').length > 160 ? '...' : ''}</div>
       <div class="article-acts"><button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button><button class="btn btn-o btn-sm" onclick="copyContentGeneration('${a.id}')">复制</button><button class="btn btn-o btn-sm" onclick="manualEditContentGeneration('${a.id}')">人工编辑</button><button class="btn btn-o btn-sm" onclick="createDistributionDraft('${a.id}')">创建发布草稿</button><button class="btn btn-p btn-sm" onclick="aiModifyContentGeneration('${a.id}')">AI 修改</button></div>
@@ -2193,7 +2231,13 @@ function renderKnowledgeRouteGroup(elementId, routes) {
   }
   el.innerHTML = routes.map(route => {
     const steps = (route.steps || []).map((step, index) => `<li>${index + 1}. ${escHtml(step.purpose)}：${escHtml(step.output_action)}</li>`).join('');
-    const sources = (route.sources || []).map(source => `<li><a href="${escHtml(source.url)}" target="_blank" rel="noopener">${escHtml(source.title || source.url)}</a></li>`).join('');
+    const sources = (route.sources || []).map(source => {
+      const contexts = (source.citation_contexts || []).map(item => {
+        const platform = CRAWL_PLATFORM_NAMES[item.ai_platform] || item.ai_platform || '未知平台';
+        return `${item.query || '未知 Query'} · ${platform} · 引用 ${item.citation_count || 0} 次`;
+      }).join('；');
+      return `<li><a href="${escHtml(source.url)}" target="_blank" rel="noopener">${escHtml(source.title || source.url)}</a>${contexts ? `<div style="margin-top:3px;color:var(--text3)">${escHtml(contexts)}</div>` : ''}</li>`;
+    }).join('');
     return `<article style="padding:12px;border:1px solid var(--border2);border-radius:var(--r-sm);background:rgba(255,255,255,.72)">
       <div style="display:flex;gap:8px;align-items:center;justify-content:space-between"><strong style="font-size:12px;color:var(--text2)">${escHtml(route.name)}</strong><button class="btn btn-danger btn-sm" onclick="deleteKnowledgeRoute('${escHtml(route.id)}')">删除</button></div>
       <div style="font-size:11px;color:var(--text3);margin-top:6px">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div>
@@ -3092,29 +3136,37 @@ function startReferenceSmoothProgress() {
 async function loadContentRoutes() {
   const list = document.getElementById('contentRouteList');
   if (!list) return;
-  loadRouteAnalysisQuestionOptions();
+  await loadRouteAnalysisQuestionOptions();
+  loadRouteAnalysisPlatformOptions();
   if (!currentClientId) { list.textContent = '请先选择客户后查看行业路线。'; return; }
   const result = await api('/api/content-routes?client_id=' + encodeURIComponent(currentClientId));
   if (result.error) { list.textContent = result.error; return; }
   const routes = result.routes || [];
-  list.innerHTML = routes.length ? routes.map(route => `<div style="padding:10px 0;border-bottom:1px solid var(--border2)"><div style="font-weight:800;color:var(--text2)">${escHtml(route.name)} <span class="badge badge-p">${escHtml(route.parent_type)}</span></div><div style="margin-top:5px;color:var(--text3)">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div></div>`).join('') : '本行业暂无路线。先提交一篇已确认精读文章建立路线。';
+  list.innerHTML = routes.length ? routes.map(route => `<div style="padding:10px 0;border-bottom:1px solid var(--border2)"><div style="font-weight:800;color:var(--text2)">${escHtml(route.name)} <span class="badge badge-p">${escHtml(route.parent_type)}</span></div><div style="margin-top:5px;color:var(--text3)">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div></div>`).join('') : '本行业暂无路线。选择一个 Query 与 AI 平台后，运行一键分析来建立路线。';
 }
 
-async function analyzeConfirmedReference() {
+async function runQueryPlatformReferenceAnalysis() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const groupId = document.getElementById('routeAnalysisGroupSelect')?.value || '';
   const query = document.getElementById('routeAnalysisQuerySelect')?.value.trim();
-  const url = document.getElementById('routeAnalysisUrl')?.value.trim();
-  if (!groupId || !query || !url) { toast('请选择问题组、Query 并填写文章链接', 'err'); return; }
+  const ai_platform = document.getElementById('routeAnalysisPlatformSelect')?.value || '';
+  if (!groupId || !query || !ai_platform) { toast('请选择问题组、Query 和 AI 平台', 'err'); return; }
   const status = document.getElementById('routeAnalysisStatus');
-  if (status) status.textContent = '正在抓取文章并分析来源证据…';
-  const result = await api('/api/content-routes/analyze', 'POST', {
-    client_id: currentClientId, group_id: groupId, query,
-    article: {url},
-  });
-  if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
-  if (status) status.textContent = result.entry ? `已沉淀：${result.entry.name}` : (result.analysis?.library_decision?.reason || '该文章未入库');
-  await loadContentRoutes();
+  const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
+  if (status) status.textContent = '正在按当前 Query 和平台统计引用、抓取文章并分析…';
+  if (button) button.disabled = true;
+  try {
+    const result = await api('/api/content-routes/analyze-query-platform', 'POST', {
+      client_id: currentClientId, group_id, query, ai_platform,
+    });
+    if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
+    const analyzed = (result.analyses || []).filter(item => item.status === 'analyzed').length;
+    const failed = (result.analyses || []).length - analyzed;
+    if (status) status.textContent = `已分析 ${analyzed} 篇，路线更新 ${((result.routes || []).length)} 条${failed ? `；${failed} 篇未完成` : ''}`;
+    await loadContentRoutes();
+  } finally {
+    if (button) button.disabled = false;
+  }
 }
 
 // ══════════════════════════════════════════════════════

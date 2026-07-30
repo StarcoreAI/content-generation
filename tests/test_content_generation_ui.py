@@ -102,6 +102,14 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn("manualEditContentGeneration", script)
         self.assertIn("aiModifyContentGeneration", script)
 
+    def test_quality_gate_supports_uploading_operator_article_for_review(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="qualityGateUploadInput"', template)
+        self.assertIn("uploadQualityGateArticle", script)
+        self.assertIn("/api/quality-gate/articles/upload", script)
+
     def test_content_page_removes_legacy_sample_article_flow(self):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
@@ -168,6 +176,16 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn("saveKnowledgeSceneTerms", script)
         self.assertIn("可编辑后保存", template)
         self.assertIn("/api/records/selection-evidence/", script)
+
+    def test_reference_intelligence_uses_query_and_single_platform_not_manual_url(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="routeAnalysisPlatformSelect"', template)
+        self.assertIn("runQueryPlatformReferenceAnalysis", script)
+        self.assertIn("/api/content-routes/analyze-query-platform", script)
+        self.assertNotIn('id="routeAnalysisUrl"', template)
+        self.assertNotIn("analyzeConfirmedReference", script)
 
     def test_frontend_removes_legacy_pattern_library_controls(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

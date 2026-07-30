@@ -102,7 +102,19 @@ class ContentRouteLibrary:
             if not role or not finding or not 20 <= length <= 240:
                 raise ValueError("invalid_source_evidence")
             checked.append({"role": role, "finding": finding, "excerpt": excerpt})
-        return {"url": url, "title": title, "source_evidence": checked}
+        contexts = []
+        for item in source.get("citation_contexts") if isinstance(source.get("citation_contexts"), list) else []:
+            if not isinstance(item, dict):
+                continue
+            query = str(item.get("query") or "").strip()[:1000]
+            ai_platform = str(item.get("ai_platform") or "").strip()[:80]
+            try:
+                citation_count = int(item.get("citation_count"))
+            except (TypeError, ValueError):
+                citation_count = 0
+            if query and ai_platform and citation_count > 0:
+                contexts.append({"query": query, "ai_platform": ai_platform, "citation_count": citation_count})
+        return {"url": url, "title": title, "source_evidence": checked, "citation_contexts": contexts}
 
     def list_routes(self, industry):
         return copy.deepcopy(self._load(industry)["routes"])
@@ -136,6 +148,32 @@ class ContentRouteLibrary:
             raise ValueError("duplicate_source_url")
         route.setdefault("sources", []).append(clean_source)
         route["evidence_count"] = len(route["sources"])
+        route["updated_at"] = self.now_fn()
+        self._save(industry, data)
+        return copy.deepcopy(route)
+
+    def add_or_merge_source(self, industry, route_id, source):
+        clean_source = self._validate_source(source)
+        data = self._load(industry)
+        route = next((item for item in data["routes"] if item.get("id") == route_id), None)
+        if route is None:
+            raise ValueError("content_route_not_found")
+        existing = next((item for item in route.get("sources") or [] if _normalized_url(item.get("url")) == clean_source["url"]), None)
+        if existing is None:
+            route.setdefault("sources", []).append(clean_source)
+        else:
+            evidence = existing.setdefault("source_evidence", [])
+            seen = {str(item.get("excerpt") or "") for item in evidence if isinstance(item, dict)}
+            evidence.extend(item for item in clean_source["source_evidence"] if item["excerpt"] not in seen)
+            contexts = existing.setdefault("citation_contexts", [])
+            by_key = {(str(item.get("query") or ""), str(item.get("ai_platform") or "")): item for item in contexts if isinstance(item, dict)}
+            for context in clean_source["citation_contexts"]:
+                key = (context["query"], context["ai_platform"])
+                if key in by_key:
+                    by_key[key]["citation_count"] = max(int(by_key[key].get("citation_count") or 0), context["citation_count"])
+                else:
+                    contexts.append(context)
+        route["evidence_count"] = len(route.get("sources") or [])
         route["updated_at"] = self.now_fn()
         self._save(industry, data)
         return copy.deepcopy(route)

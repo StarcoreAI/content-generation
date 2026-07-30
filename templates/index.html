@@ -302,14 +302,14 @@
   <div class="pg-hd">
     <div>
       <div class="pg-title">✦ <em>引用情报分析</em></div>
-      <div class="pg-sub">选择实际问题后提交文章链接；系统抓取正文，仅分析运营确认已被实际精读的文章。</div>
+      <div class="pg-sub">选择问题组、Query 与一个 AI 平台；系统从该 Query 在该平台的实际引用记录中抽取文章并分析。</div>
     </div>
   </div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">提交确认精读文章</span><div class="card-sub">运营只需选择问题并粘贴文章链接；标题和正文由系统抓取。</div></div></div>
+    <div class="card-hd"><div><span class="card-title">一键生成引用情报</span><div class="card-sub">固定选择引用次数第 1 的文章，再从第 2–5 名按当前平台引用次数加权抽取 1 篇；标题和正文由系统抓取。</div></div></div>
     <div class="form-row col2"><div class="fld"><label>问题组</label><select id="routeAnalysisGroupSelect" onchange="onRouteAnalysisGroupChange()"><option value="">请选择问题组</option></select></div><div class="fld"><label>对应问题</label><select id="routeAnalysisQuerySelect"><option value="">请先选择问题组</option></select></div></div>
-    <div class="fld"><label>文章链接</label><input id="routeAnalysisUrl" placeholder="https://..."></div>
-    <button class="btn btn-p" onclick="analyzeConfirmedReference()">分析并沉淀路线</button><span id="routeAnalysisStatus" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
+    <div class="fld" style="max-width:280px"><label>AI 平台</label><select id="routeAnalysisPlatformSelect"><option value="">请先选择客户</option></select></div>
+    <button class="btn btn-p" id="btnQueryPlatformReferenceAnalysis" onclick="runQueryPlatformReferenceAnalysis()">一键分析并沉淀路线</button><span id="routeAnalysisStatus" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
   </div>
   <div class="card"><div class="card-hd"><span class="card-title">行业完整路线</span><button class="btn btn-o btn-sm" onclick="loadContentRoutes()">刷新</button></div><div id="contentRouteList" style="font-size:12px;color:var(--text3)">请选择客户后查看。</div></div>
 </div>
@@ -526,8 +526,8 @@
 <!-- ═══ 质量门禁 ═══ -->
 <div class="page" id="page-quality">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>质量门禁</em></div><div class="pg-sub">展示该客户所有已生产文章；审核不通过的文章也保留，供人工编辑或 AI 修改。</div></div>
-    <button class="btn btn-o btn-sm" onclick="loadQualityGateArticles()">刷新</button>
+    <div><div class="pg-title">✦ <em>质量门禁</em></div><div class="pg-sub">展示该客户的已生产和运营上传文章；审核只提示，不阻止后续人工编辑或发布。</div></div>
+    <div class="acts"><button class="btn btn-p btn-sm" id="btnQualityGateUpload" onclick="document.getElementById('qualityGateUploadInput').click()"><span class="spin" id="spQualityGateUpload" style="display:none"></span>上传文章并检查</button><input type="file" id="qualityGateUploadInput" accept=".txt,.md,.docx" style="display:none" onchange="uploadQualityGateArticle(this)"><button class="btn btn-o btn-sm" onclick="loadQualityGateArticles()">刷新</button></div>
   </div>
   <div class="card">
     <div class="card-hd"><span class="card-title">文章审核列表 <span id="quality-article-count" style="color:var(--text3);font-size:11px"></span></span></div>

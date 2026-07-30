@@ -234,7 +234,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn("async function generateDailyEntities(", html)
         self.assertNotIn("/api/daily/entities/generate", html)
 
-    def test_reference_intelligence_page_uses_group_query_and_article_url_only(self):
+    def test_reference_intelligence_page_uses_group_query_and_single_platform(self):
         html = read_frontend_source()
 
         self.assertIn("引用情报分析", html)
@@ -243,16 +243,17 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         self.assertNotIn('id="referencePluginList"', html)
         self.assertIn('id="routeAnalysisGroupSelect"', html)
         self.assertIn('id="routeAnalysisQuerySelect"', html)
-        self.assertIn('id="routeAnalysisUrl"', html)
+        self.assertIn('id="routeAnalysisPlatformSelect"', html)
+        self.assertNotIn('id="routeAnalysisUrl"', html)
         self.assertNotIn('id="routeAnalysisQuery"', html)
         self.assertNotIn('id="routeAnalysisTitle"', html)
         self.assertNotIn('id="routeAnalysisContent"', html)
         self.assertNotIn('id="routeAnalysisExisting"', html)
         self.assertNotIn('id="routeAnalysisConfirmed"', html)
-        self.assertIn("async function analyzeConfirmedReference(", html)
-        self.assertIn("/api/content-routes/analyze", html)
+        self.assertIn("async function runQueryPlatformReferenceAnalysis(", html)
+        self.assertIn("/api/content-routes/analyze-query-platform", html)
         self.assertIn("loadRouteAnalysisQuestionOptions", html)
-        self.assertIn("article: {url}", html)
+        self.assertIn("loadRouteAnalysisPlatformOptions", html)
         self.assertIn("async function loadContentRoutes(", html)
         self.assertNotIn('id="referenceAnalyzeProgress"', html)
 

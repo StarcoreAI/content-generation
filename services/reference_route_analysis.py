@@ -30,7 +30,7 @@ def build_route_analysis_prompt(bundle, article):
     support_text = "\n".join(f"- {point}" for point in support_points) if support_points else "- 未提供"
     title = _text(article.get("title"), 500)
     content = _text(article.get("content"), PROMPT_CONTENT_LIMIT)
-    return f"""你是 GEO 引用情报分析员。现在不是判断文章真假，也不是模拟平台内部检索；运营已经人工确认，这篇文章是针对本次 Query 被实际精读过的候选材料。你的工作是把它拆成两层：可回原文核对的来源证据，以及可跨客户复用的完整写作路径。
+    return f"""你是 GEO 引用情报分析员。现在不是判断文章真假，也不是模拟平台内部检索；这篇文章由系统根据本次 Query 与当前 AI 平台的实际引用记录选中。引用记录只能证明它被该平台引用，不能推断平台内部检索、阅读深度或最终决策过程。你的工作是把它拆成两层：可回原文核对的来源证据，以及可跨客户复用的完整写作路径。
 
 你只能输出 JSON，不要输出 Markdown。字段只能是：
 {{

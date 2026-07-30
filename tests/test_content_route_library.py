@@ -65,5 +65,22 @@ class ContentRouteLibraryTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "content_route_not_found"):
                 library.delete_route("装修", entry["id"])
 
+    def test_same_source_url_merges_new_query_platform_context(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            library = ContentRouteLibrary(Path(tmp))
+            first = {
+                **source(),
+                "citation_contexts": [{"query": "问题 A", "ai_platform": "doubao", "citation_count": 5}],
+            }
+            second = {
+                **source(),
+                "citation_contexts": [{"query": "问题 B", "ai_platform": "yuanbao", "citation_count": 3}],
+            }
+            entry = library.create_route("装修", route(), first)
+            updated = library.add_or_merge_source("装修", entry["id"], second)
+
+        self.assertEqual(1, len(updated["sources"]))
+        self.assertEqual(2, len(updated["sources"][0]["citation_contexts"]))
+
 if __name__ == "__main__":
     unittest.main()
