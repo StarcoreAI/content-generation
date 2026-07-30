@@ -194,6 +194,12 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn("} catch (error) {", script)
         self.assertIn("引用情报分析请求失败", script)
 
+    def test_reference_intelligence_posts_the_selected_group_id(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        function_body = script.split("async function runQueryPlatformReferenceAnalysis()", 1)[1].split("\n}\n", 1)[0]
+
+        self.assertIn("client_id: currentClientId, group_id: groupId, query, ai_platform", function_body)
+
     def test_frontend_removes_legacy_pattern_library_controls(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
         styles = (ROOT / "static" / "css" / "app.css").read_text(encoding="utf-8")

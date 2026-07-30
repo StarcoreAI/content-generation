@@ -3157,7 +3157,7 @@ async function runQueryPlatformReferenceAnalysis() {
   if (button) button.disabled = true;
   try {
     const result = await api('/api/content-routes/analyze-query-platform', 'POST', {
-      client_id: currentClientId, group_id, query, ai_platform,
+      client_id: currentClientId, group_id: groupId, query, ai_platform,
     });
     if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
     const analyzed = (result.analyses || []).filter(item => item.status === 'analyzed').length;
