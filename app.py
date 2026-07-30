@@ -737,6 +737,15 @@ def _log_model_call(event, **fields):
     print("[model_call] " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
 
 
+def _log_reference_intelligence(event, **fields):
+    payload = {
+        "event": event,
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        **fields,
+    }
+    print("[reference_intelligence] " + json.dumps(payload, ensure_ascii=False, sort_keys=True), flush=True)
+
+
 def _model_error_summary(exc, api_key, prompt):
     message = str(exc)
     if api_key:
@@ -2529,15 +2538,48 @@ def analyze_query_platform_content_routes():
     if not industry:
         return jsonify({"error": "client_industry_required"}), 400
 
+    trace_fields = {
+        "trace_id": uuid.uuid4().hex[:12],
+        "client_id": cid,
+        "ai_platform": ai_platform,
+    }
+    _log_reference_intelligence("request_received", **trace_fields)
+    lock_wait_started_at = time.monotonic()
+    _log_reference_intelligence("lock_wait_started", **trace_fields)
     with reference_intelligence_lock:
+        _log_reference_intelligence(
+            "lock_acquired",
+            **trace_fields,
+            wait_ms=round((time.monotonic() - lock_wait_started_at) * 1000),
+        )
         records = load_client_records(cid, question=query, platform=ai_platform)
         task = select_query_platform_articles(records, query, ai_platform, secrets.randbits(32))
         if not task["selected"]:
             return jsonify({"error": "query_platform_citations_not_found"}), 400
+        _log_reference_intelligence("articles_selected", **trace_fields, article_count=len(task["selected"]))
         task.update({"id": uid(), "client_id": cid, "group_id": group_id, "created_at": now_str(), "analyses": [], "merge_results": [], "routes": []})
         analyzed, analyzed_candidates = [], []
-        for candidate in task["selected"]:
+        for article_index, candidate in enumerate(task["selected"], start=1):
+            url = str(candidate.get("url") or "")
+            fetch_started_at = time.monotonic()
+            _log_reference_intelligence(
+                "article_fetch_started",
+                **trace_fields,
+                article_index=article_index,
+                url_host=urlsplit(url).netloc,
+            )
             fetched = fetch_article_text(candidate["url"], timeout=25, max_chars=12000, browser_fallback=True)
+            _log_reference_intelligence(
+                "article_fetch_finished",
+                **trace_fields,
+                article_index=article_index,
+                url_host=urlsplit(url).netloc,
+                elapsed_ms=round((time.monotonic() - fetch_started_at) * 1000),
+                ok=bool(fetched.get("ok")),
+                fetch_method=str(fetched.get("fetch_method") or ""),
+                content_length=len(str(fetched.get("content") or "")),
+                error=str(fetched.get("error") or "")[:300],
+            )
             if not fetched.get("ok") or not str(fetched.get("content") or "").strip():
                 task["analyses"].append({"url": candidate["url"], "status": "fetch_failed", "error": str(fetched.get("error") or "article_fetch_failed")})
                 continue
