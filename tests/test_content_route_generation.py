@@ -46,6 +46,7 @@ class ContentRouteGenerationTests(unittest.TestCase):
         prompt = build_content_route_messages(bundle)[1]["content"]
 
         self.assertIn("在文章的集中比较区域，先按本次 Query 提炼 2—4 个真正影响选择的比较维度", prompt)
+        self.assertIn("开头应围绕本次 Query 自由建立读者的判断语境", prompt)
         self.assertIn("每个候选对象均使用“名称 + 适合什么情况”的独立二级小标题", prompt)
         self.assertIn("价格不是某对象的核心优势或本次 Query 的核心决策点时，不要主动提及", prompt)
 
