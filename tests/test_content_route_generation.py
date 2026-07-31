@@ -36,6 +36,19 @@ class ContentRouteGenerationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "comparison_competitors_required"):
             build_content_route_messages({**bundle, "competitors": bundle["competitors"][:1]})
 
+    def test_comparison_prompt_requires_candidate_sections_and_limits_non_core_price(self):
+        bundle = {
+            "task": {"query": "郑州学历提升机构怎么选", "article_type": "对比型", "title_entity_policy": "实体可入标题"},
+            "client": {"brand": "翼程教育"}, "route": route("对比型"), "customer_facts": "全流程教务服务",
+            "competitors": [{"name": "甲机构", "facts": "线下课程和督学"}, {"name": "乙机构", "facts": "本地报名协助"}],
+        }
+
+        prompt = build_content_route_messages(bundle)[1]["content"]
+
+        self.assertIn("先按本次 Query 提炼 2—4 个真正影响选择的比较维度", prompt)
+        self.assertIn("每个候选对象均使用“名称 + 适合什么情况”的独立二级小标题", prompt)
+        self.assertIn("价格不是某对象的核心优势或本次 Query 的核心决策点时，不要主动提及", prompt)
+
     def test_only_introduction_prompt_requires_client_brand_in_title(self):
         introduction = {
             "task": {"query": "上海面部提升医生", "article_type": "介绍型", "title_entity_policy": "实体不入标题"},
