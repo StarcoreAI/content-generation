@@ -666,6 +666,7 @@ function onContentGroupChange() {
 
 async function loadRouteAnalysisQuestionOptions() {
   await loadQuestionGroupOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
+  addRouteAnalysisAllQuestionsOption();
 }
 
 function loadRouteAnalysisPlatformOptions() {
@@ -681,6 +682,16 @@ function loadRouteAnalysisPlatformOptions() {
 
 function onRouteAnalysisGroupChange() {
   populateQuestionOptions('routeAnalysisGroupSelect', 'routeAnalysisQuerySelect');
+  addRouteAnalysisAllQuestionsOption();
+}
+
+function addRouteAnalysisAllQuestionsOption() {
+  const select = document.getElementById('routeAnalysisQuerySelect');
+  if (!select || select.options.length < 2 || select.querySelector('option[value="__all_questions__"]')) return;
+  const option = document.createElement('option');
+  option.value = '__all_questions__';
+  option.textContent = '全部问题（本问题组）';
+  select.insertBefore(option, select.options[1]);
 }
 
 function selectedContentQuery() {
@@ -3149,15 +3160,16 @@ async function runQueryPlatformReferenceAnalysis() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const groupId = document.getElementById('routeAnalysisGroupSelect')?.value || '';
   const query = document.getElementById('routeAnalysisQuerySelect')?.value.trim();
+  const allQuestions = query === '__all_questions__';
   const ai_platform = document.getElementById('routeAnalysisPlatformSelect')?.value || '';
   if (!groupId || !query || !ai_platform) { toast('请选择问题组、Query 和 AI 平台', 'err'); return; }
   const status = document.getElementById('routeAnalysisStatus');
   const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
-  if (status) status.textContent = '正在按当前 Query 和平台统计引用、抓取文章并分析…';
+  if (status) status.textContent = allQuestions ? '正在按本问题组全部问题和当前平台统计引用、抓取文章并分析…' : '正在按当前 Query 和平台统计引用、抓取文章并分析…';
   if (button) button.disabled = true;
   try {
     const result = await api('/api/content-routes/analyze-query-platform', 'POST', {
-      client_id: currentClientId, group_id: groupId, query, ai_platform,
+      client_id: currentClientId, group_id: groupId, query: allQuestions ? '' : query, analyze_all_questions: allQuestions, ai_platform,
     });
     if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
     const analyzed = (result.analyses || []).filter(item => item.status === 'analyzed').length;

@@ -2411,14 +2411,14 @@ def reference_route_source(analysis, candidate, query, ai_platform):
     }
 
 
-def apply_reference_batch_updates(industry, library, analyses, candidates, query, ai_platform, updates):
+def apply_reference_batch_updates(industry, library, analyses, candidates, queries, ai_platform, updates):
     routes = []
     for update in updates:
         indexes = update.get("analysis_indexes") if isinstance(update.get("analysis_indexes"), list) else []
         sources = [
-            reference_route_source(analyses[index], candidates[index], query, ai_platform)
+            reference_route_source(analyses[index], candidates[index], queries[index], ai_platform)
             for index in indexes
-            if isinstance(index, int) and 0 <= index < len(analyses)
+            if isinstance(index, int) and 0 <= index < len(analyses) and index < len(queries)
         ]
         if not sources:
             continue
@@ -2523,6 +2523,7 @@ def analyze_query_platform_content_routes():
         return jsonify({"error": "client_not_found"}), 404
     group_id = str(payload.get("group_id") or "").strip()
     query = str(payload.get("query") or "").strip()
+    analyze_all_questions = payload.get("analyze_all_questions") is True
     ai_platform = str(payload.get("ai_platform") or "").strip()
     trace_fields["ai_platform"] = ai_platform
     if not group_id:
@@ -2531,8 +2532,14 @@ def analyze_query_platform_content_routes():
     group = next((item for item in groups.get(cid, []) if item.get("id") == group_id), None)
     if group is None:
         return jsonify({"error": "query_group_not_found"}), 400
-    if query not in (group.get("questions") or []):
+    queries = [str(item or "").strip() for item in group.get("questions") or []]
+    queries = [item for item in queries if item]
+    if analyze_all_questions and not queries:
+        return jsonify({"error": "query_group_has_no_questions"}), 400
+    if not analyze_all_questions and query not in queries:
         return jsonify({"error": "query_not_in_group"}), 400
+    if not analyze_all_questions:
+        queries = [query]
     if ai_platform not in CRAWL_PLATFORMS:
         return jsonify({"error": "ai_platform_required"}), 400
     client = get_client(cid) or {}
@@ -2550,14 +2557,24 @@ def analyze_query_platform_content_routes():
             **trace_fields,
             wait_ms=round((time.monotonic() - lock_wait_started_at) * 1000),
         )
-        records = load_client_records(cid, question=query, platform=ai_platform)
-        task = select_query_platform_articles(records, query, ai_platform, secrets.randbits(32))
-        if not task["selected"]:
+        records = load_client_records(cid, platform=ai_platform) if analyze_all_questions else load_client_records(cid, question=query, platform=ai_platform)
+        query_tasks, selected_items = [], []
+        for source_query in queries:
+            query_task = select_query_platform_articles(records, source_query, ai_platform, secrets.randbits(32))
+            query_tasks.append(query_task)
+            selected_items.extend((source_query, candidate) for candidate in query_task["selected"])
+        if not selected_items:
             return jsonify({"error": "query_platform_citations_not_found"}), 400
-        _log_reference_intelligence("articles_selected", **trace_fields, article_count=len(task["selected"]))
-        task.update({"id": uid(), "client_id": cid, "group_id": group_id, "created_at": now_str(), "analyses": [], "merge_results": [], "routes": []})
-        analyzed, analyzed_candidates = [], []
-        for article_index, candidate in enumerate(task["selected"], start=1):
+        _log_reference_intelligence("articles_selected", **trace_fields, article_count=len(selected_items), query_count=len(queries))
+        task = {
+            "id": uid(), "client_id": cid, "group_id": group_id, "query": query,
+            "queries": queries, "analyze_all_questions": analyze_all_questions,
+            "ai_platform": ai_platform, "created_at": now_str(), "query_tasks": query_tasks,
+            "selected": [{**candidate, "query": source_query} for source_query, candidate in selected_items],
+            "analyses": [], "merge_results": [], "routes": [],
+        }
+        analyzed, analyzed_candidates, analyzed_queries = [], [], []
+        for article_index, (source_query, candidate) in enumerate(selected_items, start=1):
             url = str(candidate.get("url") or "")
             fetch_started_at = time.monotonic()
             _log_reference_intelligence(
@@ -2588,14 +2605,15 @@ def analyze_query_platform_content_routes():
                 "content": str(fetched.get("content") or "").strip(),
             }
             try:
-                analysis = analyze_content_route_article({"query": query}, article, ai_json)
+                analysis = analyze_content_route_article({"query": source_query}, article, ai_json)
             except Exception as exc:
                 task["analyses"].append({"url": candidate["url"], "status": "analysis_failed", "error": str(exc) or type(exc).__name__})
                 continue
             analyzed.append(analysis)
             analyzed_candidates.append(candidate)
+            analyzed_queries.append(source_query)
             task["analyses"].append({
-                "url": candidate["url"], "title": article["title"], "status": "analyzed",
+                "query": source_query, "url": candidate["url"], "title": article["title"], "status": "analyzed",
                 "citation_count": candidate["citation_count"], "classification": analysis.get("classification"),
                 "eligible": bool((analysis.get("library_decision") or {}).get("eligible")),
                 "analysis": analysis,
@@ -2610,11 +2628,11 @@ def analyze_query_platform_content_routes():
             ]
             if not indexes:
                 continue
-            batch_analyses = [analyzed[index] for index in indexes]
+            batch_analyses = [{**analyzed[index], "source_query": analyzed_queries[index]} for index in indexes]
             merged = merge_reference_route_batch(batch_analyses, library.list_routes(industry), ai_json)
             batch_routes = apply_reference_batch_updates(
                 industry, library, batch_analyses, [analyzed_candidates[index] for index in indexes],
-                query, ai_platform, merged["updates"],
+                [analyzed_queries[index] for index in indexes], ai_platform, merged["updates"],
             )
             task["merge_results"].append({"parent_type": parent_type, **merged})
             created_or_updated.extend(batch_routes)

@@ -48,6 +48,31 @@ class QueryPlatformReferenceApiTests(unittest.TestCase):
             self.assertEqual(5, task["selected"][0]["citation_count"])
             self.assertEqual(1, len(response.get_json()["routes"]))
 
+    def test_all_group_questions_are_merged_in_one_reference_batch(self):
+        with isolated_app_data():
+            cid, gid = "client-reference", "group-reference"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "客户", "brand": "品牌", "industry": "测试行业", "contract_platforms": ["doubao"]}])
+            geo_app.save(geo_app.F_GROUPS, {cid: [{"id": gid, "questions": ["Q1", "Q2"]}]})
+            records = [_record("Q1", "doubao", "https://example.com/a") for _ in range(5)]
+            records += [_record("Q2", "doubao", "https://example.com/b") for _ in range(4)]
+            merge_result = {"updates": [{"action": "create", "analysis_indexes": [0, 1], "route": ANALYSIS["route"], "reason": "同一写法路线"}]}
+            with patch.object(geo_app, "load_client_records", return_value=records) as load_records, \
+                    patch.object(geo_app, "fetch_article_text", return_value={"ok": True, "title": "引用文章", "content": "这是抓取到的完整文章正文，用于引用情报分析。"}), \
+                    patch.object(geo_app, "analyze_content_route_article", return_value=ANALYSIS), \
+                    patch.object(geo_app, "merge_reference_route_batch", return_value=merge_result) as merge_batch:
+                response = geo_app.app.test_client().post("/api/content-routes/analyze-query-platform", json={
+                    "client_id": cid, "group_id": gid, "query": "", "analyze_all_questions": True, "ai_platform": "doubao",
+                })
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual({"platform": "doubao"}, load_records.call_args.kwargs)
+            batch = merge_batch.call_args.args[0]
+            self.assertEqual(["Q1", "Q2"], [item["source_query"] for item in batch])
+            task = response.get_json()["task"]
+            self.assertTrue(task["analyze_all_questions"])
+            self.assertEqual(["Q1", "Q2"], task["queries"])
+            self.assertEqual(2, len(task["analyses"]))
+
     def test_one_click_logs_lock_selection_and_fetch_stages(self):
         with isolated_app_data():
             cid, gid = "client-reference", "group-reference"

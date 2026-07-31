@@ -198,7 +198,15 @@ class ContentGenerationUiTests(unittest.TestCase):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
         function_body = script.split("async function runQueryPlatformReferenceAnalysis()", 1)[1].split("\n}\n", 1)[0]
 
-        self.assertIn("client_id: currentClientId, group_id: groupId, query, ai_platform", function_body)
+        self.assertIn("client_id: currentClientId, group_id: groupId", function_body)
+        self.assertIn("query: allQuestions ? '' : query", function_body)
+
+    def test_reference_intelligence_can_submit_all_questions_in_a_group(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        function_body = script.split("async function runQueryPlatformReferenceAnalysis()", 1)[1].split("\n}\n", 1)[0]
+
+        self.assertIn("option.value = '__all_questions__'", script)
+        self.assertIn("analyze_all_questions: allQuestions", function_body)
 
     def test_frontend_removes_legacy_pattern_library_controls(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

@@ -25,6 +25,7 @@ def build_batch_merge_prompt(analyses, existing_routes, parent_type):
     for index, item in enumerate(analyses):
         article_payload.append({
             "analysis_index": index,
+            "source_query": item.get("source_query"),
             "source": item.get("source"),
             "source_evidence": item.get("source_evidence"),
             "proposed_route": item.get("route"),
