@@ -14,7 +14,14 @@ from services import crawl_jobs as crawl_job_store
 from services import records as record_store
 from services.auth import authenticate_user, create_user, find_user
 from services.article_structure import analyze_article_structure
-from services.article_fetcher import fetch_article_text
+from services.article_fetcher import fetch_article_text, fetch_article_text_with_browser
+from services.article_analysis_cache import (
+    get_cached_analysis,
+    get_cached_article,
+    put_cached_analysis,
+    put_cached_article,
+)
+from services.bounded_article_processing import analyze_articles, fetch_articles
 from services.content_generations import ContentGenerationStore
 from services.publications import PublicationStore
 from services.rwmeiti import RWMeitiClient
@@ -48,6 +55,8 @@ from services.record_trends import (
 )
 from services.selection_evidence import SelectionEvidenceService
 from services.knowledge_base import KnowledgeBaseService, validate_customer_content_facts
+from services.knowledge_exports import DOCX_MIMETYPE, build_knowledge_docx, routes_markdown, scenes_markdown
+from services.system_prompt_catalog import list_system_prompts
 from services.content_route_library import ContentRouteLibrary
 from services.content_route_generation import (
     generate_content_route_draft,
@@ -78,6 +87,8 @@ content_batch_jobs_guard = threading.RLock()
 content_batch_jobs = None
 content_generation_lock = threading.RLock()
 reference_intelligence_lock = threading.RLock()
+background_analysis_semaphore = threading.BoundedSemaphore(2)
+browser_article_fetch_semaphore = threading.BoundedSemaphore(1)
 
 
 def get_crawl_platform_lock(platform):
@@ -86,6 +97,16 @@ def get_crawl_platform_lock(platform):
         if platform not in crawl_platform_locks:
             crawl_platform_locks[platform] = threading.Lock()
         return crawl_platform_locks[platform]
+
+
+def fetch_article_text_for_background_analysis(url):
+    def browser_fetch(browser_url, timeout=25, max_chars=12000):
+        with browser_article_fetch_semaphore:
+            return fetch_article_text_with_browser(browser_url, timeout=timeout, max_chars=max_chars)
+
+    return fetch_article_text(
+        url, timeout=25, max_chars=12000, browser_fallback=True, browser_fetch_fn=browser_fetch,
+    )
 
 
 def extract_generated_title(content):
@@ -808,8 +829,8 @@ def ai_with_settings_response(prompt, max_tokens=2000, settings=None):
         "response_length": len(raw),
     }
 
-def ai_deepseek_pro(messages, max_tokens=6000):
-    s = get_settings()
+def ai_deepseek_pro(messages, max_tokens=6000, settings=None):
+    s = settings or get_settings()
     if not s.get("api_key"):
         raise Exception("请先在系统设置中配置 API Key")
     client = OpenAI(api_key=s["api_key"], base_url=s.get("base_url", "https://api.deepseek.com").rstrip("/"))
@@ -1336,15 +1357,21 @@ def question_articles():
 def group_trend():
     client_id = (request.args.get("client_id") or "").strip()
     group_id = (request.args.get("group_id") or "").strip()
+    platform = (request.args.get("platform") or "").strip()
     if not client_id or not require_client_access(client_id):
         return jsonify({"error": "client_not_found"}), 404
+    if not platform:
+        return jsonify({"error": "ai_platform_required"}), 400
+    client = next((item for item in load(F_CLIENTS, []) if item.get("id") == client_id), None)
+    if not client or platform not in normalize_contract_platforms(client.get("contract_platforms")):
+        return jsonify({"error": "ai_platform_not_configured"}), 400
     group = next((item for item in load(F_GROUPS, {}).get(client_id, []) if item.get("id") == group_id), None)
     if not group:
         return jsonify({"error": "group_not_found"}), 404
     trend = build_group_mention_trend(
         load_client_records(client_id, group_id=group_id),
         group.get("questions", []),
-        request.args.get("platform") or "",
+        platform,
     )
     return jsonify({"client_id": client_id, "group_id": group_id, **trend})
 
@@ -1368,42 +1395,6 @@ def source_trend():
 
 def selection_evidence_service():
     return SelectionEvidenceService(Path(D) / "selection_evidence", fetch_article=fetch_article_text)
-
-
-def selection_surface_report_paths(cid):
-    root = (Path(D) / "selection_surface_reports").resolve()
-    client_dir = (root / str(cid)).resolve()
-    if client_dir.parent != root or not client_dir.is_dir():
-        return []
-    return sorted(
-        (path for path in client_dir.iterdir()
-         if path.is_file() and path.name.endswith("_selection_surface.md")),
-        key=lambda path: path.name,
-        reverse=True,
-    )
-
-
-@app.route("/api/records/selection-reports/<cid>", methods=["GET"])
-def list_selection_surface_reports(cid):
-    if not require_client_access(cid):
-        return jsonify({"error": "client_not_found"}), 404
-    reports = [{
-        "id": path.name,
-        "name": path.name,
-        "updated_at": datetime.fromtimestamp(path.stat().st_mtime).isoformat(timespec="seconds"),
-    } for path in selection_surface_report_paths(cid)]
-    return jsonify({"client_id": cid, "reports": reports})
-
-
-@app.route("/api/records/selection-reports/<cid>/<report_id>", methods=["GET"])
-def read_selection_surface_report(cid, report_id):
-    if not require_client_access(cid):
-        return jsonify({"error": "client_not_found"}), 404
-    allowed_reports = {path.name: path for path in selection_surface_report_paths(cid)}
-    path = allowed_reports.get(report_id)
-    if path is None:
-        return jsonify({"error": "report_not_found"}), 404
-    return jsonify({"client_id": cid, "id": path.name, "content": path.read_text(encoding="utf-8", errors="replace")})
 
 
 @app.route("/api/records/selection-evidence/<cid>", methods=["GET"])
@@ -1592,6 +1583,9 @@ def knowledge_base_service():
 def competitor_knowledge_article_cache_path(cid):
     return Path(D) / "knowledge_base" / cid / "competitor_article_sources.json"
 
+def competitor_knowledge_facts_cache_path(cid):
+    return Path(D) / "knowledge_base" / cid / "competitor_article_facts_cache.json"
+
 def competitor_knowledge_context(cid, date_str="", group_id="", task_id="", platform=""):
     all_records = load_client_records(cid)
     source_date = str(date_str or "").strip() or max(
@@ -1635,7 +1629,7 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     article_cache_body = load_json(article_cache_path, {"articles": {}}) if article_cache_path.exists() else {"articles": {}}
     local_cache = article_cache_body.get("articles", {}) if isinstance(article_cache_body, dict) else {}
     cached = dict(local_cache) if isinstance(local_cache, dict) else {}
-    fetch_fn = fetch_fn or (lambda url: fetch_article_text(url, timeout=25, max_chars=12000, browser_fallback=True))
+    fetch_fn = fetch_fn or fetch_article_text_for_background_analysis
     articles = collect_high_frequency_article_sources(records, cached, fetch_fn, limit=12)
     saved_cache = dict(local_cache) if isinstance(local_cache, dict) else {}
     for article in articles:
@@ -1650,10 +1644,21 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     usable = [article for article in articles if article.get("ok") and article.get("content")]
     if not usable:
         return fallback
-    ask_text = ask_text or (lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, get_settings()))
-    high_frequency = []
+    if ask_text is None:
+        settings = get_settings()
+        ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
+    facts_cache_path = competitor_knowledge_facts_cache_path(cid)
+    competitor_scope = "\n".join(item.get("name", "") for item in entities)
     batches = [usable[index:index + 4] for index in range(0, len(usable), 4)]
-    for index, batch in enumerate(batches, 1):
+    def extract_batch(item):
+        index, batch = item
+        batch_url = "batch:" + "|".join(str(article.get("url") or "") for article in batch)
+        batch_content = "\n\n".join(
+            f"{article.get('url') or ''}\n{article.get('content') or ''}" for article in batch
+        )
+        cached_facts = get_cached_analysis(facts_cache_path, batch_url, batch_content, scope=competitor_scope)
+        if isinstance(cached_facts, str) and cached_facts.strip():
+            return cached_facts
         try:
             extracted = str(ask_text(
                 build_high_frequency_competitor_prompt(
@@ -1662,9 +1667,16 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
                 6000,
             ) or "")
         except Exception:
-            continue
-        if extracted.strip():
-            high_frequency.append(extracted)
+            return ""
+        if extracted.strip() and persist_cache:
+            put_cached_analysis(facts_cache_path, batch_url, batch_content, extracted, scope=competitor_scope)
+        return extracted
+
+    high_frequency = [
+        extracted for extracted in analyze_articles(
+            list(enumerate(batches, 1)), extract_batch, background_analysis_semaphore,
+        ) if extracted.strip()
+    ]
     if not high_frequency:
         return fallback
     return merge_competitor_master_markdown(*high_frequency, fallback)
@@ -2141,13 +2153,47 @@ def save_competitor_knowledge_master(cid):
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     try:
+        payload = request.get_json(silent=True) or {}
         result = knowledge_base_service().save_competitor_master(
             cid,
-            str((request.get_json(silent=True) or {}).get("content") or ""),
+            str(payload.get("content") or ""),
+            payload.get("renames") or [],
         )
     except ValueError as exc:
         return jsonify({"error": str(exc)}), 400
     return jsonify({"ok": True, **result})
+
+
+@app.route("/api/knowledge/export/<cid>/<kind>", methods=["GET"])
+def download_knowledge_docx(cid, kind):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    client = get_client(cid) or {}
+    kind = str(kind or "").strip()
+    knowledge = knowledge_base_service()
+    exports = {
+        "customer": ("客户资料知识库", knowledge.load_customer_master(cid).get("content", ""), "customer_knowledge.docx"),
+        "competitors": ("竞品资料知识库", knowledge.load_competitor_master(cid).get("content", ""), "competitor_knowledge.docx"),
+        "routes": ("行业写法库", routes_markdown(
+            str(client.get("industry") or "").strip(),
+            {group: [route for route in content_route_library_service().list_routes(str(client.get("industry") or "").strip()) if route.get("parent_type") == group] for group in ("介绍型", "对比型")},
+        ) if str(client.get("industry") or "").strip() else "# 行业写法库\n\n请先为客户设置行业。\n", "knowledge_routes.docx"),
+        "scenes": ("场景词库", scenes_markdown(selection_evidence_service().load_query_scene_rows(cid, load(F_GROUPS, {}).get(cid, []))), "knowledge_scenes.docx"),
+    }
+    if kind not in exports:
+        return jsonify({"error": "knowledge_export_not_found"}), 404
+    title, content, filename = exports[kind]
+    return send_file(
+        build_knowledge_docx(title, content, str(client.get("name") or client.get("brand") or "")),
+        as_attachment=True,
+        download_name=filename,
+        mimetype=DOCX_MIMETYPE,
+    )
+
+
+@app.route("/api/system-prompts", methods=["GET"])
+def get_system_prompt_catalog():
+    return jsonify({"ok": True, "prompts": list_system_prompts()})
 
 
 @app.route("/api/competitors/<cid>/upload.md", methods=["GET"])
@@ -2373,14 +2419,14 @@ def generate_content_draft(messages, ai_text_fn=None):
     raise ValueError("empty_content_generation_response")
 
 
-def run_content_generation(payload, created_by="", batch_id=""):
+def run_content_generation(payload, created_by="", batch_id="", settings=None):
     with content_generation_lock:
-        return _run_content_generation(payload, created_by=created_by, batch_id=batch_id)
+        return _run_content_generation(payload, created_by=created_by, batch_id=batch_id, settings=settings)
 
 
-def _run_content_generation(payload, created_by="", batch_id=""):
+def _run_content_generation(payload, created_by="", batch_id="", settings=None):
     """Run the only supported, explicit-material content-generation path."""
-    return _run_content_route_generation(dict(payload or {}), created_by=created_by, batch_id=batch_id)
+    return _run_content_route_generation(dict(payload or {}), created_by=created_by, batch_id=batch_id, settings=settings)
 
 
 def content_route_library_service():
@@ -2389,6 +2435,10 @@ def content_route_library_service():
 
 def reference_intelligence_task_path(cid):
     return Path(D) / "reference_intelligence_tasks" / f"{cid}.json"
+
+
+def reference_route_analysis_cache_path(cid):
+    return Path(D) / "knowledge_base" / cid / "reference_route_analysis_cache.json"
 
 
 def save_reference_intelligence_task(cid, task):
@@ -2573,50 +2623,67 @@ def analyze_query_platform_content_routes():
             "selected": [{**candidate, "query": source_query} for source_query, candidate in selected_items],
             "analyses": [], "merge_results": [], "routes": [],
         }
-        analyzed, analyzed_candidates, analyzed_queries = [], [], []
-        for article_index, (source_query, candidate) in enumerate(selected_items, start=1):
+        cache_path = reference_route_analysis_cache_path(cid)
+        settings = get_settings()
+        analysis_ai_json = lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, settings)
+
+        def fetch_selected(item):
+            article_index, (source_query, candidate) = item
             url = str(candidate.get("url") or "")
+            fetched = get_cached_article(cache_path, url)
+            if fetched:
+                fetched["fetch_method"] = "cache"
+                return source_query, candidate, fetched
             fetch_started_at = time.monotonic()
+            _log_reference_intelligence("article_fetch_started", **trace_fields, article_index=article_index, url_host=urlsplit(url).netloc)
+            try:
+                fetched = fetch_article_text_for_background_analysis(url)
+            except Exception as exc:
+                fetched = {"ok": False, "error": str(exc)}
             _log_reference_intelligence(
-                "article_fetch_started",
-                **trace_fields,
-                article_index=article_index,
-                url_host=urlsplit(url).netloc,
-            )
-            fetched = fetch_article_text(candidate["url"], timeout=25, max_chars=12000, browser_fallback=True)
-            _log_reference_intelligence(
-                "article_fetch_finished",
-                **trace_fields,
-                article_index=article_index,
-                url_host=urlsplit(url).netloc,
-                elapsed_ms=round((time.monotonic() - fetch_started_at) * 1000),
-                ok=bool(fetched.get("ok")),
-                fetch_method=str(fetched.get("fetch_method") or ""),
-                content_length=len(str(fetched.get("content") or "")),
+                "article_fetch_finished", **trace_fields, article_index=article_index, url_host=urlsplit(url).netloc,
+                elapsed_ms=round((time.monotonic() - fetch_started_at) * 1000), ok=bool(fetched.get("ok")),
+                fetch_method=str(fetched.get("fetch_method") or ""), content_length=len(str(fetched.get("content") or "")),
                 error=str(fetched.get("error") or "")[:300],
             )
+            if fetched.get("ok") and str(fetched.get("content") or "").strip():
+                put_cached_article(cache_path, url, fetched)
+            return source_query, candidate, fetched
+
+        fetched_items = fetch_articles(list(enumerate(selected_items, start=1)), fetch_selected)
+
+        def analyze_selected(item):
+            source_query, candidate, fetched = item
             if not fetched.get("ok") or not str(fetched.get("content") or "").strip():
-                task["analyses"].append({"url": candidate["url"], "status": "fetch_failed", "error": str(fetched.get("error") or "article_fetch_failed")})
-                continue
+                return {"status": "fetch_failed", "candidate": candidate, "error": str(fetched.get("error") or "article_fetch_failed")}
             article = {
-                "confirmed_for_route_analysis": True,
-                "url": candidate["url"],
+                "confirmed_for_route_analysis": True, "url": candidate["url"],
                 "title": str(fetched.get("title") or candidate.get("title") or candidate["url"]).strip(),
                 "content": str(fetched.get("content") or "").strip(),
             }
-            try:
-                analysis = analyze_content_route_article({"query": source_query}, article, ai_json)
-            except Exception as exc:
-                task["analyses"].append({"url": candidate["url"], "status": "analysis_failed", "error": str(exc) or type(exc).__name__})
+            analysis = get_cached_analysis(cache_path, candidate["url"], article["content"], scope=source_query)
+            if analysis is None:
+                try:
+                    analysis = analyze_content_route_article({"query": source_query}, article, analysis_ai_json)
+                except Exception as exc:
+                    return {"status": "analysis_failed", "candidate": candidate, "error": str(exc) or type(exc).__name__}
+                put_cached_analysis(cache_path, candidate["url"], article["content"], analysis, scope=source_query)
+            return {"status": "analyzed", "query": source_query, "candidate": candidate, "article": article, "analysis": analysis}
+
+        analyzed, analyzed_candidates, analyzed_queries = [], [], []
+        for result in analyze_articles(fetched_items, analyze_selected, background_analysis_semaphore):
+            candidate = result["candidate"]
+            if result["status"] != "analyzed":
+                task["analyses"].append({"url": candidate["url"], "status": result["status"], "error": result["error"]})
                 continue
+            analysis, source_query, article = result["analysis"], result["query"], result["article"]
             analyzed.append(analysis)
             analyzed_candidates.append(candidate)
             analyzed_queries.append(source_query)
             task["analyses"].append({
                 "query": source_query, "url": candidate["url"], "title": article["title"], "status": "analyzed",
                 "citation_count": candidate["citation_count"], "classification": analysis.get("classification"),
-                "eligible": bool((analysis.get("library_decision") or {}).get("eligible")),
-                "analysis": analysis,
+                "eligible": bool((analysis.get("library_decision") or {}).get("eligible")), "analysis": analysis,
             })
 
         library = content_route_library_service()
@@ -2629,7 +2696,7 @@ def analyze_query_platform_content_routes():
             if not indexes:
                 continue
             batch_analyses = [{**analyzed[index], "source_query": analyzed_queries[index]} for index in indexes]
-            merged = merge_reference_route_batch(batch_analyses, library.list_routes(industry), ai_json)
+            merged = merge_reference_route_batch(batch_analyses, library.list_routes(industry), analysis_ai_json)
             batch_routes = apply_reference_batch_updates(
                 industry, library, batch_analyses, [analyzed_candidates[index] for index in indexes],
                 [analyzed_queries[index] for index in indexes], ai_platform, merged["updates"],
@@ -2656,8 +2723,9 @@ def delete_content_route(route_id):
     return jsonify({"ok": True, "entry": entry})
 
 
-def _run_content_route_generation(d, *, created_by="", batch_id=""):
+def _run_content_route_generation(d, *, created_by="", batch_id="", settings=None):
     """Formal explicit-material, single-writer route generation path."""
+    settings = settings or get_settings()
     cid = str(d.get("client_id") or "").strip()
     if not cid:
         raise ValueError("missing_client_id")
@@ -2722,7 +2790,7 @@ def _run_content_route_generation(d, *, created_by="", batch_id=""):
         "scene_terms": scene_context["primary"],
         "supplementary_scene_terms": scene_context["supplementary"],
     }
-    content = generate_content_route_draft(bundle, lambda messages, max_tokens: ai_deepseek_pro(messages, max_tokens))
+    content = generate_content_route_draft(bundle, lambda messages, max_tokens: ai_deepseek_pro(messages, max_tokens, settings))
     route_context = content_route_context(bundle)
     created_at = now_str()
     title = extract_generated_title(content)
@@ -2731,13 +2799,14 @@ def _run_content_route_generation(d, *, created_by="", batch_id=""):
         title, content, {}, route_context,
         client_brand=client.get("brand", ""),
         competitor_names=route_context["competitor_names"], competitor_markdown=competitor_markdown,
-        recent_articles=recent_content_generation_articles(cid), ai_json_fn=ai_json,
+        recent_articles=recent_content_generation_articles(cid),
+        ai_json_fn=lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, settings),
         customer_material_text=customer_facts, content_upload_text=uploads,
         industry=industry, policy=client_quality_policy(cid),
     )
     article = {
         "id": uid(), "client_id": cid, "title": title, "content": content,
-        "model": get_settings().get("model", "deepseek-chat"),
+        "model": settings.get("model", "deepseek-chat"),
         "material_count": len(upload_files) + int(bool(customer_facts)),
         "article_type": article_type, "batch_id": str(batch_id or ""),
         "route_context": route_context, "gate_report": gate_report,
@@ -2764,10 +2833,12 @@ def _prepare_content_batch_generation(payload):
 
 
 def _run_content_batch_article(payload, *, batch_id, created_by):
+    settings = get_settings(created_by) if created_by else get_settings()
     return run_content_generation(
         payload,
         created_by=created_by,
         batch_id=batch_id,
+        settings=settings,
     )
 
 
@@ -3497,8 +3568,8 @@ def generate_content_article_batch():
         count = int(d.get("count"))
     except (TypeError, ValueError):
         count = 0
-    if count not in {1, 3, 5}:
-        return jsonify({"error": "count仅支持1、3、5"}), 400
+    if count not in {1, 2, 3}:
+        return jsonify({"error": "count仅支持1、2、3"}), 400
     job = queue_content_batch_generation_job(
         {key: value for key, value in d.items() if key != "count"},
         count,

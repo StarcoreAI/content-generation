@@ -359,19 +359,72 @@ class KnowledgeBaseService:
         state = load_json(path, self._empty_state()) if path.exists() else self._empty_state()
         return state if isinstance(state, dict) else self._empty_state()
 
+    @staticmethod
+    def _competitor_name(value):
+        name = str(value or "").strip()
+        if not name or "\n" in name or "\r" in name:
+            raise ValueError("competitor_name_invalid")
+        return name
+
+    def _competitor_aliases(self, state, renames=()):
+        aliases = {
+            self._competitor_name(old): self._competitor_name(new)
+            for old, new in (state.get("name_aliases") or {}).items()
+            if str(old).strip() and str(new).strip()
+        }
+        for rename in renames or ():
+            if not isinstance(rename, dict):
+                raise ValueError("competitor_rename_invalid")
+            old_name = self._competitor_name(rename.get("old_name"))
+            new_name = self._competitor_name(rename.get("new_name"))
+            if old_name == new_name:
+                continue
+            aliases = {key: (new_name if value == old_name else value) for key, value in aliases.items()}
+            aliases[old_name] = new_name
+
+        def resolve(name):
+            seen = set()
+            while name in aliases:
+                if name in seen:
+                    raise ValueError("competitor_rename_cycle")
+                seen.add(name)
+                name = aliases[name]
+            return name
+
+        return {old: resolve(new) for old, new in aliases.items() if old != resolve(new)}
+
+    def _apply_competitor_aliases(self, content, aliases):
+        if not aliases:
+            return content
+
+        def replace(match):
+            name = match.group(1).strip()
+            seen = set()
+            while name in aliases:
+                if name in seen:
+                    raise ValueError("competitor_rename_cycle")
+                seen.add(name)
+                name = aliases[name]
+            return f"## {name}"
+
+        return re.sub(r"(?m)^##\s+(.+?)\s*$", replace, content)
+
     def load_competitor_master(self, client_id):
         state = self._load_competitor_state(client_id)
         return {
             "content": self._read_master(self._competitor_master_path(client_id)),
             "source_update_available": bool(state.get("source_update_available")),
             "edited_at": str(state.get("edited_at") or ""),
+            "name_aliases": dict(state.get("name_aliases") or {}),
         }
 
     def sync_competitor_master(self, client_id, content, overwrite=False):
         content = clean_knowledge_markdown(content)
         path = self._competitor_master_path(client_id)
         state = self._load_competitor_state(client_id)
-        current = self._read_master(path)
+        aliases = self._competitor_aliases(state)
+        current = self._apply_competitor_aliases(self._read_master(path), aliases)
+        content = self._apply_competitor_aliases(content, aliases)
         source_hash = self._digest(content)
         from services.competitor_knowledge import merge_competitor_master_markdown
 
@@ -399,18 +452,21 @@ class KnowledgeBaseService:
             "source_hash": source_hash,
             "source_update_available": False,
             "synced_at": self.now_fn(),
+            "name_aliases": aliases,
         })
         save_json(self._competitor_state_path(client_id), state)
         return {**self.load_competitor_master(client_id), "merged_count": merged_count, "skipped_count": skipped_count}
 
-    def save_competitor_master(self, client_id, content):
+    def save_competitor_master(self, client_id, content, renames=()):
         content = clean_knowledge_markdown(content)
         if not content:
             raise ValueError("knowledge_content_required")
+        state = self._load_competitor_state(client_id)
+        aliases = self._competitor_aliases(state, renames)
+        content = self._apply_competitor_aliases(content, aliases)
         path = self._competitor_master_path(client_id)
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
-        state = self._load_competitor_state(client_id)
-        state["edited_at"] = self.now_fn()
+        state.update({"edited_at": self.now_fn(), "name_aliases": aliases})
         save_json(self._competitor_state_path(client_id), state)
         return self.load_competitor_master(client_id)

@@ -248,13 +248,11 @@
           <option value="">请选择问题组</option>
         </select>
       </div>
+      <div class="fld" style="margin-bottom:0;flex:3;min-width:220px">
+        <label>AI 平台</label>
+        <div id="recordGroupPlatformChoices" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+      </div>
     </div>
-  </div>
-
-  <div class="card">
-    <div class="card-hd"><div><span class="card-title">选择层分析报告</span><div class="card-sub">临时只读展示，不进入知识库、不做字段提取</div></div></div>
-    <div id="selectionSurfaceReports" style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px"><span style="font-size:12px;color:var(--text3)">加载中...</span></div>
-    <div id="selectionSurfaceReportPreview" style="display:none;white-space:pre-wrap;max-height:680px;overflow:auto;padding:12px;background:rgba(109,92,247,.04);border:1px solid var(--border2);border-radius:var(--r-sm);font:12px/1.7 ui-monospace,SFMono-Regular,Consolas,monospace"></div>
   </div>
 
   <div class="card">
@@ -266,7 +264,7 @@
   </div>
 
   <div class="card">
-    <div class="card-hd"><span class="card-title">问题组提及变化</span><span style="font-size:11px;color:var(--text3)">最近 7 个实际采集日；总提及率与逐题提及平台数</span></div>
+    <div class="card-hd"><span class="card-title">问题组提及变化</span><span style="font-size:11px;color:var(--text3)">当前 AI 平台最近 7 个实际采集日</span></div>
     <div id="recordGroupTrend"><div style="color:var(--text3);font-size:12px">请先选择一个问题组</div></div>
     <div style="font-size:12px;font-weight:800;color:#312e81;margin:18px 0 8px">逐题提及矩阵</div>
     <div id="recordGroupQuestionMatrix"><div style="color:var(--text3);font-size:12px">请选择问题组后查看</div></div>
@@ -307,7 +305,7 @@
   </div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">一键生成引用情报</span><div class="card-sub">固定选择引用次数第 1 的文章，再从第 2–5 名按当前平台引用次数加权抽取 1 篇；标题和正文由系统抓取。</div></div></div>
-    <div class="form-row col2"><div class="fld"><label>问题组</label><select id="routeAnalysisGroupSelect" onchange="onRouteAnalysisGroupChange()"><option value="">请选择问题组</option></select></div><div class="fld"><label>对应问题</label><select id="routeAnalysisQuerySelect"><option value="">请先选择问题组</option></select></div></div>
+    <div class="form-row col2"><div class="fld"><label>问题组</label><select id="routeAnalysisGroupSelect" onchange="onRouteAnalysisGroupChange()"><option value="">请选择问题组</option></select></div><div class="fld"><label>分析范围</label><select id="routeAnalysisQuerySelect"><option value="">请先选择问题组</option></select></div></div>
     <div class="fld" style="max-width:280px"><label>AI 平台</label><select id="routeAnalysisPlatformSelect"><option value="">请先选择客户</option></select></div>
     <button class="btn btn-p" id="btnQueryPlatformReferenceAnalysis" onclick="runQueryPlatformReferenceAnalysis()">一键分析并沉淀路线</button><span id="routeAnalysisStatus" style="font-size:11px;color:var(--text3);margin-left:8px"></span>
   </div>
@@ -378,12 +376,12 @@
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>客户知识库</em></div><div class="pg-sub">将客户资料解析与 AI 联网补充整理为一份可编辑总资料；不会自动参与内容生产</div></div>
     <div class="acts">
-      <button class="btn btn-o btn-sm" onclick="loadCustomerKnowledge()">刷新</button>
+      <button class="btn btn-o btn-sm" onclick="downloadKnowledgeDocx('customer')">下载 DOCX</button><button class="btn btn-o btn-sm" onclick="loadCustomerKnowledge()">刷新</button>
     </div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-p btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">保存已确认口径</button></div>
+    <div class="card-hd"><div><span class="card-title">客户总资料</span><div class="card-sub" id="knowledgeCustomerStatus">请选择客户后查看</div></div><button class="btn btn-p btn-sm" onclick="saveCustomerKnowledge()">立即保存</button></div>
     <div id="knowledgeCustomerSections" style="display:grid;grid-template-columns:1fr;gap:12px"></div>
   </div>
 </div>
@@ -393,12 +391,12 @@
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>竞品知识库</em></div><div class="pg-sub">按竞品名称分开维护；整理时合并竞品资料解析、联网扩展和全平台累计引用最高的 12 篇文章</div></div>
     <div class="acts">
-      <button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
+      <button class="btn btn-o btn-sm" onclick="downloadKnowledgeDocx('competitors')">下载 DOCX</button><button class="btn btn-o btn-sm" onclick="loadCompetitorKnowledge()">刷新</button>
     </div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">竞品总资料</span><div class="card-sub" id="knowledgeCompetitorStatus">请选择客户后查看</div></div><div class="acts"><button class="btn btn-o btn-sm" onclick="addCompetitorKnowledgeSection()">新增竞品</button><button class="btn btn-p btn-sm" onclick="saveCompetitorKnowledge()">保存</button></div></div>
+    <div class="card-hd"><div><span class="card-title">竞品总资料</span><div class="card-sub" id="knowledgeCompetitorStatus">请选择客户后查看</div></div><div class="acts"><button class="btn btn-o btn-sm" onclick="addCompetitorKnowledgeSection()">新增竞品</button><button class="btn btn-p btn-sm" onclick="saveCompetitorKnowledge()">立即保存</button></div></div>
     <div id="knowledgeCompetitorSections"><div style="font-size:12px;color:var(--text3)">请选择客户后查看</div></div>
   </div>
 </div>
@@ -407,9 +405,9 @@
 <div class="page" id="page-knowledge-routes">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>行业写法库</em></div><div class="pg-sub">按当前客户所属行业沉淀写作组织方式；不属于客户资料或竞品资料，也不会自动参与内容生产。</div></div>
-    <button class="btn btn-o btn-sm" onclick="loadKnowledgeRoutes()">刷新</button>
+    <div class="acts"><button class="btn btn-o btn-sm" onclick="downloadKnowledgeDocx('routes')">下载 DOCX</button><button class="btn btn-o btn-sm" onclick="loadKnowledgeRoutes()">刷新</button></div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">当前行业路线</span><div class="card-sub" id="knowledgeRoutesStatus">请选择客户后查看</div></div></div>
     <div class="two-col">
@@ -423,9 +421,9 @@
 <div class="page" id="page-knowledge-scenes">
   <div class="pg-hd">
     <div><div class="pg-title">✦ <em>场景词库</em></div><div class="pg-sub">复用爬取记录库已整理的场景词，按问题组与 Query 展示；可编辑后保存，不新增或复制一份独立数据。</div></div>
-    <button class="btn btn-o btn-sm" onclick="loadKnowledgeScenes()">刷新</button>
+    <div class="acts"><button class="btn btn-o btn-sm" onclick="downloadKnowledgeDocx('scenes')">下载 DOCX</button><button class="btn btn-o btn-sm" onclick="loadKnowledgeScenes()">刷新</button></div>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
   <div class="card">
     <div class="card-hd"><div><span class="card-title">Query 场景词</span><div class="card-sub" id="knowledgeScenesStatus">请选择客户后查看</div></div></div>
     <div id="knowledgeSceneRows"><div style="font-size:12px;color:var(--text3)">请选择客户后查看</div></div>
@@ -438,17 +436,24 @@
     <div><div class="pg-title">✦ <em>质量门禁知识库</em></div><div class="pg-sub">维护通用与行业审核规则；这里只编辑规则，不处理具体文章。</div></div>
     <button class="btn btn-o btn-sm" onclick="loadQualityPolicy()">刷新</button>
   </div>
-  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；保存前会要求确认。</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">保存通用规则</button></div>
+    <div class="card-hd"><div><span class="card-title">通用审核规则</span><div class="card-sub">影响全部客户；自动保存。</div><div class="card-sub" id="qualityCommonStatus">已保存</div></div><button class="btn btn-p btn-sm" onclick="saveCommonQualityPolicy()">立即保存</button></div>
     <div class="form-row col2"><div class="fld"><label>违禁词（每行一个）</label><textarea id="qualityCommonBanned" rows="6"></textarea></div><div class="fld"><label>必须做（每行一条）</label><textarea id="qualityCommonMustDo" rows="6"></textarea></div></div>
     <div class="form-row col2"><div class="fld"><label>不能做（每行一条）</label><textarea id="qualityCommonMustNot" rows="6"></textarea></div><div class="fld"><label>审核要求</label><textarea id="qualityCommonPrompt" rows="6"></textarea></div></div>
   </div>
   <div class="card">
-    <div class="card-hd"><div><span class="card-title">当前行业审核规则</span><div class="card-sub" id="qualityIndustryHint">请先选择客户；行业规则影响该行业的所有客户。</div></div><button class="btn btn-p btn-sm" onclick="saveIndustryQualityPolicy()">保存行业规则</button></div>
+    <div class="card-hd"><div><span class="card-title">当前行业审核规则</span><div class="card-sub" id="qualityIndustryHint">请先选择客户；行业规则影响该行业的所有客户。</div><div class="card-sub" id="qualityIndustryStatus">已保存</div></div><button class="btn btn-p btn-sm" onclick="saveIndustryQualityPolicy()">立即保存</button></div>
     <div class="form-row col2"><div class="fld"><label>行业违禁词（每行一个）</label><textarea id="qualityIndustryBanned" rows="5"></textarea></div><div class="fld"><label>行业必须做（每行一条）</label><textarea id="qualityIndustryMustDo" rows="5"></textarea></div></div>
     <div class="form-row col2"><div class="fld"><label>行业不能做（每行一条）</label><textarea id="qualityIndustryMustNot" rows="5"></textarea></div><div class="fld"><label>行业审核要求</label><textarea id="qualityIndustryPrompt" rows="5"></textarea></div></div>
   </div>
+</div>
+
+<!-- ═══ 系统提示词（只读） ═══ -->
+<div class="page" id="page-knowledge-system-prompts">
+  <div class="pg-hd"><div><div class="pg-title">✦ <em>系统提示词</em></div><div class="pg-sub">展示当前实际使用的固定提示模板；运行时客户、资料、文章和密钥均以占位符处理。可直接选中文字复制，不可编辑或下载。</div></div><button class="btn btn-o btn-sm" onclick="loadSystemPromptCatalog()">刷新</button></div>
+  <div class="acts" style="margin-bottom:14px"><button class="btn btn-o btn-sm" onclick="openKnowledge('customer')">客户资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('competitors')">竞品资料知识库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('routes')">行业写法库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('scenes')">场景词库</button><button class="btn btn-o btn-sm" onclick="openKnowledge('quality')">质量门禁知识库</button><button class="btn btn-p btn-sm" onclick="openKnowledge('system-prompts')">系统提示词（只读）</button></div>
+  <div class="card"><div class="card-hd"><div><span class="card-title">运行提示模板</span><div class="card-sub">只读展示，可在展开后直接拖选、复制文字。</div></div></div><div id="systemPromptCatalog"><div style="font-size:12px;color:var(--text3)">加载中...</div></div></div>
 </div>
 
 <!-- ═══ 内容生产 ═══ -->
@@ -503,8 +508,8 @@
       <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:800;color:var(--text2)">生成篇数
         <select id="contentGenerationCount" style="width:auto;padding:7px 9px">
           <option value="1">1 篇</option>
-          <option value="3">3 篇</option>
-          <option value="5" selected>5 篇</option>
+          <option value="2">2 篇</option>
+          <option value="3" selected>3 篇</option>
         </select>
       </label>
       <button class="btn btn-p" id="btnContentGenerate" onclick="generateContentArticle()">

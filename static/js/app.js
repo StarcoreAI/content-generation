@@ -4,7 +4,7 @@ function navTo(page, el) {
   document.querySelectorAll('.s-nav').forEach(n => n.classList.remove('on'));
   document.querySelectorAll('.t-ni').forEach(n => n.classList.remove('on'));
   document.getElementById('page-' + page)?.classList.add('on');
-  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'knowledge-routes' || page === 'knowledge-scenes' || page === 'knowledge-quality';
+  const knowledgePage = page === 'knowledge-customer' || page === 'knowledge-competitors' || page === 'knowledge-routes' || page === 'knowledge-scenes' || page === 'knowledge-quality' || page === 'knowledge-system-prompts';
   const activeNav = knowledgePage ? document.querySelector('[data-nav="knowledge"]') : el;
   if (activeNav) activeNav.classList.add('on');
   // page-specific load
@@ -22,11 +22,28 @@ function navTo(page, el) {
   if (page === 'knowledge-routes') loadKnowledgeRoutes();
   if (page === 'knowledge-scenes') loadKnowledgeScenes();
   if (page === 'knowledge-quality') loadQualityPolicy();
+  if (page === 'knowledge-system-prompts') loadSystemPromptCatalog();
   if (page === 'clients') loadClients();
   if (page === 'settings') loadSettings();
 }
 function openKnowledge(section) {
   navTo('knowledge-' + section, null);
+}
+function downloadKnowledgeDocx(kind) {
+  if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  const link = document.createElement('a');
+  link.href = '/api/knowledge/export/' + encodeURIComponent(currentClientId) + '/' + encodeURIComponent(kind);
+  link.click();
+}
+async function loadSystemPromptCatalog() {
+  const el = document.getElementById('systemPromptCatalog');
+  if (!el) return;
+  const result = await api('/api/system-prompts');
+  if (result?.error) { el.textContent = result.error; return; }
+  el.innerHTML = (result.prompts || []).map(item => `<details style="padding:11px 0;border-bottom:1px solid var(--border2)">
+    <summary style="cursor:pointer;font-weight:800;color:var(--text2)">${escHtml(item.category)} · ${escHtml(item.name)}<span style="font-size:11px;color:var(--text3);font-weight:500">　${escHtml(item.description || '')}</span></summary>
+    <pre style="white-space:pre-wrap;user-select:text;margin:10px 0 0;padding:12px;background:rgba(255,255,255,.78);border:1px solid var(--border2);border-radius:var(--r-sm);font:12px/1.65 ui-monospace,SFMono-Regular,Consolas,monospace;color:var(--text2)">${escHtml(item.content)}</pre>
+  </details>`).join('') || '<div style="font-size:12px;color:var(--text3)">暂无可展示的系统提示词。</div>';
 }
 // ── State ─────────────────────────────────────────────
 let currentClientId = '';
@@ -337,6 +354,7 @@ let currentIndustry = '';
 let currentGoal = '';
 let currentPlatform = 'all';  // 数据页固定汇总全部平台
 let currentClientPlatforms = [];
+let recordGroupTrendPlatform = '';
 let groupPlatformMode = 'contract';
 const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
 const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];
@@ -687,11 +705,14 @@ function onRouteAnalysisGroupChange() {
 
 function addRouteAnalysisAllQuestionsOption() {
   const select = document.getElementById('routeAnalysisQuerySelect');
-  if (!select || select.options.length < 2 || select.querySelector('option[value="__all_questions__"]')) return;
-  const option = document.createElement('option');
-  option.value = '__all_questions__';
-  option.textContent = '全部问题（本问题组）';
-  select.insertBefore(option, select.options[1]);
+  if (!select || select.options.length < 2) return;
+  if (!select.querySelector('option[value="__all_questions__"]')) {
+    const option = document.createElement('option');
+    option.value = '__all_questions__';
+    option.textContent = '全部问题（本问题组）';
+    select.insertBefore(option, select.options[1]);
+  }
+  select.value = '__all_questions__';
 }
 
 function selectedContentQuery() {
@@ -860,7 +881,7 @@ async function generateContentBatch() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
   if (!selectedContentQuery()) { toast('请选择本次 Query', 'err'); return; }
   if (selectedContentArticleType === '对比型' && selectedContentCompetitorNames.length < 2) { toast('对比型请至少选择两位竞品', 'err'); return; }
-  const count = Number(document.getElementById('contentGenerationCount')?.value || 5);
+  const count = Number(document.getElementById('contentGenerationCount')?.value || 3);
   spin('spContentGenerate', true);
   disableBtn('btnContentGenerate', true);
   const statusEl = document.getElementById('contentGenerateStatus');
@@ -963,6 +984,29 @@ function setQualityPolicyFields(prefix, policy) {
 function qualityPolicyPayload(prefix) {
   return {banned_words:qualityPolicyLines(prefix + 'Banned'), must_do:qualityPolicyLines(prefix + 'MustDo'), must_not_do:qualityPolicyLines(prefix + 'MustNot'), review_requirements:(document.getElementById(prefix + 'Prompt')?.value || '').trim()};
 }
+const knowledgeAutosaveStates = new Map();
+function scheduleKnowledgeAutosave(key, save, immediate=false) {
+  const state = knowledgeAutosaveStates.get(key) || {timer: null, running: false, pending: false, save: null};
+  state.save = save;
+  state.pending = true;
+  clearTimeout(state.timer);
+  const run = async () => {
+    if (state.running) return;
+    state.running = true;
+    while (state.pending) {
+      state.pending = false;
+      await state.save(true);
+    }
+    state.running = false;
+  };
+  state.timer = immediate ? null : setTimeout(run, 800);
+  if (immediate) run();
+  knowledgeAutosaveStates.set(key, state);
+}
+function setKnowledgeSaveStatus(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
+}
 async function loadQualityPolicy() {
   const query = currentClientId ? '?client_id=' + encodeURIComponent(currentClientId) : '';
   const result = await api('/api/quality-policy' + query);
@@ -971,18 +1015,28 @@ async function loadQualityPolicy() {
   setQualityPolicyFields('qualityIndustry', result.industry?.policy);
   const hint = document.getElementById('qualityIndustryHint');
   if (hint) hint.textContent = result.industry?.name ? '行业：' + result.industry.name + '；保存会影响该行业的所有客户。' : '请先选择客户；行业规则影响该行业的所有客户。';
+  [['qualityCommon', 'quality-common', saveCommonQualityPolicy], ['qualityIndustry', 'quality-industry', saveIndustryQualityPolicy]].forEach(([prefix, key, save]) => {
+    ['Banned', 'MustDo', 'MustNot', 'Prompt'].forEach(field => {
+      const input = document.getElementById(prefix + field);
+      input.oninput = () => scheduleKnowledgeAutosave(key, save);
+      input.onblur = () => scheduleKnowledgeAutosave(key, save, true);
+    });
+  });
 }
-async function saveCommonQualityPolicy() {
-  if (!confirm('保存通用审核规则会影响全部客户，确认继续吗？')) return;
+async function saveCommonQualityPolicy(auto=false) {
+  setKnowledgeSaveStatus('qualityCommonStatus', '正在自动保存');
   const result = await api('/api/quality-policy/common', 'PUT', {policy:qualityPolicyPayload('qualityCommon'), confirmed_global:true});
-  if (result.error) { toast(result.error, 'err'); return; }
-  toast('通用审核规则已保存', 'ok');
+  if (result.error) { setKnowledgeSaveStatus('qualityCommonStatus', '保存失败，可重试'); if (!auto) toast(result.error, 'err'); return; }
+  setKnowledgeSaveStatus('qualityCommonStatus', auto ? '已自动保存' : '已保存');
+  if (!auto) toast('通用审核规则已保存', 'ok');
 }
-async function saveIndustryQualityPolicy() {
+async function saveIndustryQualityPolicy(auto=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  setKnowledgeSaveStatus('qualityIndustryStatus', '正在自动保存');
   const result = await api('/api/quality-policy/industry/' + encodeURIComponent(currentClientId), 'PUT', {policy:qualityPolicyPayload('qualityIndustry')});
-  if (result.error) { toast(result.error, 'err'); return; }
-  toast('行业审核规则已保存', 'ok');
+  if (result.error) { setKnowledgeSaveStatus('qualityIndustryStatus', '保存失败，可重试'); if (!auto) toast(result.error, 'err'); return; }
+  setKnowledgeSaveStatus('qualityIndustryStatus', auto ? '已自动保存' : '已保存');
+  if (!auto) toast('行业审核规则已保存', 'ok');
 }
 function qualityGateFailedChecks(article) {
   const report = article?.gate_report || {};
@@ -1694,54 +1748,13 @@ async function loadRecordsLibraryViews() {
   const groupSel = document.getElementById('rec-group-filter');
   if (!currentClientId || !groupSel) return;
   if (groupSel.dataset.clientId !== currentClientId) await loadGroups();
+  renderRecordGroupPlatformChoices();
   loadRecordGroupTrend(groupSel.value);
   loadRecordArticlePool();
   loadRecordSourceTrend();
   loadQueryScenes();
-  loadSelectionSurfaceReports();
   populateRecordQuestionArticleFilter();
   loadRecordQuestionArticles();
-}
-
-function renderSelectionSurfaceReports(reports) {
-  const list = document.getElementById('selectionSurfaceReports');
-  const preview = document.getElementById('selectionSurfaceReportPreview');
-  if (!list) return;
-  if (!reports?.length) {
-    list.innerHTML = '<span style="font-size:12px;color:var(--text3)">当前客户暂无临时报告</span>';
-    if (preview) preview.style.display = 'none';
-    return;
-  }
-  list.innerHTML = reports.map(report => `<button type="button" class="btn btn-o btn-sm" data-selection-surface-report="${escHtml(report.id)}">${escHtml(report.name)}</button>`).join('');
-  list.querySelectorAll('[data-selection-surface-report]').forEach(button => {
-    button.addEventListener('click', () => viewSelectionSurfaceReport(button.dataset.selectionSurfaceReport));
-  });
-}
-
-async function loadSelectionSurfaceReports() {
-  const list = document.getElementById('selectionSurfaceReports');
-  if (!list || !currentClientId) return;
-  try {
-    const data = await api('/api/records/selection-reports/' + encodeURIComponent(currentClientId));
-    if (data?.error) throw new Error(data.error);
-    renderSelectionSurfaceReports(data.reports || []);
-  } catch (error) {
-    list.innerHTML = '<span style="font-size:12px;color:var(--text3)">临时报告暂不可用</span>';
-  }
-}
-
-async function viewSelectionSurfaceReport(reportId) {
-  const preview = document.getElementById('selectionSurfaceReportPreview');
-  if (!preview || !currentClientId || !reportId) return;
-  preview.style.display = 'block';
-  preview.textContent = '正在读取报告...';
-  try {
-    const data = await api('/api/records/selection-reports/' + encodeURIComponent(currentClientId) + '/' + encodeURIComponent(reportId));
-    if (data?.error) throw new Error(data.error);
-    preview.textContent = data.content || '报告为空';
-  } catch (error) {
-    preview.textContent = '报告读取失败';
-  }
 }
 
 function populateRecordQuestionArticleFilter() {
@@ -1759,6 +1772,26 @@ function populateRecordQuestionArticleFilter() {
     ? questions.map(question => `<option value="${escHtml(question)}">${escHtml(question)}</option>`).join('')
     : '<option value="">该问题组暂无问题</option>';
   select.value = questions.includes(previous) ? previous : (questions[0] || '');
+}
+
+function renderRecordGroupPlatformChoices() {
+  const el = document.getElementById('recordGroupPlatformChoices');
+  if (!el) return;
+  const platforms = normalizeContractPlatforms(currentClientPlatforms);
+  if (!platforms.length) {
+    recordGroupTrendPlatform = '';
+    el.innerHTML = '<span style="font-size:11px;color:var(--red);font-weight:800">当前客户未配置 AI 平台</span>';
+    return;
+  }
+  if (!platforms.includes(recordGroupTrendPlatform)) recordGroupTrendPlatform = platforms[0];
+  el.innerHTML = platforms.map(platform => `<button type="button" class="${platform === recordGroupTrendPlatform ? 'btn btn-p btn-sm' : 'btn btn-o btn-sm'}" data-record-group-platform="${escHtml(platform)}">${escHtml(CRAWL_PLATFORM_NAMES[platform] || platform)}</button>`).join('');
+  el.querySelectorAll('[data-record-group-platform]').forEach(button => {
+    button.addEventListener('click', () => {
+      recordGroupTrendPlatform = button.dataset.recordGroupPlatform;
+      renderRecordGroupPlatformChoices();
+      loadRecordGroupTrend(document.getElementById('rec-group-filter')?.value || '');
+    });
+  });
 }
 
 function renderRecordQuestionArticles(data) {
@@ -1888,13 +1921,13 @@ async function loadRecordGroupTrend(groupId) {
   const line = document.getElementById('recordGroupTrend');
   const matrix = document.getElementById('recordGroupQuestionMatrix');
   if (!line || !matrix) return;
-  if (!currentClientId || !groupId) {
+  if (!currentClientId || !groupId || !recordGroupTrendPlatform) {
     line.innerHTML = '<div style="color:var(--text3);font-size:12px">请先选择一个问题组</div>';
     matrix.innerHTML = '<div style="color:var(--text3);font-size:12px">请选择问题组后查看</div>';
     return;
   }
   try {
-    const data = await api(`/api/records/group_trend?client_id=${encodeURIComponent(currentClientId)}&group_id=${encodeURIComponent(groupId)}`);
+    const data = await api(`/api/records/group_trend?client_id=${encodeURIComponent(currentClientId)}&group_id=${encodeURIComponent(groupId)}&platform=${encodeURIComponent(recordGroupTrendPlatform)}`);
     renderRecordGroupLine(data);
     renderRecordGroupQuestionMatrix(data);
   } catch (error) {
@@ -2122,15 +2155,17 @@ async function loadCustomerKnowledge() {
   setCustomerKnowledgeStatus(result.merged_count ? `已自动合并 ${result.merged_count} 条新增事实；人工内容已保留` : '未发现新增事实，可直接编辑并保存已确认口径');
 }
 
-async function saveCustomerKnowledge() {
+async function saveCustomerKnowledge(auto=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
+  setCustomerKnowledgeStatus('正在自动保存');
   const content = buildCustomerKnowledgeContent();
   const result = await api('/api/knowledge/customer/' + encodeURIComponent(currentClientId), 'PUT', {
     content, removed_sections: [...removedCustomerKnowledgeSections],
   });
-  if (result?.error) { toast(result.error, 'err'); return; }
-  setCustomerKnowledgeStatus('已保存人工确认口径');
-  toast('客户知识库已保存');
+  if (result?.error) { setCustomerKnowledgeStatus('保存失败，可重试'); if (!auto) toast(result.error, 'err'); return; }
+  removedCustomerKnowledgeSections.clear();
+  setCustomerKnowledgeStatus(auto ? '已自动保存' : '已保存');
+  if (!auto) toast('客户知识库已保存');
 }
 
 const CUSTOMER_KNOWLEDGE_SECTIONS = ['品牌基础', '产品/服务', '优势', '目标人群/痛点', '价格', '信任', '合规风险', '公开背景'];
@@ -2204,7 +2239,7 @@ function appendCustomerKnowledgeSection(name, body='') {
     if (!confirm(`移除“${name}”整节及其全部内容？点击页面“保存已确认口径”后才会写入知识库。`)) return;
     removedCustomerKnowledgeSections.add(name);
     card.remove();
-    setCustomerKnowledgeStatus(`已移除“${name}”，请点击保存已确认口径。`);
+    scheduleKnowledgeAutosave('customer', saveCustomerKnowledge, true);
   };
   header.append(title, remove);
   const editor = document.createElement('textarea');
@@ -2212,7 +2247,11 @@ function appendCustomerKnowledgeSection(name, body='') {
   editor.value = body;
   editor.placeholder = '暂无资料，可补充已确认口径';
   editor.style.cssText = 'width:100%;min-height:150px;margin:0;overflow-y:hidden;resize:vertical';
-  editor.addEventListener('input', () => fitKnowledgeEditorHeight(editor));
+  editor.addEventListener('input', () => {
+    fitKnowledgeEditorHeight(editor);
+    scheduleKnowledgeAutosave('customer', saveCustomerKnowledge);
+  });
+  editor.addEventListener('blur', () => scheduleKnowledgeAutosave('customer', saveCustomerKnowledge, true));
   card.append(header, editor);
   el.appendChild(card);
   fitKnowledgeEditorHeight(editor);
@@ -2326,18 +2365,26 @@ async function loadKnowledgeScenes() {
     card.querySelector('[data-save-knowledge-scene]').onclick = () => saveKnowledgeSceneTerms(
       card.dataset.groupId, card.dataset.query, input?.value || '',
     );
+    input.oninput = () => scheduleKnowledgeAutosave(`scenes:${card.dataset.groupId}:${card.dataset.query}`, () => saveKnowledgeSceneTerms(
+      card.dataset.groupId, card.dataset.query, input?.value || '', true,
+    ));
+    input.onblur = () => scheduleKnowledgeAutosave(`scenes:${card.dataset.groupId}:${card.dataset.query}`, () => saveKnowledgeSceneTerms(
+      card.dataset.groupId, card.dataset.query, input?.value || '', true,
+    ), true);
   });
   if (status) status.textContent = '按问题组与 Query 展示；内容生产以当前 Query 为主，同组场景词只作可选提醒。';
 }
 
-async function saveKnowledgeSceneTerms(groupId, query, rawTerms) {
+async function saveKnowledgeSceneTerms(groupId, query, rawTerms, auto=false) {
+  const status = document.getElementById('knowledgeScenesStatus');
+  if (status) status.textContent = '正在自动保存';
   const scene_terms = String(rawTerms || '').split(/[、，,\n]/).map(term => term.trim()).filter(Boolean);
   const result = await api('/api/records/selection-evidence/' + encodeURIComponent(currentClientId), 'POST', {
     group_id: groupId, query, scene_terms,
   });
-  if (result?.error) { toast(result.error, 'err'); return; }
-  toast('场景词已保存');
-  loadKnowledgeScenes();
+  if (result?.error) { if (status) status.textContent = '保存失败，可重试'; if (!auto) toast(result.error, 'err'); return; }
+  if (status) status.textContent = auto ? '已自动保存' : '已保存';
+  if (!auto) { toast('场景词已保存'); loadKnowledgeScenes(); }
 }
 
 let competitorKnowledgePreamble = '# 竞品总资料';
@@ -2391,17 +2438,26 @@ function appendCompetitorKnowledgeSection(name, body='') {
   card.style.cssText = 'padding:12px 0;border-bottom:1px solid var(--border2)';
   const header = document.createElement('div');
   header.style.cssText = 'display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px';
-  const title = document.createElement('strong');
-  title.textContent = name;
+  const title = document.createElement('input');
+  title.dataset.competitorKnowledgeName = 'true';
+  title.value = name;
+  title.style.cssText = 'font-size:13px;font-weight:800;border:1px solid var(--border);border-radius:6px;padding:4px 7px;min-width:180px';
   const remove = document.createElement('button');
   remove.className = 'btn btn-o btn-sm';
   remove.textContent = '移除分节';
-  remove.onclick = () => card.remove();
+  remove.onclick = () => {
+    card.remove();
+    scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge, true);
+  };
   header.append(title, remove);
   const editor = document.createElement('textarea');
   editor.rows = 8;
   editor.value = body;
   editor.style.width = '100%';
+  title.addEventListener('input', () => scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge));
+  title.addEventListener('blur', () => scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge, true));
+  editor.addEventListener('input', () => scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge));
+  editor.addEventListener('blur', () => scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge, true));
   card.append(header, editor);
   el.appendChild(card);
 }
@@ -2428,20 +2484,34 @@ function addCompetitorKnowledgeSection() {
   const name = prompt('请输入真实竞品名称');
   if (!name || !name.trim()) return;
   appendCompetitorKnowledgeSection(name.trim());
+  scheduleKnowledgeAutosave('competitors', saveCompetitorKnowledge, true);
 }
 
-async function saveCompetitorKnowledge() {
+async function saveCompetitorKnowledge(auto=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
-  const sections = Array.from(document.querySelectorAll('[data-competitor-knowledge-section]')).map(card => {
-    const name = card.dataset.competitorKnowledgeSection;
+  const cards = Array.from(document.querySelectorAll('[data-competitor-knowledge-section]'));
+  const names = cards.map(card => card.querySelector('[data-competitor-knowledge-name]')?.value.trim() || '');
+  if (names.some(name => !name || /[\r\n]/.test(name)) || new Set(names).size !== names.length) {
+    setCompetitorKnowledgeStatus('保存失败，可重试');
+    if (!auto) toast('名称重复或格式不正确', 'err');
+    return;
+  }
+  const renames = cards.map((card, index) => ({
+    old_name: card.dataset.competitorKnowledgeSection,
+    new_name: names[index],
+  })).filter(rename => rename.old_name !== rename.new_name);
+  const sections = cards.map((card, index) => {
+    const name = names[index];
     const body = card.querySelector('textarea')?.value.trim() || '';
     return `## ${name}\n${body}`;
   });
   const content = [competitorKnowledgePreamble, ...sections].join('\n\n').trim();
-  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId), 'PUT', {content});
-  if (result?.error) { toast(result.error, 'err'); return; }
-  setCompetitorKnowledgeStatus('已保存人工确认资料');
-  toast('竞品知识库已保存');
+  setCompetitorKnowledgeStatus('正在自动保存');
+  const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId), 'PUT', {content, renames});
+  if (result?.error) { setCompetitorKnowledgeStatus('保存失败，可重试'); if (!auto) toast(result.error, 'err'); return; }
+  if (!auto) renderCompetitorKnowledgeSections(result.content || content);
+  setCompetitorKnowledgeStatus(auto ? '已自动保存' : '已保存');
+  if (!auto) toast('竞品知识库已保存');
 }
 
 async function loadMaterials() {

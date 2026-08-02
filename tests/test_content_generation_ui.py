@@ -128,12 +128,16 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertNotIn("运营修改意见", template)
         self.assertNotIn("contentOpinion", script)
 
-    def test_content_page_defaults_batch_generation_to_five_and_keeps_single_path(self):
+    def test_content_page_offers_one_two_or_three_batch_articles_and_keeps_single_path(self):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        count_select = template.split('id="contentGenerationCount"', 1)[1].split("</select>", 1)[0]
 
         self.assertIn('id="contentGenerationCount"', template)
-        self.assertIn('value="5" selected', template)
+        self.assertIn('<option value="1">1 篇</option>', count_select)
+        self.assertIn('<option value="2">2 篇</option>', count_select)
+        self.assertIn('<option value="3" selected>3 篇</option>', count_select)
+        self.assertNotIn('value="5"', count_select)
         self.assertIn("generateContentArticle()", script)
         self.assertIn("generateContentBatch", script)
         self.assertIn("/api/content/generate_batch", script)
@@ -207,6 +211,37 @@ class ContentGenerationUiTests(unittest.TestCase):
 
         self.assertIn("option.value = '__all_questions__'", script)
         self.assertIn("analyze_all_questions: allQuestions", function_body)
+
+    def test_reference_intelligence_defaults_to_all_questions_after_group_is_loaded(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("分析范围", template)
+        self.assertIn("select.value = '__all_questions__';", script)
+
+    def test_current_handoff_docs_describe_the_active_content_route_only(self):
+        docs = [
+            ROOT / "接手文档.md",
+            ROOT / "docs" / "content-plan.md",
+            ROOT / "docs" / "knowledge-base-direction.md",
+        ]
+        text = "\n".join(path.read_text(encoding="utf-8") for path in docs)
+
+        self.assertFalse((ROOT / "下一位Agent交接提示词.md").exists())
+        self.assertIn("单阶段写作", text)
+        self.assertIn("运营显式选择", text)
+        self.assertNotIn("docs/content-refactor-short-term.md", text)
+        self.assertNotIn("docs/content-refactor-long-term.md", text)
+        self.assertNotIn("PatternLibrary", text)
+        self.assertNotIn("竞品随机池", text)
+        for relative_path in [
+            "docs/content-refactor-short-term.md",
+            "docs/content-refactor-long-term.md",
+            "docs/content-refactor-pattern-library-intro-design.md",
+            "docs/content-refactor-examples.md",
+            "docs/pattern-library-seeds-v1.json",
+        ]:
+            self.assertFalse((ROOT / relative_path).exists(), relative_path)
 
     def test_frontend_removes_legacy_pattern_library_controls(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

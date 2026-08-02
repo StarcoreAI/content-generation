@@ -47,11 +47,11 @@ def build_batch_merge_prompt(analyses, existing_routes, parent_type):
 }}]}}
 
 规则：
-1. 不要因为标题、措辞或某个场景词不同就新建路线；只有读者决策路径、证据组织顺序和最终输出动作确实不同，才 create。
+1. 先去掉具体 Query、实体、地名、数字和来源事实，再判断两种写法能否自然写成同一篇文章。若只是标题或措辞不同，读者仍会感觉是同一路写法，则合并。若场景不同，读者的关注点、材料组织或读后动作会感到明显差异，则不合并，可 create。
 2. 同一批多个来源若支撑同一路线，放进同一个 reinforce 或 create 的 analysis_indexes。
 3. reinforce 只能使用下方给出的已有 route_id，且不要改写已有路线本体；系统只会追加来源证据。
 4. 每个 analysis_index 至多出现一次；无法形成稳定可复用路线时用 discard。
-5. route 必须是可跨客户复用的抽象组织方式，不得含具体 Query、实体、地名、年份、数字或来源文章事实。
+5. route 必须是可跨客户复用的抽象组织方式，不得含具体 Query、实体、地名、数字或来源文章事实。
 
 【本批逐篇分析】
 {json.dumps(article_payload, ensure_ascii=False, indent=2)}

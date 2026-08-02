@@ -82,7 +82,7 @@ def build_source_trend(records):
 def build_group_mention_trend(records, questions, platform=""):
     """Build daily group mention rates from distinct crawl-task results."""
     questions = list(dict.fromkeys(question for question in questions or [] if question))
-    selected_platform = "" if platform == "all" else (platform or "")
+    selected_platform = platform or ""
     states = {}
     for index, record in enumerate(records or []):
         day = _valid_date(record.get("today"))

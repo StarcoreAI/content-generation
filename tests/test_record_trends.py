@@ -223,6 +223,7 @@ class RecordTrendTests(unittest.TestCase):
 
         selected_platform = build_group_mention_trend(records, [question_one, question_two], platform="deepseek")
         self.assertEqual(selected_platform["overall"], [{"mentioned": 1, "total": 3}, {"mentioned": 1, "total": 2}])
+        self.assertEqual(build_group_mention_trend(records, [question_one, question_two], platform="all")["dates"], [])
 
     def test_group_mention_trend_counts_distinct_tasks_without_collapsing_them(self):
         records = [
@@ -247,8 +248,8 @@ class RecordTrendRouteTests(unittest.TestCase):
             create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
             create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
             geo_app.save(geo_app.F_CLIENTS, [
-                {"id": "alice-client", "owner_username": "alice"},
-                {"id": "bob-client", "owner_username": "bob"},
+                {"id": "alice-client", "owner_username": "alice", "contract_platforms": ["deepseek", "qwen"]},
+                {"id": "bob-client", "owner_username": "bob", "contract_platforms": ["doubao"]},
             ])
             geo_app.save(geo_app.F_GROUPS, {
                 "alice-client": [{"id": "group-1", "questions": ["装修公司怎么选"]}],
@@ -281,7 +282,15 @@ class RecordTrendRouteTests(unittest.TestCase):
             source_trend = alice.get("/api/records/source_trend?client_id=alice-client")
             self.assertEqual(source_trend.status_code, 200)
             self.assertEqual(source_trend.get_json()["series"][0]["source"], "example.com")
-            group_trend = alice.get("/api/records/group_trend?client_id=alice-client&group_id=group-1")
+            self.assertEqual(
+                alice.get("/api/records/group_trend?client_id=alice-client&group_id=group-1").get_json()["error"],
+                "ai_platform_required",
+            )
+            self.assertEqual(
+                alice.get("/api/records/group_trend?client_id=alice-client&group_id=group-1&platform=doubao").get_json()["error"],
+                "ai_platform_not_configured",
+            )
+            group_trend = alice.get("/api/records/group_trend?client_id=alice-client&group_id=group-1&platform=deepseek")
             self.assertEqual(group_trend.status_code, 200)
             self.assertEqual(group_trend.get_json()["overall"][0], {"mentioned": 1, "total": 1})
 
@@ -300,7 +309,7 @@ class RecordTrendRouteTests(unittest.TestCase):
                 404,
             )
             self.assertEqual(
-                bob.get("/api/records/group_trend?client_id=alice-client&group_id=group-1").status_code,
+                bob.get("/api/records/group_trend?client_id=alice-client&group_id=group-1&platform=deepseek").status_code,
                 404,
             )
 
@@ -320,18 +329,17 @@ class RecordTrendUiTests(unittest.TestCase):
         self.assertIn("/api/records/selection-evidence/", script)
         self.assertIn("问题组</th><th>Query</th><th>场景词", script)
 
-    def test_records_library_wires_read_only_selection_surface_reports(self):
+    def test_records_library_removes_temporary_selection_surface_reports(self):
         root = Path(__file__).resolve().parents[1]
         template = (root / "templates" / "index.html").read_text(encoding="utf-8")
         script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("选择层分析报告", template)
-        self.assertIn('id="selectionSurfaceReports"', template)
-        self.assertIn('id="selectionSurfaceReportPreview"', template)
-        self.assertIn("async function loadSelectionSurfaceReports", script)
-        self.assertIn("async function viewSelectionSurfaceReport", script)
-        self.assertIn("/api/records/selection-reports/", script)
-        self.assertIn("preview.textContent =", script)
+        self.assertNotIn("选择层分析报告", template)
+        self.assertNotIn('id="selectionSurfaceReports"', template)
+        self.assertNotIn('id="selectionSurfaceReportPreview"', template)
+        self.assertNotIn("loadSelectionSurfaceReports", script)
+        self.assertNotIn("viewSelectionSurfaceReport", script)
+        self.assertNotIn("/api/records/selection-reports/", script)
 
     def test_records_library_wires_group_trend_and_article_pool_views(self):
         root = Path(__file__).resolve().parents[1]
@@ -340,12 +348,17 @@ class RecordTrendUiTests(unittest.TestCase):
 
         self.assertIn("问题组提及变化", template)
         self.assertIn('id="rec-group-filter"', template)
+        self.assertIn('id="recordGroupPlatformChoices"', template)
         self.assertIn('id="recordGroupTrend"', template)
         self.assertIn('id="recordGroupQuestionMatrix"', template)
         self.assertIn("引用文章池", template)
         self.assertIn('id="recordArticlePoolDate"', template)
         self.assertIn('id="recordArticlePool"', template)
         self.assertIn("async function loadRecordGroupTrend", script)
+        self.assertIn("renderRecordGroupPlatformChoices", script)
+        self.assertIn("recordGroupTrendPlatform", script)
+        self.assertIn("platform=${encodeURIComponent(recordGroupTrendPlatform)}", script)
+        self.assertNotIn('data-record-group-platform="all"', script)
         self.assertIn("async function loadRecordArticlePool", script)
         self.assertIn("/api/records/group_trend", script)
         self.assertIn("/api/records/article_pool", script)

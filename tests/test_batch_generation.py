@@ -1,7 +1,27 @@
 import unittest
+from unittest.mock import patch
+
+import app as geo_app
 
 
 class BatchGenerationJobsTests(unittest.TestCase):
+    def test_batch_endpoint_accepts_two_and_rejects_five_articles(self):
+        with geo_app.app.test_request_context("/api/content/generate_batch", method="POST", json={"client_id": "client-a", "count": 2}):
+            with patch.object(geo_app, "require_client_access", return_value=True), \
+                    patch.object(geo_app, "queue_content_batch_generation_job", return_value={"job_id": "job-a"}) as queue:
+                accepted = geo_app.generate_content_article_batch()
+
+        accepted_status = accepted[1] if isinstance(accepted, tuple) else accepted.status_code
+        self.assertEqual(accepted_status, 200)
+        self.assertEqual(queue.call_args.args[1], 2)
+
+        with geo_app.app.test_request_context("/api/content/generate_batch", method="POST", json={"client_id": "client-a", "count": 5}):
+            with patch.object(geo_app, "require_client_access", return_value=True):
+                rejected = geo_app.generate_content_article_batch()
+
+        rejected_status = rejected[1] if isinstance(rejected, tuple) else rejected.status_code
+        self.assertEqual(rejected_status, 400)
+
     def make_jobs(self, generate, prepare=None):
         from services.batch_generation import BatchGenerationJobs
 

@@ -1,6 +1,6 @@
 import unittest
 
-from services.reference_route_batch_merge import merge_reference_route_batch
+from services.reference_route_batch_merge import build_batch_merge_prompt, merge_reference_route_batch
 
 
 ROUTE = {
@@ -21,6 +21,12 @@ ANALYSIS = {
 
 
 class ReferenceRouteBatchMergeTests(unittest.TestCase):
+    def test_merge_prompt_allows_wording_difference_but_keeps_scenarios_distinct(self):
+        prompt = build_batch_merge_prompt([ANALYSIS], [ROUTE], "介绍型")
+
+        self.assertIn("措辞不同", prompt)
+        self.assertIn("场景不同", prompt)
+
     def test_batch_merge_uses_a_separate_4000_token_llm_call(self):
         captured = {}
 

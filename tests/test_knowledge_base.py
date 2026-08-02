@@ -595,7 +595,7 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertNotIn("function renderKnowledgeCitationSummary(", script)
         self.assertIn("navTo('knowledge-' + section, null)", script)
         self.assertNotIn("function syncCustomerKnowledge(", script)
-        self.assertIn("function saveCustomerKnowledge()", script)
+        self.assertIn("function saveCustomerKnowledge(auto=false)", script)
         self.assertIn("移除整节", script)
         self.assertIn("card.remove()", script)
         self.assertIn("removedCustomerKnowledgeSections", script)
@@ -615,8 +615,39 @@ class CustomerKnowledgeUiTests(unittest.TestCase):
         self.assertIn("function loadCompetitorKnowledge()", script)
         self.assertIn("function renderCompetitorKnowledgeSections(", script)
         self.assertIn("/api/knowledge/competitors/", script)
+        self.assertIn("data-competitor-knowledge-name", script)
+        self.assertIn("renames", script)
+        self.assertIn("名称重复或格式不正确", script)
         page = template.split('id="page-knowledge-competitors"', 1)[1].split('id="page-content"', 1)[0]
         self.assertNotIn("expandCompetitorWeb", page)
+
+    def test_knowledge_editors_share_autosave_status_and_scheduler(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function scheduleKnowledgeAutosave", script)
+        self.assertIn("800", script)
+        self.assertIn("scheduleKnowledgeAutosave('customer'", script)
+        self.assertIn("scheduleKnowledgeAutosave('competitors'", script)
+        self.assertIn("scheduleKnowledgeAutosave(`scenes:", script)
+        self.assertIn("['qualityCommon', 'quality-common', saveCommonQualityPolicy]", script)
+        self.assertIn("['qualityIndustry', 'quality-industry', saveIndustryQualityPolicy]", script)
+        self.assertIn("正在自动保存", script)
+        self.assertIn("保存失败，可重试", script)
+        self.assertNotIn("confirm('保存通用审核规则", script)
+
+    def test_only_allowed_knowledge_libraries_offer_docx_downloads(self):
+        root = Path(__file__).resolve().parents[1]
+        template = (root / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (root / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("downloadKnowledgeDocx('customer')", template)
+        self.assertIn("downloadKnowledgeDocx('competitors')", template)
+        self.assertIn("downloadKnowledgeDocx('routes')", template)
+        self.assertIn("downloadKnowledgeDocx('scenes')", template)
+        self.assertNotIn("downloadKnowledgeDocx('quality')", template)
+        self.assertIn("/api/knowledge/export/", script)
 
 
 class CompetitorMasterTests(unittest.TestCase):
@@ -718,6 +749,34 @@ class CompetitorMasterTests(unittest.TestCase):
             self.assertIn("上游新资料。", merged["content"])
             self.assertEqual(merged["merged_count"], 1)
             self.assertEqual(service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 竞品甲\n上游新资料。")["merged_count"], 0)
+
+    def test_renamed_competitor_maps_later_old_name_sources_to_the_new_section(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = KnowledgeBaseService(Path(tmp) / "knowledge_base")
+            service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 旧名称\n旧来源事实。")
+
+            service.save_competitor_master(
+                "client-a",
+                "# 竞品总资料\n\n## 新名称\n人工确认事实。",
+                renames=[{"old_name": "旧名称", "new_name": "新名称"}],
+            )
+            merged = service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 旧名称\n后续来源事实。")
+
+            self.assertIn("## 新名称", merged["content"])
+            self.assertIn("人工确认事实。", merged["content"])
+            self.assertIn("后续来源事实。", merged["content"])
+            self.assertNotIn("## 旧名称", merged["content"])
+            self.assertEqual(merged["name_aliases"], {"旧名称": "新名称"})
+
+    def test_deleted_competitor_section_is_recreated_by_later_source_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            service = KnowledgeBaseService(Path(tmp) / "knowledge_base")
+            service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 可恢复竞品\n来源事实。")
+            service.save_competitor_master("client-a", "# 竞品总资料")
+
+            restored = service.sync_competitor_master("client-a", "# 竞品总资料\n\n## 可恢复竞品\n来源事实。")
+
+            self.assertIn("## 可恢复竞品", restored["content"])
 
 
 if __name__ == "__main__":

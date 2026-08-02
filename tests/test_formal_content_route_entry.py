@@ -1,4 +1,5 @@
 import unittest
+import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +16,55 @@ ROUTE = {
 
 
 class FormalContentRouteEntryTests(unittest.TestCase):
+    def test_batch_article_loads_model_settings_for_its_creator(self):
+        settings = {"api_key": "operator-token", "base_url": "https://api.example.com", "model": "model-a"}
+        with patch.object(geo_app, "get_settings", return_value=settings) as get_settings, \
+                patch.object(geo_app, "run_content_generation", return_value={"id": "article-a"}) as run_generation:
+            result = geo_app._run_content_batch_article({}, batch_id="batch-a", created_by="operator-a")
+
+        self.assertEqual(result, {"id": "article-a"})
+        get_settings.assert_called_once_with("operator-a")
+        self.assertEqual(run_generation.call_args.kwargs["settings"], settings)
+
+    def test_reference_analysis_reuses_cached_article_body_and_analysis(self):
+        records = [{
+            "question": "问题", "source_platform": "doubao",
+            "refs": [{"url": "https://example.com/a", "title": "文章"}],
+        }]
+        fetched = {"ok": True, "title": "文章", "content": "足够用于路线分析的文章正文内容。"}
+        calls = {"fetch": 0, "analyze": 0}
+
+        def fetch(*_args, **_kwargs):
+            calls["fetch"] += 1
+            return fetched
+
+        def analyze(*_args):
+            calls["analyze"] += 1
+            return {"classification": "不入库", "library_decision": {"eligible": False}}
+
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "reference.json"
+            common = [
+                patch.object(geo_app, "require_client_access", return_value=True),
+                patch.object(geo_app, "get_client", return_value={"id": "client-a", "industry": "教育", "contract_platforms": ["doubao"]}),
+                patch.object(geo_app, "load", return_value={"client-a": [{"id": "group-a", "questions": ["问题"]}]}),
+                patch.object(geo_app, "load_client_records", return_value=records),
+                patch.object(geo_app, "fetch_article_text_for_background_analysis", side_effect=fetch),
+                patch.object(geo_app, "analyze_content_route_article", side_effect=analyze),
+                patch.object(geo_app, "reference_route_analysis_cache_path", return_value=cache_path),
+                patch.object(geo_app, "save_reference_intelligence_task"),
+            ]
+            for _index in range(2):
+                with geo_app.app.test_request_context("/api/content-routes/analyze-query-platform", method="POST", json={
+                    "client_id": "client-a", "group_id": "group-a", "query": "问题",
+                    "analyze_all_questions": True, "ai_platform": "doubao",
+                }):
+                    with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7]:
+                        response = geo_app.analyze_query_platform_content_routes()
+                self.assertEqual(response.status_code, 200)
+
+        self.assertEqual(calls, {"fetch": 1, "analyze": 1})
+
     def test_generation_requires_selected_query_group(self):
         payload = {"client_id": "client-a", "query": "问题", "article_type": "介绍型", "use_customer_master": True}
         with patch.object(geo_app, "get_client", return_value={"id": "client-a", "brand": "品牌", "industry": "教育"}):

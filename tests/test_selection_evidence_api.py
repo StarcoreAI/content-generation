@@ -62,36 +62,16 @@ class SelectionEvidenceApiTests(unittest.TestCase):
             self.assertEqual(bob.post("/api/auth/login", json={"username": "bob", "password": "secret-pass"}).status_code, 200)
             self.assertEqual(bob.post("/api/records/selection-evidence/alice-client", json={}).status_code, 404)
 
-    def test_selection_surface_reports_are_listed_read_only_and_client_isolated(self):
+    def test_selection_surface_report_api_is_removed(self):
         with isolated_app():
             create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
-            create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
             geo_app.save(geo_app.F_CLIENTS, [
                 {"id": "alice-client", "owner_username": "alice"},
-                {"id": "bob-client", "owner_username": "bob"},
             ])
-            report_dir = Path(geo_app.D) / "selection_surface_reports" / "alice-client"
-            report_dir.mkdir(parents=True)
-            report_name = "2026-07-26_崔红蕾_selection_surface.md"
-            (report_dir / report_name).write_text("# 崔红蕾展示材料\n\n高频引用文章", encoding="utf-8")
-            (report_dir / "not-a-report.txt").write_text("忽略", encoding="utf-8")
 
             alice = geo_app.app.test_client()
             self.assertEqual(alice.post("/api/auth/login", json={"username": "alice", "password": "secret-pass"}).status_code, 200)
-            listed = alice.get("/api/records/selection-reports/alice-client")
-            self.assertEqual(listed.status_code, 200)
-            self.assertEqual([item["id"] for item in listed.get_json()["reports"]], [report_name])
-            viewed = alice.get(f"/api/records/selection-reports/alice-client/{report_name}")
-            self.assertEqual(viewed.status_code, 200)
-            self.assertIn("高频引用文章", viewed.get_json()["content"])
-            self.assertEqual(
-                alice.get("/api/records/selection-reports/alice-client/..%2Fsecret.md").status_code,
-                404,
-            )
-
-            bob = geo_app.app.test_client()
-            self.assertEqual(bob.post("/api/auth/login", json={"username": "bob", "password": "secret-pass"}).status_code, 200)
-            self.assertEqual(bob.get("/api/records/selection-reports/alice-client").status_code, 404)
+            self.assertEqual(alice.get("/api/records/selection-reports/alice-client").status_code, 404)
 
     def test_refresh_and_read_are_client_isolated(self):
         with isolated_app():

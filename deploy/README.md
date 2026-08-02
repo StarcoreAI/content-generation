@@ -14,7 +14,8 @@ not install Docker for the first cloud trial unless the deployment plan changes.
 - Hostname: `iZ0jl4w2flouy3m8qid1o9Z`
 - SSH user: `geosystem`
 - Local SSH alias: `geo-content-v2`
-- Public IP: `8.160.116.86`
+- Tailscale IP: `100.103.39.13`
+- Public IP: `8.160.116.86` (do not use for routine SSH)
 - Private IP: `172.18.209.124`
 - App directory for this trial: `/srv/geo-content-v2`
 - Planned app port: `18080`
@@ -63,11 +64,14 @@ sudo apt-get install -y antiword catdoc
 Connect from the Windows laptop:
 
 ```powershell
-ssh geo-content-v2
+ssh -o HostName=100.103.39.13 geo-content-v2
 ```
 
-If SakuraCat/VPN blocks new SSH connections, turn the VPN off, connect SSH,
-then turn the VPN back on after the shell is established.
+This uses the existing `geo-content-v2` SSH alias and private-key settings,
+but routes through Tailscale instead of the public IP. Before connecting, sign
+in to the approved Tailscale tailnet on the Windows laptop. If the Tailscale IP
+changes, verify the server address in the Tailscale Machines console; do not
+fall back to public-IP SSH.
 
 Create the systemd unit:
 

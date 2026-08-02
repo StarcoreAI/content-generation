@@ -1,6 +1,7 @@
 """Build an editable competitor master from already collected local material."""
 import re
 
+from services.bounded_article_processing import fetch_articles
 from services.knowledge_base import clean_knowledge_markdown, is_short_placeholder_section
 
 
@@ -49,17 +50,30 @@ def _upload_sections(markdown):
 
 def collect_high_frequency_article_sources(records, cached_by_url, fetcher, limit=12):
     """Fetch the globally most-cited references, preferring an existing body cache."""
+    references = _collect_referenced_articles(records, limit=limit)
+    missing_urls = [
+        reference["url"] for reference in references
+        if not (isinstance((cached_by_url or {}).get(reference["url"]), dict)
+                and (cached_by_url or {}).get(reference["url"], {}).get("ok")
+                and str((cached_by_url or {}).get(reference["url"], {}).get("content") or "").strip())
+    ]
+    fetched_by_url = {}
+    if missing_urls:
+        def safe_fetch(url):
+            try:
+                return dict(fetcher(url) or {})
+            except Exception as exc:
+                return {"ok": False, "error": str(exc)}
+
+        fetched_by_url = dict(zip(missing_urls, fetch_articles(missing_urls, safe_fetch)))
     sources = []
-    for reference in _collect_referenced_articles(records, limit=limit):
+    for reference in references:
         url = reference["url"]
         cached = (cached_by_url or {}).get(url)
         if isinstance(cached, dict) and cached.get("ok") and str(cached.get("content") or "").strip():
             fetched = {**cached, "fetch_method": "cache"}
         else:
-            try:
-                fetched = dict(fetcher(url) or {})
-            except Exception as exc:
-                fetched = {"ok": False, "error": str(exc)}
+            fetched = fetched_by_url.get(url, {"ok": False, "error": "article_fetch_failed"})
             fetched.setdefault("fetch_method", "fetch")
         sources.append({
             **reference,
