@@ -6,6 +6,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ContentGenerationUiTests(unittest.TestCase):
+    def test_content_cards_show_route_and_query_instead_of_legacy_material_counts(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("写法路线：${routeName}", script)
+        self.assertIn("Query：${query}", script)
+        self.assertNotIn("资料 ${a.material_count || 0} 份", script)
+        self.assertNotIn("样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个", script)
+
     def test_distribution_pages_are_independent_navigation_pages(self):
         template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

@@ -1077,12 +1077,6 @@ function qualityGateBadge(article) {
 function qualityGateArticleType(article) {
   return article?.route_context?.source === 'operator_upload' ? '运营上传' : (article?.article_type || '未标记类型');
 }
-function contentGenerationPatternNames(a) {
-  const entries = a?.provenance?.entries || {};
-  return ['skeleton', 'opening_module', 'ending_module', 'faq_module', 'table_module']
-    .map(key => entries[key]?.name).concat((entries.body_modules || []).map(item => item?.name))
-    .filter(Boolean).join(' · ');
-}
 function renderContentGenerations(articles) {
   const countEl = document.getElementById('content-article-count');
   if (countEl) countEl.textContent = articles.length + ' 篇';
@@ -1099,7 +1093,8 @@ function renderContentGenerations(articles) {
     const articleType = escHtml(a.article_type || '未标记类型');
     const createdAt = escHtml(a.created_at || '');
     const summary = escHtml((a.content || '').slice(0, 160));
-    const patterns = contentGenerationPatternNames(a);
+    const routeName = escHtml(a.route_context?.route_name || '未记录写法路线');
+    const query = escHtml(a.route_context?.query || '未记录 Query');
     return `
     <div class="article-card">
       <div class="article-title">${title}</div>
@@ -1107,11 +1102,10 @@ function renderContentGenerations(articles) {
         <span class="badge badge-p">调用模型：${model}</span>
         <span class="badge badge-g">${articleType}</span>
         ${qualityGateBadge(a)}
-        <span class="badge badge-g">资料 ${a.material_count || 0} 份</span>
-        <span class="badge badge-a">样例 ${((a.sample_link_count || 0) + (a.selected_article_count || 0))} 个</span>
+        <span class="badge badge-g">写法路线：${routeName}</span>
+        <span class="badge badge-a">Query：${query}</span>
         <span style="font-size:10px;color:var(--text3)">${createdAt}</span>
       </div>
-      ${patterns ? `<div style="font-size:10px;color:var(--text3);margin:5px 0">写法：${escHtml(patterns)}</div>` : ''}
       <div class="article-summary">${summary}${(a.content || '').length > 160 ? '...' : ''}</div>
       <div class="article-acts">
         <button class="btn btn-o btn-sm" onclick="viewContentGeneration('${a.id}')">查看全文</button>
