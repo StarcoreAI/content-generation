@@ -198,6 +198,22 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn("} catch (error) {", script)
         self.assertIn("引用情报分析请求失败", script)
 
+    def test_reference_intelligence_polls_its_background_job(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        function_body = script.split("async function runQueryPlatformReferenceAnalysis()", 1)[1].split("\n}\n", 1)[0]
+
+        self.assertIn("pollReferenceAnalysisJob", script)
+        self.assertIn("/api/content-routes/reference-analysis-jobs/", script)
+        self.assertIn("pollReferenceAnalysisJob(result.job)", function_body)
+        poll_body = script.split("async function pollReferenceAnalysisJob(job)", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("} catch (error) {", poll_body)
+
+    def test_daily_competitor_knowledge_polls_its_background_job(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("pollDailyCompetitorKnowledgeJob", script)
+        self.assertIn("/sync-jobs/", script)
+
     def test_reference_intelligence_posts_the_selected_group_id(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
         function_body = script.split("async function runQueryPlatformReferenceAnalysis()", 1)[1].split("\n}\n", 1)[0]

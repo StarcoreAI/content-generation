@@ -16,6 +16,46 @@ ROUTE = {
 
 
 class FormalContentRouteEntryTests(unittest.TestCase):
+    def test_generation_endpoint_returns_safe_customer_facts_diagnostic(self):
+        payload = {
+            "client_id": "client-a", "article_type": "介绍型", "group_id": "group-a", "query": "问题",
+            "use_customer_master": True, "use_content_uploads": False,
+        }
+        with geo_app.app.test_request_context("/api/content/generate", method="POST", json=payload):
+            with patch.object(geo_app, "require_client_access", return_value={"id": "client-a"}), \
+                    patch.object(geo_app, "run_content_generation", side_effect=ValueError("customer_content_facts_migration_required")), \
+                    patch.object(geo_app, "knowledge_base_service", return_value=SimpleNamespace(
+                        load_customer_master=lambda _cid: {"content": "## 可用角度\n旧写法"}
+                    )):
+                response, status = geo_app.generate_content_article()
+
+        body = response.get_json()
+        self.assertEqual(422, status)
+        self.assertEqual("customer_content_facts_migration_required", body["error"])
+        self.assertIn("客户资料已勾选", body["message"])
+        self.assertTrue(body["diagnostic"]["use_customer_master"])
+        self.assertEqual([], body["diagnostic"]["customer_facts"]["allowed_sections"])
+        self.assertEqual(["可用角度"], body["diagnostic"]["customer_facts"]["forbidden_sections"])
+        self.assertNotIn("旧写法", str(body))
+
+    def test_generation_endpoint_distinguishes_missing_checkbox_from_valid_saved_facts(self):
+        payload = {
+            "client_id": "client-a", "article_type": "对比型", "group_id": "group-a", "query": "问题",
+            "use_customer_master": False, "use_content_uploads": False,
+        }
+        with geo_app.app.test_request_context("/api/content/generate", method="POST", json=payload):
+            with patch.object(geo_app, "require_client_access", return_value={"id": "client-a"}), \
+                    patch.object(geo_app, "run_content_generation", side_effect=ValueError("comparison_customer_facts_required")), \
+                    patch.object(geo_app, "knowledge_base_service", return_value=SimpleNamespace(
+                        load_customer_master=lambda _cid: {"content": "## 产品与服务\n真实服务"}
+                    )):
+                response, status = geo_app.generate_content_article()
+
+        body = response.get_json()
+        self.assertEqual(422, status)
+        self.assertFalse(body["diagnostic"]["use_customer_master"])
+        self.assertTrue(body["diagnostic"]["customer_facts"]["usable_for_generation"])
+
     def test_batch_article_loads_model_settings_for_its_creator(self):
         settings = {"api_key": "operator-token", "base_url": "https://api.example.com", "model": "model-a"}
         with patch.object(geo_app, "get_settings", return_value=settings) as get_settings, \
@@ -60,8 +100,10 @@ class FormalContentRouteEntryTests(unittest.TestCase):
                     "analyze_all_questions": True, "ai_platform": "doubao",
                 }):
                     with common[0], common[1], common[2], common[3], common[4], common[5], common[6], common[7]:
-                        response = geo_app.analyze_query_platform_content_routes()
-                self.assertEqual(response.status_code, 200)
+                        response = geo_app.run_reference_intelligence_analysis(
+                            geo_app.reference_intelligence_context(geo_app.request.get_json()), settings={}
+                        )
+                self.assertEqual(response["client_id"], "client-a")
 
         self.assertEqual(calls, {"fetch": 1, "analyze": 1})
 

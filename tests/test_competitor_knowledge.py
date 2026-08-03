@@ -7,9 +7,36 @@ from unittest.mock import patch
 
 import app as geo_app
 from services.competitor_knowledge import collect_high_frequency_article_sources
+from tests.test_app_core import isolated_app_data
 
 
 class CompetitorKnowledgeTests(unittest.TestCase):
+    def test_competitor_sync_enqueues_background_job(self):
+        with isolated_app_data():
+            cid = "client-competitor"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "client"}])
+            with patch.object(geo_app.threading, "Thread") as start_thread:
+                response = geo_app.app.test_client().post(f"/api/knowledge/competitors/{cid}/sync", json={})
+
+            self.assertEqual(202, response.status_code)
+            self.assertEqual("queued", response.get_json()["job"]["status"])
+            start_thread.assert_called_once()
+
+    def test_competitor_sync_job_status_hides_master_content(self):
+        with isolated_app_data() as tmp:
+            cid, job_id = "client-competitor", "job-competitor"
+            geo_app.save(geo_app.F_CLIENTS, [{"id": cid, "name": "client"}])
+            geo_app.save(str(Path(tmp) / "competitor_knowledge_jobs" / cid / f"{job_id}.json"), {
+                "id": job_id, "client_id": cid, "status": "completed", "message": "completed",
+                "merged_count": 2, "master": {"content": "large payload"},
+            })
+
+            response = geo_app.app.test_client().get(f"/api/knowledge/competitors/{cid}/sync-jobs/{job_id}")
+
+            self.assertEqual(200, response.status_code)
+            self.assertEqual(2, response.get_json()["job"]["merged_count"])
+            self.assertNotIn("master", response.get_json()["job"])
+
     def test_competitor_fact_batch_cache_skips_unchanged_model_extraction(self):
         records = [{"refs": [{"url": "https://example.com/a", "title": "文章"}]}]
         calls = 0

@@ -472,10 +472,9 @@ class CustomerMasterApiTests(unittest.TestCase):
             client = geo_app.app.test_client()
             client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
 
-            response = client.post("/api/knowledge/competitors/client-a/sync", json={})
+            response = geo_app.run_competitor_knowledge_sync("client-a", {})
 
-            self.assertEqual(response.status_code, 200)
-            content = response.get_json()["content"]
+            content = response["content"]
             self.assertIn("## 竞品甲", content)
             self.assertIn("竞品甲有到店试听。", content)
             self.assertIn("## 竞品乙", content)
@@ -500,13 +499,12 @@ class CustomerMasterApiTests(unittest.TestCase):
             try:
                 client = geo_app.app.test_client()
                 client.post("/api/auth/login", json={"username": "owner", "password": "secret-pass"})
-                response = client.post("/api/knowledge/competitors/client-a/sync", json={
+                response = geo_app.run_competitor_knowledge_sync("client-a", {
                     "date": "2026-07-26", "group_id": "group-a", "task_id": "task-a", "platform": "qwen",
                 })
             finally:
                 geo_app.competitor_knowledge_input = original
 
-            self.assertEqual(response.status_code, 200)
             self.assertEqual(captured, {
                 "client_id": "client-a", "date_str": "2026-07-26", "group_id": "group-a",
                 "task_id": "task-a", "platform": "qwen",

@@ -844,7 +844,11 @@ async function generateContentArticle() {
   statusEl.textContent = '当前模型生成中，请稍候...';
   try {
     const r = await api('/api/content/generate', 'POST', contentGenerationPayload());
-    if (r.error) { toast(r.error, 'err'); return; }
+    if (r.error) {
+      statusEl.textContent = r.message || r.error;
+      toast(r.message || r.error, 'err');
+      return;
+    }
     renderContentGenerations(r.articles || []);
     statusEl.textContent = `已生成：${r.article?.title || '新文章'}`;
     toast('文章生成成功 ✦');
@@ -3226,6 +3230,44 @@ async function loadContentRoutes() {
   list.innerHTML = routes.length ? routes.map(route => `<div style="padding:10px 0;border-bottom:1px solid var(--border2)"><div style="font-weight:800;color:var(--text2)">${escHtml(route.name)} <span class="badge badge-p">${escHtml(route.parent_type)}</span></div><div style="margin-top:5px;color:var(--text3)">${escHtml(route.reader_task)} · 来源 ${escHtml(route.evidence_count || 0)} 篇</div></div>`).join('') : '本行业暂无路线。选择一个 Query 与 AI 平台后，运行一键分析来建立路线。';
 }
 
+let referenceAnalysisPollTimer = null;
+let referenceAnalysisPolling = false;
+
+async function pollReferenceAnalysisJob(job) {
+  clearTimeout(referenceAnalysisPollTimer);
+  const status = document.getElementById('routeAnalysisStatus');
+  const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
+  try {
+  const result = await api('/api/content-routes/reference-analysis-jobs/' + encodeURIComponent(currentClientId) + '/' + encodeURIComponent(job.id));
+  if (result.error) {
+    if (status) status.textContent = `引用情报分析状态读取失败：${result.error}`;
+    referenceAnalysisPolling = false;
+    if (button) button.disabled = false;
+    return;
+  }
+  const current = result.job || job;
+  if (status) status.textContent = current.message || '正在分析…';
+  if (current.status === 'completed') {
+    await loadContentRoutes();
+    if (status) status.textContent = `分析完成：已分析 ${current.analyses_count || 0} 篇，路线更新 ${(current.routes || []).length} 条${current.failed_count ? `，${current.failed_count} 篇未完成` : ''}`;
+    referenceAnalysisPolling = false;
+    if (button) button.disabled = false;
+    return;
+  }
+  if (current.status === 'failed') {
+    if (status) status.textContent = `引用情报分析失败：${current.message || '请稍后重试'}`;
+    referenceAnalysisPolling = false;
+    if (button) button.disabled = false;
+    return;
+  }
+  referenceAnalysisPollTimer = setTimeout(() => pollReferenceAnalysisJob(current), 2000);
+  } catch (error) {
+    if (status) status.textContent = `引用情报分析状态读取失败：${error?.message || '网络连接失败'}`;
+    referenceAnalysisPolling = false;
+    if (button) button.disabled = false;
+  }
+}
+
 async function runQueryPlatformReferenceAnalysis() {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const groupId = document.getElementById('routeAnalysisGroupSelect')?.value || '';
@@ -3241,6 +3283,12 @@ async function runQueryPlatformReferenceAnalysis() {
     const result = await api('/api/content-routes/analyze-query-platform', 'POST', {
       client_id: currentClientId, group_id: groupId, query: allQuestions ? '' : query, analyze_all_questions: allQuestions, ai_platform,
     });
+    if (result.job) {
+      referenceAnalysisPolling = true;
+      if (status) status.textContent = result.job.message || '任务已提交，正在排队';
+      pollReferenceAnalysisJob(result.job);
+      return;
+    }
     if (result.error) { if (status) status.textContent = result.error; toast(result.error, 'err'); return; }
     const analyzed = (result.analyses || []).filter(item => item.status === 'analyzed').length;
     const failed = (result.analyses || []).length - analyzed;
@@ -3252,7 +3300,7 @@ async function runQueryPlatformReferenceAnalysis() {
     toast(`引用情报分析请求失败：${detail}`, 'err');
     console.error('引用情报分析请求失败', error);
   } finally {
-    if (button) button.disabled = false;
+    if (button && !referenceAnalysisPolling) button.disabled = false;
   }
 }
 
@@ -3420,10 +3468,55 @@ function setDailyCompetitorKnowledgeStatus(text, color='var(--text3)') {
   el.style.color = color;
 }
 
+let dailyCompetitorKnowledgePollTimer = null;
+let dailyCompetitorKnowledgePolling = false;
+let dailyCompetitorKnowledgeButtonHtml = '';
+
+function finishDailyCompetitorKnowledgePolling() {
+  dailyCompetitorKnowledgePolling = false;
+  const btn = document.getElementById('dailyCompetitorKnowledgeBtn');
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = dailyCompetitorKnowledgeButtonHtml || btn.innerHTML;
+  }
+}
+
+async function pollDailyCompetitorKnowledgeJob(job, overwrite) {
+  clearTimeout(dailyCompetitorKnowledgePollTimer);
+  try {
+    const result = await api('/api/knowledge/competitors/' + encodeURIComponent(currentClientId) + '/sync-jobs/' + encodeURIComponent(job.id));
+    if (result.error) throw new Error(result.error);
+    const current = result.job || job;
+    setDailyCompetitorKnowledgeStatus(current.message || '正在提取竞品资料…', 'var(--pri)');
+    if (current.status === 'completed') {
+      finishDailyCompetitorKnowledgePolling();
+      if (current.source_update_available && !overwrite) {
+        setDailyCompetitorKnowledgeStatus('发现人工编辑版本，尚未覆盖', 'var(--amber)');
+        if (confirm('竞品知识库已有人工编辑内容。是否用本次提取的资料覆盖？')) extractDailyCompetitorKnowledge(true);
+        return;
+      }
+      setDailyCompetitorKnowledgeStatus('提取完成，已写入竞品知识库，可前往查看和编辑', 'var(--teal)');
+      toast('竞品资料已更新');
+      return;
+    }
+    if (current.status === 'failed') {
+      finishDailyCompetitorKnowledgePolling();
+      setDailyCompetitorKnowledgeStatus('提取失败：' + (current.message || '请稍后重试'), 'var(--red)');
+      toast('竞品资料提取失败', 'err');
+      return;
+    }
+    dailyCompetitorKnowledgePollTimer = setTimeout(() => pollDailyCompetitorKnowledgeJob(current, overwrite), 2000);
+  } catch (error) {
+    finishDailyCompetitorKnowledgePolling();
+    setDailyCompetitorKnowledgeStatus('提取状态读取失败：' + (error?.message || '网络连接失败'), 'var(--red)');
+  }
+}
+
 async function extractDailyCompetitorKnowledge(overwrite=false) {
   if (!currentClientId) { toast('请先选择客户', 'err'); return; }
   const btn = document.getElementById('dailyCompetitorKnowledgeBtn');
   const oldHtml = btn ? btn.innerHTML : '';
+  dailyCompetitorKnowledgeButtonHtml = oldHtml;
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const groupId = document.getElementById('dailyGroupFilter')?.value || '';
   const taskId = document.getElementById('dailyTaskFilter')?.value || '';
@@ -3440,6 +3533,12 @@ async function extractDailyCompetitorKnowledge(overwrite=false) {
       task_id: taskId,
       overwrite,
     });
+    if (r.job) {
+      dailyCompetitorKnowledgePolling = true;
+      setDailyCompetitorKnowledgeStatus(r.job.message || '任务已提交，正在排队', 'var(--pri)');
+      pollDailyCompetitorKnowledgeJob(r.job, overwrite);
+      return;
+    }
     if (r?.error) throw new Error(r.error);
     if (r.source_update_available && !overwrite) {
       setDailyCompetitorKnowledgeStatus('发现人工编辑版本，尚未覆盖', 'var(--amber)');
@@ -3454,7 +3553,7 @@ async function extractDailyCompetitorKnowledge(overwrite=false) {
     setDailyCompetitorKnowledgeStatus('提取失败：' + e.message, 'var(--red)');
     toast('提取失败：' + e.message, 'err');
   } finally {
-    if (btn) {
+    if (btn && !dailyCompetitorKnowledgePolling) {
       btn.disabled = false;
       btn.innerHTML = oldHtml;
     }

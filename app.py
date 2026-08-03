@@ -2,7 +2,7 @@
 GEO Agent v2 — 内容投放优化工作台
 模块：客户管理 / 问题组管理 / 内容生产 / 每日分析 / 爬取任务
 """
-import json, os, re, asyncio, threading, glob, random, uuid, secrets, time
+import json, os, re, asyncio, threading, glob, random, uuid, secrets, time, traceback
 from datetime import datetime, date, timedelta
 from collections import defaultdict
 from pathlib import Path
@@ -1586,6 +1586,30 @@ def competitor_knowledge_article_cache_path(cid):
 def competitor_knowledge_facts_cache_path(cid):
     return Path(D) / "knowledge_base" / cid / "competitor_article_facts_cache.json"
 
+
+def competitor_knowledge_job_path(cid, job_id):
+    return Path(D) / "competitor_knowledge_jobs" / str(cid) / f"{job_id}.json"
+
+
+def save_competitor_knowledge_job(cid, job):
+    path = competitor_knowledge_job_path(cid, job.get("id"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save(str(path), job)
+
+
+def load_competitor_knowledge_job(cid, job_id):
+    return load(str(competitor_knowledge_job_path(cid, job_id)), {})
+
+
+def public_competitor_knowledge_job(job):
+    job = dict(job or {})
+    return {
+        key: job.get(key)
+        for key in ("id", "client_id", "status", "message", "created_at", "started_at", "finished_at",
+                    "merged_count", "skipped_count", "source_update_available")
+        if key in job
+    }
+
 def competitor_knowledge_context(cid, date_str="", group_id="", task_id="", platform=""):
     all_records = load_client_records(cid)
     source_date = str(date_str or "").strip() or max(
@@ -1618,7 +1642,7 @@ def competitor_knowledge_context(cid, date_str="", group_id="", task_id="", plat
     return source_date, records, entities, fallback
 
 def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=True,
-                               date_str="", group_id="", task_id="", platform=""):
+                               date_str="", group_id="", task_id="", platform="", settings=None):
     source_date, records, entities, fallback = competitor_knowledge_context(
         cid, date_str=date_str, group_id=group_id, task_id=task_id, platform=platform
     )
@@ -1645,7 +1669,7 @@ def competitor_knowledge_input(cid, ask_text=None, fetch_fn=None, persist_cache=
     if not usable:
         return fallback
     if ask_text is None:
-        settings = get_settings()
+        settings = settings or get_settings()
         ask_text = lambda prompt, max_tokens: ai_with_settings(prompt, max_tokens, settings)
     facts_cache_path = competitor_knowledge_facts_cache_path(cid)
     competitor_scope = "\n".join(item.get("name", "") for item in entities)
@@ -2129,23 +2153,62 @@ def get_competitor_knowledge_master(cid):
     return jsonify({"ok": True, **result})
 
 
+def run_competitor_knowledge_sync(cid, payload, settings=None):
+    scope = {
+        "date_str": str(payload.get("date") or "").strip(),
+        "group_id": str(payload.get("group_id") or "").strip(),
+        "task_id": str(payload.get("task_id") or "").strip(),
+        "platform": str(payload.get("platform") or "").strip(),
+    }
+    if settings is not None:
+        scope["settings"] = settings
+    return knowledge_base_service().sync_competitor_master(
+        cid, competitor_knowledge_input(cid, **scope), overwrite=bool(payload.get("overwrite")),
+    )
+
+
 @app.route("/api/knowledge/competitors/<cid>/sync", methods=["POST"])
 def sync_competitor_knowledge_master(cid):
     if not require_client_access(cid):
         return jsonify({"error": "client_not_found"}), 404
     payload = request.get_json(silent=True) or {}
-    result = knowledge_base_service().sync_competitor_master(
-        cid,
-        competitor_knowledge_input(
-            cid,
-            date_str=str(payload.get("date") or "").strip(),
-            group_id=str(payload.get("group_id") or "").strip(),
-            task_id=str(payload.get("task_id") or "").strip(),
-            platform=str(payload.get("platform") or "").strip(),
-        ),
-        overwrite=bool(payload.get("overwrite")),
-    )
-    return jsonify({"ok": True, **result})
+    settings = get_settings()
+    job = {
+        "id": uid(), "client_id": cid, "status": "queued", "message": "任务已提交，正在排队",
+        "created_at": now_str(), "merged_count": 0, "skipped_count": 0,
+    }
+    save_competitor_knowledge_job(cid, job)
+
+    def update_job(status, message, **updates):
+        current = load_competitor_knowledge_job(cid, job["id"])
+        current.update({"status": status, "message": message, **updates})
+        save_competitor_knowledge_job(cid, current)
+
+    def worker():
+        update_job("running", "正在提取高频引用文章中的竞品资料", started_at=now_str())
+        try:
+            result = run_competitor_knowledge_sync(cid, payload, settings=settings)
+            update_job(
+                "completed", "竞品资料提取完成", finished_at=now_str(),
+                merged_count=result.get("merged_count", 0), skipped_count=result.get("skipped_count", 0),
+                source_update_available=bool(result.get("source_update_available")),
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            update_job("failed", "竞品资料提取失败，请稍后重试", finished_at=now_str())
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"ok": True, "job": public_competitor_knowledge_job(job)}), 202
+
+
+@app.route("/api/knowledge/competitors/<cid>/sync-jobs/<job_id>", methods=["GET"])
+def get_competitor_knowledge_sync_job(cid, job_id):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    job = load_competitor_knowledge_job(cid, job_id)
+    if not job or job.get("client_id") != cid:
+        return jsonify({"error": "competitor_knowledge_job_not_found"}), 404
+    return jsonify({"ok": True, "job": public_competitor_knowledge_job(job)})
 
 
 @app.route("/api/knowledge/competitors/<cid>", methods=["PUT"])
@@ -2419,6 +2482,55 @@ def generate_content_draft(messages, ai_text_fn=None):
     raise ValueError("empty_content_generation_response")
 
 
+CONTENT_GENERATION_INPUT_MESSAGES = {
+    "introduction_material_required": "介绍型文章至少需要勾选客户内容资料或上传内容资料。",
+    "comparison_customer_facts_required": "对比型文章必须使用客户内容资料；本次请求未收到该勾选，请刷新页面后重新勾选。",
+    "customer_content_facts_migration_required": "客户资料已勾选，但当前保存的内容不能用于生文。请保留“品牌与服务主体”或“产品与服务”章节，并移除写作方向、FAQ、场景词、来源等非事实章节后再保存。",
+    "comparison_competitors_required": "对比型文章至少需要两份可用的竞品资料，请重新选择竞品或补充竞品资料库。",
+}
+
+
+def content_generation_error_response(payload, error):
+    """Return actionable, content-free diagnostics for known input validation errors."""
+    code = str(error or "")
+    message = CONTENT_GENERATION_INPUT_MESSAGES.get(code)
+    if not message:
+        return None
+    payload = dict(payload or {})
+    selected_names = payload.get("selected_competitor_names")
+    diagnostic = {
+        "article_type": str(payload.get("article_type") or ""),
+        "use_customer_master": payload.get("use_customer_master") is True,
+        "use_content_uploads": payload.get("use_content_uploads") is True,
+        "selected_competitor_count": len(selected_names) if isinstance(selected_names, list) else 0,
+    }
+    if code in {"comparison_customer_facts_required", "customer_content_facts_migration_required"}:
+        try:
+            customer_facts = knowledge_base_service().load_customer_master(str(payload.get("client_id") or "")).get("content", "").strip()
+            validation = validate_customer_content_facts(customer_facts)
+            diagnostic["customer_facts"] = {
+                "loaded": bool(customer_facts),
+                "character_count": len(customer_facts),
+                "usable_for_generation": validation["usable_for_generation"],
+                "allowed_sections": validation["allowed_headings"],
+                "forbidden_sections": validation["forbidden_headings"],
+            }
+        except Exception:
+            diagnostic["customer_facts"] = {"loaded": False, "read_error": True}
+    return {"error": code, "message": message, "diagnostic": diagnostic}
+
+
+def log_content_generation_input_error(payload, response):
+    diagnostic = dict(response.get("diagnostic") or {})
+    print("[content_generation] " + json.dumps({
+        "event": "input_validation_failed",
+        "client_id": str((payload or {}).get("client_id") or ""),
+        "error": response.get("error"),
+        "diagnostic": diagnostic,
+        "timestamp": now_str(),
+    }, ensure_ascii=False))
+
+
 def run_content_generation(payload, created_by="", batch_id="", settings=None):
     with content_generation_lock:
         return _run_content_generation(payload, created_by=created_by, batch_id=batch_id, settings=settings)
@@ -2447,6 +2559,30 @@ def save_reference_intelligence_task(cid, task):
     history = history if isinstance(history, list) else []
     history.append(task)
     save(str(path), history[-100:])
+
+
+def reference_intelligence_job_path(cid, job_id):
+    return Path(D) / "reference_intelligence_jobs" / str(cid) / f"{job_id}.json"
+
+
+def save_reference_intelligence_job(cid, job):
+    path = reference_intelligence_job_path(cid, job.get("id"))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    save(str(path), job)
+
+
+def load_reference_intelligence_job(cid, job_id):
+    return load(str(reference_intelligence_job_path(cid, job_id)), {})
+
+
+def public_reference_intelligence_job(job):
+    job = dict(job or {})
+    return {
+        key: job.get(key)
+        for key in ("id", "client_id", "group_id", "query", "ai_platform", "status", "message",
+                    "created_at", "started_at", "finished_at", "analyses_count", "failed_count", "routes")
+        if key in job
+    }
 
 
 def reference_route_source(analysis, candidate, query, ai_platform):
@@ -2562,44 +2698,19 @@ def analyze_and_ingest_content_route():
     return jsonify({"ok": True, "analysis": analysis, "entry": entry})
 
 
-@app.route("/api/content-routes/analyze-query-platform", methods=["POST"])
-def analyze_query_platform_content_routes():
-    trace_fields = {"trace_id": uuid.uuid4().hex[:12]}
-    _log_reference_intelligence("request_received", **trace_fields)
-    payload = request.get_json(silent=True) or {}
-    cid = str(payload.get("client_id") or "").strip()
-    trace_fields["client_id"] = cid
-    if not require_client_access(cid):
-        return jsonify({"error": "client_not_found"}), 404
-    group_id = str(payload.get("group_id") or "").strip()
-    query = str(payload.get("query") or "").strip()
-    analyze_all_questions = payload.get("analyze_all_questions") is True
-    ai_platform = str(payload.get("ai_platform") or "").strip()
-    trace_fields["ai_platform"] = ai_platform
-    if not group_id:
-        return jsonify({"error": "query_group_required"}), 400
-    groups = load(F_GROUPS, {})
-    group = next((item for item in groups.get(cid, []) if item.get("id") == group_id), None)
-    if group is None:
-        return jsonify({"error": "query_group_not_found"}), 400
-    queries = [str(item or "").strip() for item in group.get("questions") or []]
-    queries = [item for item in queries if item]
-    if analyze_all_questions and not queries:
-        return jsonify({"error": "query_group_has_no_questions"}), 400
-    if not analyze_all_questions and query not in queries:
-        return jsonify({"error": "query_not_in_group"}), 400
-    if not analyze_all_questions:
-        queries = [query]
-    if ai_platform not in CRAWL_PLATFORMS:
-        return jsonify({"error": "ai_platform_required"}), 400
-    client = get_client(cid) or {}
-    if ai_platform not in normalize_contract_platforms(client.get("contract_platforms")):
-        return jsonify({"error": "ai_platform_not_configured"}), 400
-    industry = str(client.get("industry") or "").strip()
-    if not industry:
-        return jsonify({"error": "client_industry_required"}), 400
+def run_reference_intelligence_analysis(context, settings=None, progress=None, trace_fields=None):
+    cid = context["client_id"]
+    group_id = context["group_id"]
+    query = context["query"]
+    queries = context["queries"]
+    analyze_all_questions = context["analyze_all_questions"]
+    ai_platform = context["ai_platform"]
+    industry = context["industry"]
+    trace_fields = trace_fields or {"trace_id": uuid.uuid4().hex[:12], "client_id": cid, "ai_platform": ai_platform}
 
     lock_wait_started_at = time.monotonic()
+    if progress:
+        progress("running", "正在等待分析资源")
     _log_reference_intelligence("lock_wait_started", **trace_fields)
     with reference_intelligence_lock:
         _log_reference_intelligence(
@@ -2607,6 +2718,8 @@ def analyze_query_platform_content_routes():
             **trace_fields,
             wait_ms=round((time.monotonic() - lock_wait_started_at) * 1000),
         )
+        if progress:
+            progress("running", "正在汇总引用文章")
         records = load_client_records(cid, platform=ai_platform) if analyze_all_questions else load_client_records(cid, question=query, platform=ai_platform)
         query_tasks, selected_items = [], []
         for source_query in queries:
@@ -2614,8 +2727,10 @@ def analyze_query_platform_content_routes():
             query_tasks.append(query_task)
             selected_items.extend((source_query, candidate) for candidate in query_task["selected"])
         if not selected_items:
-            return jsonify({"error": "query_platform_citations_not_found"}), 400
+            raise ValueError("query_platform_citations_not_found")
         _log_reference_intelligence("articles_selected", **trace_fields, article_count=len(selected_items), query_count=len(queries))
+        if progress:
+            progress("running", f"已选择 {len(selected_items)} 篇引用文章，正在抓取")
         task = {
             "id": uid(), "client_id": cid, "group_id": group_id, "query": query,
             "queries": queries, "analyze_all_questions": analyze_all_questions,
@@ -2624,7 +2739,7 @@ def analyze_query_platform_content_routes():
             "analyses": [], "merge_results": [], "routes": [],
         }
         cache_path = reference_route_analysis_cache_path(cid)
-        settings = get_settings()
+        settings = settings or get_settings()
         analysis_ai_json = lambda prompt, max_tokens: ai_json_with_settings(prompt, max_tokens, settings)
 
         def fetch_selected(item):
@@ -2651,6 +2766,8 @@ def analyze_query_platform_content_routes():
             return source_query, candidate, fetched
 
         fetched_items = fetch_articles(list(enumerate(selected_items, start=1)), fetch_selected)
+        if progress:
+            progress("running", "正在提取文章中的写法路线")
 
         def analyze_selected(item):
             source_query, candidate, fetched = item
@@ -2688,6 +2805,8 @@ def analyze_query_platform_content_routes():
 
         library = content_route_library_service()
         created_or_updated = []
+        if progress:
+            progress("running", "正在合并路线并写入写法库")
         for parent_type in ("介绍型", "对比型"):
             indexes = [
                 index for index, analysis in enumerate(analyzed)
@@ -2706,7 +2825,99 @@ def analyze_query_platform_content_routes():
         unique_routes = {route["id"]: route for route in created_or_updated}
         task["routes"] = list(unique_routes)
         save_reference_intelligence_task(cid, task)
-    return jsonify({"ok": True, "task": task, "analyses": task["analyses"], "merge_results": task["merge_results"], "routes": task["routes"]})
+    return task
+
+
+def reference_intelligence_context(payload):
+    cid = str(payload.get("client_id") or "").strip()
+    group_id = str(payload.get("group_id") or "").strip()
+    query = str(payload.get("query") or "").strip()
+    analyze_all_questions = payload.get("analyze_all_questions") is True
+    ai_platform = str(payload.get("ai_platform") or "").strip()
+    if not group_id:
+        raise ValueError("query_group_required")
+    groups = load(F_GROUPS, {})
+    group = next((item for item in groups.get(cid, []) if item.get("id") == group_id), None)
+    if group is None:
+        raise ValueError("query_group_not_found")
+    queries = [str(item or "").strip() for item in group.get("questions") or []]
+    queries = [item for item in queries if item]
+    if analyze_all_questions and not queries:
+        raise ValueError("query_group_has_no_questions")
+    if not analyze_all_questions and query not in queries:
+        raise ValueError("query_not_in_group")
+    if not analyze_all_questions:
+        queries = [query]
+    if ai_platform not in CRAWL_PLATFORMS:
+        raise ValueError("ai_platform_required")
+    client = get_client(cid) or {}
+    if ai_platform not in normalize_contract_platforms(client.get("contract_platforms")):
+        raise ValueError("ai_platform_not_configured")
+    industry = str(client.get("industry") or "").strip()
+    if not industry:
+        raise ValueError("client_industry_required")
+    return {
+        "client_id": cid, "group_id": group_id, "query": query, "queries": queries,
+        "analyze_all_questions": analyze_all_questions, "ai_platform": ai_platform, "industry": industry,
+    }
+
+
+@app.route("/api/content-routes/analyze-query-platform", methods=["POST"])
+def analyze_query_platform_content_routes():
+    payload = request.get_json(silent=True) or {}
+    cid = str(payload.get("client_id") or "").strip()
+    trace_fields = {"trace_id": uuid.uuid4().hex[:12], "client_id": cid}
+    _log_reference_intelligence("request_received", **trace_fields)
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    try:
+        context = reference_intelligence_context(payload)
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+
+    settings = get_settings()
+    job = {
+        "id": uid(), "client_id": cid, "group_id": context["group_id"], "query": context["query"],
+        "ai_platform": context["ai_platform"], "status": "queued", "message": "任务已提交，正在排队",
+        "created_at": now_str(), "analyses_count": 0, "failed_count": 0, "routes": [],
+    }
+    save_reference_intelligence_job(cid, job)
+
+    def update_job(status, message, **updates):
+        current = load_reference_intelligence_job(cid, job["id"])
+        current.update({"status": status, "message": message, **updates})
+        save_reference_intelligence_job(cid, current)
+
+    def worker():
+        update_job("running", "正在启动引用情报分析", started_at=now_str())
+        try:
+            task = run_reference_intelligence_analysis(
+                context, settings=settings, progress=update_job,
+                trace_fields={**trace_fields, "ai_platform": context["ai_platform"]},
+            )
+            analyses_count = sum(item.get("status") == "analyzed" for item in task["analyses"])
+            update_job(
+                "completed", "引用情报分析已完成", finished_at=now_str(), analyses_count=analyses_count,
+                failed_count=len(task["analyses"]) - analyses_count, routes=task["routes"],
+            )
+        except Exception as exc:
+            traceback.print_exc()
+            _log_reference_intelligence("job_failed", **trace_fields, error=str(exc)[:300])
+            message = "没有找到可分析的引用文章" if str(exc) == "query_platform_citations_not_found" else "分析失败，请稍后重试"
+            update_job("failed", message, finished_at=now_str())
+
+    threading.Thread(target=worker, daemon=True).start()
+    return jsonify({"ok": True, "job": public_reference_intelligence_job(job)}), 202
+
+
+@app.route("/api/content-routes/reference-analysis-jobs/<cid>/<job_id>", methods=["GET"])
+def get_reference_intelligence_job(cid, job_id):
+    if not require_client_access(cid):
+        return jsonify({"error": "client_not_found"}), 404
+    job = load_reference_intelligence_job(cid, job_id)
+    if not job or job.get("client_id") != cid:
+        return jsonify({"error": "reference_analysis_job_not_found"}), 404
+    return jsonify({"ok": True, "job": public_reference_intelligence_job(job)})
 
 
 @app.route("/api/content-routes/<route_id>", methods=["DELETE"])
@@ -2834,12 +3045,19 @@ def _prepare_content_batch_generation(payload):
 
 def _run_content_batch_article(payload, *, batch_id, created_by):
     settings = get_settings(created_by) if created_by else get_settings()
-    return run_content_generation(
-        payload,
-        created_by=created_by,
-        batch_id=batch_id,
-        settings=settings,
-    )
+    try:
+        return run_content_generation(
+            payload,
+            created_by=created_by,
+            batch_id=batch_id,
+            settings=settings,
+        )
+    except ValueError as exc:
+        response = content_generation_error_response(payload, exc)
+        if not response:
+            raise
+        log_content_generation_input_error(payload, response)
+        raise ValueError(response["message"]) from exc
 
 
 def queue_content_batch_generation_job(payload, count, created_by=""):
@@ -3544,6 +3762,10 @@ def generate_content_article():
     try:
         result = run_content_generation(d, created_by=(current_user() or {}).get("username", ""))
     except Exception as e:
+        response = content_generation_error_response(d, e)
+        if response:
+            log_content_generation_input_error(d, response)
+            return jsonify(response), 422
         return jsonify({"error": str(e)}), 500
     article = dict(result)
     article.pop("sampling", None)
