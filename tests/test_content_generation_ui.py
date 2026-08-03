@@ -6,6 +6,14 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class ContentGenerationUiTests(unittest.TestCase):
+    def test_daily_page_offers_crawled_dates_next_to_the_date_picker(self):
+        template = (ROOT / "templates" / "index.html").read_text(encoding="utf-8")
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn('id="dailyCrawlDateSelect"', template)
+        self.assertIn("loadDailyCrawlDates", script)
+        self.assertIn("/api/daily/crawl-dates", script)
+
     def test_content_cards_show_route_and_query_instead_of_legacy_material_counts(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 

@@ -84,7 +84,8 @@
     <div><div class="pg-title">✦ <em>当日数据整理</em></div>
     <div class="pg-sub">查看今日爬取数据，删除错误记录，统计引用源</div></div>
     <div class="acts">
-      <input type="date" id="dailyDate" onchange="resetDailyTaskFilter();loadDailyData()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
+      <input type="date" id="dailyDate" onchange="syncDailyCrawlDateSelection();resetDailyTaskFilter();loadDailyData()" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white">
+      <select id="dailyCrawlDateSelect" onchange="selectDailyCrawlDate(this.value)" style="font-size:11px;padding:6px 10px;border-radius:var(--r-sm);border:1.5px solid var(--border);background:white;max-width:175px"><option value="">已有爬取日期</option></select>
       <button class="btn btn-danger btn-sm" onclick="clearDailyData()" title="清空当日所有爬取记录">
         🗑 清空当日数据
       </button>

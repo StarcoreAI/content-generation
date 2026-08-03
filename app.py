@@ -3853,6 +3853,21 @@ def refine_pattern():
 # 当日数据整理模块
 # ══════════════════════════════════════════════════════
 
+@app.route("/api/daily/crawl-dates", methods=["GET"])
+def get_daily_crawl_dates():
+    client_id = str(request.args.get("client_id") or "").strip()
+    if not require_client_access(client_id):
+        return jsonify({"error": "client_not_found"}), 404
+    platform = request.args.get("platform", "")
+    counts = defaultdict(int)
+    for record in load_client_records(client_id, platform=platform):
+        record_date = str(record.get("today") or "").strip()
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", record_date):
+            counts[record_date] += 1
+    dates = [{"date": key, "count": counts[key]} for key in sorted(counts, reverse=True)]
+    return jsonify({"dates": dates})
+
+
 @app.route("/api/daily/records", methods=["GET"])
 def get_daily_records():
     """获取指定日期的所有爬取记录，支持按客户和平台筛选"""

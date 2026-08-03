@@ -3329,6 +3329,23 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(retired.status_code, 200)
             self.assertEqual(retired.get_json()["entry"]["status"], "retired")
 
+    def test_daily_crawl_dates_returns_sorted_counts_for_the_current_platform(self):
+        records = [
+            {"today": "2026-08-01", "source_platform": "doubao"},
+            {"today": "2026-08-03", "source_platform": "doubao"},
+            {"today": "2026-08-03", "source_platform": "doubao"},
+        ]
+        with geo_app.app.test_request_context("/api/daily/crawl-dates?client_id=client-1&platform=doubao"):
+            with patch.object(geo_app, "require_client_access", return_value={"id": "client-1"}), \
+                    patch.object(geo_app, "load_client_records", return_value=records) as load_records:
+                response = geo_app.get_daily_crawl_dates()
+
+        self.assertEqual(
+            [{"date": "2026-08-03", "count": 2}, {"date": "2026-08-01", "count": 1}],
+            response.get_json()["dates"],
+        )
+        self.assertEqual("doubao", load_records.call_args.kwargs["platform"])
+
     def test_pattern_library_status_update_rejects_invalid_and_missing_entries(self):
         with isolated_app_data() as tmp:
             library = geo_app.PatternLibrary(os.path.join(tmp, "pattern_library"))

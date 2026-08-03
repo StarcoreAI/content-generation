@@ -3383,6 +3383,33 @@ function loadDailyPage() {
   loadDailyData();
 }
 
+async function loadDailyCrawlDates() {
+  const sel = document.getElementById('dailyCrawlDateSelect');
+  if (!sel || !currentClientId) return;
+  const r = await api(`/api/daily/crawl-dates?client_id=${encodeURIComponent(currentClientId)}&platform=${encodeURIComponent(currentPlatform)}`);
+  if (r.error) return;
+  const currentDate = document.getElementById('dailyDate')?.value || '';
+  sel.innerHTML = '<option value="">已有爬取日期</option>' + (r.dates || []).map(item =>
+    `<option value="${escHtml(item.date)}">${escHtml(item.date)}（${escHtml(item.count)} 条）</option>`
+  ).join('');
+  sel.value = (r.dates || []).some(item => item.date === currentDate) ? currentDate : '';
+}
+
+function selectDailyCrawlDate(value) {
+  if (!value) return;
+  const date = document.getElementById('dailyDate');
+  if (!date) return;
+  date.value = value;
+  resetDailyTaskFilter();
+  loadDailyData();
+}
+
+function syncDailyCrawlDateSelection() {
+  const date = document.getElementById('dailyDate')?.value || '';
+  const sel = document.getElementById('dailyCrawlDateSelect');
+  if (sel) sel.value = [...sel.options].some(option => option.value === date) ? date : '';
+}
+
 async function loadDailyGroupFilter() {
   // 加载问题组到筛选器（切换客户时调用）
   const sel = document.getElementById('dailyGroupFilter');
@@ -3396,6 +3423,7 @@ async function loadDailyGroupFilter() {
 
 async function loadDailyData() {
   if (!currentClientId) return;
+  loadDailyCrawlDates();
   const date = document.getElementById('dailyDate').value || new Date().toISOString().slice(0,10);
   const groupId = document.getElementById('dailyGroupFilter')?.value || '';
 
