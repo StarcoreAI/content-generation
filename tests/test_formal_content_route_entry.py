@@ -36,6 +36,10 @@ class FormalContentRouteEntryTests(unittest.TestCase):
             prompt = build_content_route_messages(bundle)[1]["content"]
             self.assertIn("像熟悉该问题的人在与读者自然交谈", prompt)
             self.assertIn("标题后至第一个二级标题前的开头正文不少于 600 个汉字", prompt)
+            if article_type == "介绍型":
+                self.assertIn("介绍型开头应以 Query 为切口", prompt)
+            else:
+                self.assertIn("对比型开头应先围绕 Query", prompt)
 
     def test_generation_endpoint_returns_safe_customer_facts_diagnostic(self):
         payload = {
