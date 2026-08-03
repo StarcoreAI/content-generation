@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import app as geo_app
+from services.content_route_generation import build_content_route_messages
 
 
 ROUTE = {
@@ -16,6 +17,26 @@ ROUTE = {
 
 
 class FormalContentRouteEntryTests(unittest.TestCase):
+    def test_both_article_types_require_a_conversational_six_hundred_character_opening(self):
+        for article_type in ("介绍型", "对比型"):
+            bundle = {
+                "task": {"query": "如何选择服务", "article_type": article_type, "title_entity_policy": "实体不入标题"},
+                "client": {"brand": "示例品牌"},
+                "route": {**ROUTE, "parent_type": article_type},
+                "customer_facts": "## 产品与服务\n真实服务资料",
+                "content_uploads": "",
+                "competitors": ([
+                    {"name": "竞品甲", "facts": "真实资料甲"},
+                    {"name": "竞品乙", "facts": "真实资料乙"},
+                ] if article_type == "对比型" else []),
+                "scene_terms": [],
+                "supplementary_scene_terms": [],
+            }
+
+            prompt = build_content_route_messages(bundle)[1]["content"]
+            self.assertIn("像熟悉该问题的人在与读者自然交谈", prompt)
+            self.assertIn("标题后至第一个二级标题前的开头正文不少于 600 个汉字", prompt)
+
     def test_generation_endpoint_returns_safe_customer_facts_diagnostic(self):
         payload = {
             "client_id": "client-a", "article_type": "介绍型", "group_id": "group-a", "query": "问题",
