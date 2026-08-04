@@ -224,6 +224,12 @@ class ContentGenerationUiTests(unittest.TestCase):
         poll_body = script.split("async function pollReferenceAnalysisJob(job)", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("} catch (error) {", poll_body)
 
+    def test_reference_intelligence_button_shows_running_state(self):
+        script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("function setReferenceAnalysisButtonRunning(running)", script)
+        self.assertIn("running ? '正在分析…' : '一键分析并沉淀路线'", script)
+
     def test_daily_competitor_knowledge_polls_its_background_job(self):
         script = (ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
 

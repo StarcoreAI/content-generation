@@ -3227,16 +3227,22 @@ async function loadContentRoutes() {
 let referenceAnalysisPollTimer = null;
 let referenceAnalysisPolling = false;
 
+function setReferenceAnalysisButtonRunning(running) {
+  const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
+  if (!button) return;
+  button.disabled = running;
+  button.textContent = running ? '正在分析…' : '一键分析并沉淀路线';
+}
+
 async function pollReferenceAnalysisJob(job) {
   clearTimeout(referenceAnalysisPollTimer);
   const status = document.getElementById('routeAnalysisStatus');
-  const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
   try {
   const result = await api('/api/content-routes/reference-analysis-jobs/' + encodeURIComponent(currentClientId) + '/' + encodeURIComponent(job.id));
   if (result.error) {
     if (status) status.textContent = `引用情报分析状态读取失败：${result.error}`;
     referenceAnalysisPolling = false;
-    if (button) button.disabled = false;
+    setReferenceAnalysisButtonRunning(false);
     return;
   }
   const current = result.job || job;
@@ -3245,20 +3251,20 @@ async function pollReferenceAnalysisJob(job) {
     await loadContentRoutes();
     if (status) status.textContent = `分析完成：已分析 ${current.analyses_count || 0} 篇，路线更新 ${(current.routes || []).length} 条${current.failed_count ? `，${current.failed_count} 篇未完成` : ''}`;
     referenceAnalysisPolling = false;
-    if (button) button.disabled = false;
+    setReferenceAnalysisButtonRunning(false);
     return;
   }
   if (current.status === 'failed') {
     if (status) status.textContent = `引用情报分析失败：${current.message || '请稍后重试'}`;
     referenceAnalysisPolling = false;
-    if (button) button.disabled = false;
+    setReferenceAnalysisButtonRunning(false);
     return;
   }
   referenceAnalysisPollTimer = setTimeout(() => pollReferenceAnalysisJob(current), 2000);
   } catch (error) {
     if (status) status.textContent = `引用情报分析状态读取失败：${error?.message || '网络连接失败'}`;
     referenceAnalysisPolling = false;
-    if (button) button.disabled = false;
+    setReferenceAnalysisButtonRunning(false);
   }
 }
 
@@ -3270,9 +3276,8 @@ async function runQueryPlatformReferenceAnalysis() {
   const ai_platform = document.getElementById('routeAnalysisPlatformSelect')?.value || '';
   if (!groupId || !query || !ai_platform) { toast('请选择问题组、Query 和 AI 平台', 'err'); return; }
   const status = document.getElementById('routeAnalysisStatus');
-  const button = document.getElementById('btnQueryPlatformReferenceAnalysis');
   if (status) status.textContent = allQuestions ? '正在按本问题组全部问题和当前平台统计引用、抓取文章并分析…' : '正在按当前 Query 和平台统计引用、抓取文章并分析…';
-  if (button) button.disabled = true;
+  setReferenceAnalysisButtonRunning(true);
   try {
     const result = await api('/api/content-routes/analyze-query-platform', 'POST', {
       client_id: currentClientId, group_id: groupId, query: allQuestions ? '' : query, analyze_all_questions: allQuestions, ai_platform,
@@ -3294,7 +3299,7 @@ async function runQueryPlatformReferenceAnalysis() {
     toast(`引用情报分析请求失败：${detail}`, 'err');
     console.error('引用情报分析请求失败', error);
   } finally {
-    if (button && !referenceAnalysisPolling) button.disabled = false;
+    if (!referenceAnalysisPolling) setReferenceAnalysisButtonRunning(false);
   }
 }
 
