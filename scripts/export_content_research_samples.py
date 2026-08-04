@@ -71,6 +71,58 @@ def _copy_knowledge_masters(data_dir, output_dir, client_id):
     return copied
 
 
+def export_citation_research_data(data_dir, output_dir, selectors, days=3):
+    """Export only selected clients' latest crawl records and question groups."""
+    if not isinstance(days, int) or days < 1:
+        raise ValueError("invalid_days")
+    data_dir = Path(data_dir)
+    output_dir = Path(output_dir)
+    clients = _load_json(data_dir / "clients.json", [])
+    if not isinstance(clients, list):
+        raise ValueError("invalid_clients_json")
+    selected_clients = _matched_clients(clients, selectors)
+    if output_dir.exists():
+        raise ValueError(f"output_dir_already_exists: {output_dir}")
+
+    records = _load_json(data_dir / "raw_records.json", [])
+    records = records if isinstance(records, list) else []
+    groups = _load_json(data_dir / "probe_groups.json", {})
+    groups = groups if isinstance(groups, dict) else {}
+    selected_ids = [str(client.get("id") or "").strip() for client in selected_clients]
+    crawl_dates = {}
+    for client_id in selected_ids:
+        dates = sorted({
+            str(record.get("today") or "").strip()
+            for record in records
+            if record.get("client_id") == client_id and str(record.get("today") or "").strip()
+        })
+        crawl_dates[client_id] = dates[-days:]
+
+    output_dir.mkdir(parents=True)
+    _write_json(output_dir / "probe_groups.json", {
+        client_id: groups.get(client_id, []) for client_id in selected_ids
+    })
+    for client_id, dates in crawl_dates.items():
+        for date in dates:
+            date_records = [
+                record for record in records
+                if record.get("client_id") == client_id and record.get("today") == date
+            ]
+            target = output_dir / "crawl_records" / date / client_id / "raw_records.json"
+            target.parent.mkdir(parents=True, exist_ok=True)
+            _write_json(
+                target,
+                date_records,
+            )
+    summary = {
+        "client_ids": selected_ids,
+        "crawl_dates": crawl_dates,
+        "output_dir": str(output_dir.resolve()),
+    }
+    _write_json(output_dir / "manifest.json", summary)
+    return summary
+
+
 def export_content_research_samples(data_dir, output_dir, selectors=DEFAULT_SELECTORS):
     data_dir = Path(data_dir)
     output_dir = Path(output_dir)
@@ -114,10 +166,17 @@ def main(argv=None):
     parser.add_argument("--data-dir", default=str(ROOT / "data"))
     parser.add_argument("--output-dir", required=True, help="A new cloud-side directory to create.")
     parser.add_argument("--client", action="append", dest="selectors", help="Exact client ID, name, or brand; repeatable.")
+    parser.add_argument("--citation-research", action="store_true", help="Export only recent crawl records and question groups.")
+    parser.add_argument("--days", type=int, default=3, help="Recent actual crawl dates per client in citation-research mode.")
     args = parser.parse_args(argv)
     selectors = args.selectors or list(DEFAULT_SELECTORS)
     try:
-        summary = export_content_research_samples(args.data_dir, args.output_dir, selectors)
+        if args.citation_research:
+            summary = export_citation_research_data(
+                args.data_dir, args.output_dir, selectors, days=args.days,
+            )
+        else:
+            summary = export_content_research_samples(args.data_dir, args.output_dir, selectors)
     except ValueError as exc:
         parser.error(str(exc))
     print("[GEO] 已导出客户：" + "、".join(summary["client_ids"]))

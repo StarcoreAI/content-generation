@@ -3,7 +3,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from scripts.export_content_research_samples import export_content_research_samples
+from scripts.export_content_research_samples import (
+    export_citation_research_data,
+    export_content_research_samples,
+)
 
 
 class ExportContentResearchSamplesTests(unittest.TestCase):
@@ -92,6 +95,42 @@ class ExportContentResearchSamplesTests(unittest.TestCase):
                 export_content_research_samples(data_dir, output_dir, ["崔红蕾"])
 
             self.assertFalse(output_dir.exists())
+
+    def test_exports_each_clients_latest_actual_crawl_days_by_date(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            data_dir = Path(tmp) / "data"
+            output_dir = Path(tmp) / "export"
+            self._seed_data(data_dir)
+            self._write_json(data_dir / "raw_records.json", [
+                {"client_id": "cui", "today": "2026-08-01", "question": "old"},
+                {"client_id": "cui", "today": "2026-08-02", "question": "day-2"},
+                {"client_id": "cui", "today": "2026-08-03", "question": "day-3"},
+                {"client_id": "cui", "today": "2026-08-04", "question": "day-4"},
+                {"client_id": "cui", "today": "2026-08-04", "question": "day-4-b"},
+                {"client_id": "gu", "today": "2026-08-03", "question": "gu-day-1"},
+                {"client_id": "gu", "today": "2026-08-04", "question": "gu-day-2"},
+                {"client_id": "other", "today": "2026-08-04", "question": "private"},
+            ])
+
+            summary = export_citation_research_data(
+                data_dir, output_dir, ["cui", "gu"], days=3,
+            )
+
+            self.assertEqual(summary["crawl_dates"], {
+                "cui": ["2026-08-02", "2026-08-03", "2026-08-04"],
+                "gu": ["2026-08-03", "2026-08-04"],
+            })
+            self.assertEqual(
+                [item["question"] for item in json.loads(
+                    (output_dir / "crawl_records" / "2026-08-04" / "cui" / "raw_records.json")
+                    .read_text(encoding="utf-8")
+                )],
+                ["day-4", "day-4-b"],
+            )
+            self.assertFalse((output_dir / "crawl_records" / "2026-08-01").exists())
+            self.assertFalse((output_dir / "crawl_records" / "2026-08-04" / "other").exists())
+            self.assertFalse((output_dir / "knowledge_base").exists())
+            self.assertEqual(set(json.loads((output_dir / "probe_groups.json").read_text(encoding="utf-8"))), {"cui", "gu"})
 
 
 if __name__ == "__main__":
