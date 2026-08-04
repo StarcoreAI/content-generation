@@ -32,6 +32,7 @@ Already completed on 2026-07-07:
 - Unzipped into `/srv/geo-content-v2`.
 - Created conda env `geo-content-v2` with Python `3.12.13`.
 - Installed `requirements.txt`.
+- LibreOffice is installed (verified on 2026-08-04); verify with `libreoffice --version` or `soffice --version` before relying on server-side document conversion.
 - Created `.env`, `data/`, `pdf/`, and `logs/`.
 - Manual gunicorn smoke test succeeded on `18080`.
 - Manual gunicorn process was stopped; `18080` should be free before creating

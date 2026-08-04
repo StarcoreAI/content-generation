@@ -251,14 +251,14 @@ class ContentGenerationUiTests(unittest.TestCase):
         self.assertIn("分析范围", template)
         self.assertIn("select.value = '__all_questions__';", script)
 
-    def test_current_handoff_docs_describe_the_active_content_route_only(self):
+    def test_current_product_docs_describe_the_active_content_route_only(self):
         docs = [
-            ROOT / "接手文档.md",
             ROOT / "docs" / "content-plan.md",
             ROOT / "docs" / "knowledge-base-direction.md",
         ]
         text = "\n".join(path.read_text(encoding="utf-8") for path in docs)
 
+        self.assertFalse((ROOT / "接手文档.md").exists())
         self.assertFalse((ROOT / "下一位Agent交接提示词.md").exists())
         self.assertIn("单阶段写作", text)
         self.assertIn("运营显式选择", text)
