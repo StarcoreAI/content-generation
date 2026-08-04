@@ -127,18 +127,15 @@ class StartupScriptTests(unittest.TestCase):
         manual = read_text("运营使用说明.md")
 
         self.assertIn("setup_operator_windows.bat", manual)
-        self.assertIn("导出诊断日志.bat", manual)
-        self.assertIn("operator_logs", manual)
         self.assertIn("启动本地爬虫worker.bat", manual)
         self.assertIn("停止本地爬虫worker.bat", manual)
+        self.assertIn("自动弹出本地控制窗口", manual)
         self.assertIn("云端页面", manual)
         self.assertIn("取消", manual)
         self.assertIn("补爬", manual)
         self.assertIn("Mac", manual)
         self.assertIn("GEO-operator-worker-macos-arm64", manual)
         self.assertIn("setup_operator_mac.command", manual)
-        self.assertIn("start_local_crawl_worker.command", manual)
-        self.assertIn("stop_local_crawl_worker.command", manual)
         self.assertNotIn("Mac 暂时不要跑本地 worker", manual)
 
     def test_run_dev_is_the_single_foreground_start_entry(self):

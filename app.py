@@ -715,17 +715,12 @@ def settings_username():
 
 
 def get_settings(username=None):
-    settings = get_global_settings()
-    username = username if username is not None else settings_username()
-    if username:
-        settings.update(load(user_settings_path(username), {}))
-    return settings
+    """Model settings are system-wide; username is kept for caller compatibility."""
+    return get_global_settings()
 
 
 def save_current_settings(data):
-    username = settings_username()
-    path = user_settings_path(username) if username else F_SETTINGS
-    settings = load(path, {}) if username else get_global_settings()
+    settings = get_global_settings()
     if data.get("api_key") and data["api_key"] not in ("***", ""):
         settings["api_key"] = data["api_key"]
     if data.get("tavily_api_key") and data["tavily_api_key"] not in ("***", ""):
@@ -733,7 +728,7 @@ def save_current_settings(data):
     for key in ["base_url", "model", "preset"]:
         if key in data:
             settings[key] = data[key]
-    save(path, settings)
+    save(F_SETTINGS, settings)
 
 def get_tavily_api_key(settings=None):
     return os.environ.get("TAVILY_API_KEY", "").strip() or str((settings or get_settings()).get("tavily_api_key") or "").strip()

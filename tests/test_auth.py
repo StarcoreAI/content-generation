@@ -713,7 +713,7 @@ class UserSettingsTests(unittest.TestCase):
                 else:
                     geo_app.F_DISTRIBUTION_CATALOG = original_catalog
 
-    def test_user_settings_override_global_without_affecting_other_users(self):
+    def test_model_settings_are_shared_between_operators(self):
         with isolated_auth_app():
             geo_app.save(geo_app.F_SETTINGS, {
                 "api_key": "global-key",
@@ -723,6 +723,11 @@ class UserSettingsTests(unittest.TestCase):
             })
             create_user(geo_app.F_USERS, "alice", "secret-pass", role="operator")
             create_user(geo_app.F_USERS, "bob", "secret-pass", role="operator")
+            geo_app.save(geo_app.user_settings_path("alice"), {
+                "api_key": "legacy-alice-key",
+                "base_url": "https://legacy-alice.example.com",
+                "model": "legacy-alice-model",
+            })
 
             alice = geo_app.app.test_client()
             login_as(alice, "alice")
@@ -731,27 +736,31 @@ class UserSettingsTests(unittest.TestCase):
                 "base_url": "https://alice.example.com",
                 "model": "alice-model",
                 "preset": "alice",
+                "tavily_api_key": "alice-tavily-key",
             })
             self.assertEqual(saved.status_code, 200)
 
             bob = geo_app.app.test_client()
             login_as(bob, "bob")
             bob_settings = bob.get("/api/settings").get_json()
-            self.assertEqual(bob_settings["base_url"], "https://global.example.com")
-            self.assertEqual(bob_settings["model"], "global-model")
+            self.assertEqual(bob_settings["base_url"], "https://alice.example.com")
+            self.assertEqual(bob_settings["model"], "alice-model")
             self.assertTrue(bob_settings["has_key"])
+            self.assertTrue(bob_settings["has_tavily_key"])
 
-            bob.post("/api/settings", json={
+            updated = bob.post("/api/settings", json={
                 "api_key": "bob-key",
                 "base_url": "https://bob.example.com",
                 "model": "bob-model",
             })
+            self.assertEqual(updated.status_code, 200)
 
-            self.assertEqual(alice.get("/api/settings").get_json()["model"], "alice-model")
+            self.assertEqual(alice.get("/api/settings").get_json()["model"], "bob-model")
             self.assertEqual(bob.get("/api/settings").get_json()["model"], "bob-model")
-            self.assertEqual(geo_app.get_settings("alice")["api_key"], "alice-key")
+            self.assertEqual(geo_app.get_settings("alice")["api_key"], "bob-key")
             self.assertEqual(geo_app.get_settings("bob")["api_key"], "bob-key")
-            self.assertEqual(geo_app.get_settings()["api_key"], "global-key")
+            self.assertEqual(geo_app.get_settings()["api_key"], "bob-key")
+            self.assertEqual(geo_app.load(geo_app.F_SETTINGS, {})["tavily_api_key"], "alice-tavily-key")
 
     def test_new_user_settings_inherit_global_defaults(self):
         with isolated_auth_app():

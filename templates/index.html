@@ -375,7 +375,7 @@
 <!-- ═══ 客户知识库 ═══ -->
 <div class="page" id="page-knowledge-customer">
   <div class="pg-hd">
-    <div><div class="pg-title">✦ <em>客户知识库</em></div><div class="pg-sub">将客户资料解析与 AI 联网补充整理为一份可编辑总资料；不会自动参与内容生产</div></div>
+    <div><div class="pg-title">✦ <em>客户知识库</em></div><div class="pg-sub">将客户资料解析与 AI 联网补充整理为一份可编辑总资料；内容生产默认使用，可在当次生成时取消</div></div>
     <div class="acts">
       <button class="btn btn-o btn-sm" onclick="downloadKnowledgeDocx('customer')">下载 DOCX</button><button class="btn btn-o btn-sm" onclick="loadCustomerKnowledge()">刷新</button>
     </div>
@@ -593,7 +593,7 @@
     <div class="form-row">
       <div class="fld"><label>Tavily API Key（联网搜索）</label><input type="password" id="set-tavily-key" placeholder="填入 Tavily API Key"></div>
     </div>
-    <div style="font-size:11px;color:var(--text3);margin-bottom:14px">API Key 保存在本地服务器 data/settings.json</div>
+    <div style="font-size:11px;color:var(--text3);margin-bottom:14px">全体账号共用同一套模型配置；任一账号保存后会立即应用到全系统。配置保存在本地服务器 data/settings.json</div>
     <div class="acts">
       <button class="btn btn-p btn-sm" onclick="saveSettings()">保存配置</button>
       <button class="btn btn-o btn-sm" onclick="testApi()"><span class="spin" id="spTest" style="display:none"></span>测试连接</button>
