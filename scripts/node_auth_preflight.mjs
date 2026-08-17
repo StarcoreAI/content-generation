@@ -62,27 +62,18 @@ function hasMacChromiumExecutable(chromiumRoot) {
 const STRICT_LOGIN_PLATFORMS = new Set(["qwen"]);
 
 const PLATFORM_AUTH_COOKIES = {
-  deepseek: [{ hosts: ["deepseek.com"], names: ["ds_session_id"] }],
+  deepseek: [],
   doubao: [{
     hosts: ["doubao.com", "bytedance.com"],
     names: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"]
   }],
   kimi: [{ hosts: ["kimi.com", "moonshot.cn"], names: ["kimi-auth"] }],
-  qwen: [{ hosts: ["qianwen.com"], names: ["b-user-id", "tongyi_sso_ticket"] }],
+  qwen: [{ hosts: ["qianwen.com"], names: ["tongyi_sso_ticket", "tongyi_sso_ticket_hash"] }],
   yuanbao: [{ hosts: ["tencent.com", "yuanbao.tencent.com"], names: ["hy_token", "hy_user"] }],
   wenxin: [{
     hosts: ["baidu.com", "yiyan.baidu.com"],
     names: ["BDUSS", "BDUSS_BFESS", "STOKEN", "STOKEN_BFESS"]
   }]
-};
-
-const PLATFORM_STATE_HOSTS = {
-  deepseek: ["deepseek.com"],
-  doubao: ["doubao.com", "bytedance.com"],
-  kimi: ["kimi.com", "moonshot.cn"],
-  qwen: ["qianwen.com"],
-  yuanbao: ["tencent.com"],
-  wenxin: ["baidu.com"]
 };
 
 function cookieIsUsable(cookie) {
@@ -107,25 +98,94 @@ async function platformHasAuthCookie(page, platform) {
   return cookies.some((cookie) => cookieMatchesPlatform(cookie, platform));
 }
 
+function storageValueHasAuth(rawValue) {
+  const raw = String(rawValue ?? "").trim();
+  if (!raw || raw === "null" || raw === "undefined") return false;
+  try {
+    const parsed = JSON.parse(raw);
+    const value = parsed && typeof parsed === "object" && "value" in parsed
+      ? parsed.value
+      : parsed;
+    return typeof value === "string" ? value.trim().length > 0 : Boolean(value);
+  } catch {
+    return true;
+  }
+}
+
+function stateHasBrowserStorageAuth(state, platform) {
+  const origins = Array.isArray(state?.origins) ? state.origins : [];
+  for (const origin of origins) {
+    const storage = Array.isArray(origin?.localStorage) ? origin.localStorage : [];
+    const values = new Map(storage.map((item) => [String(item?.name || ""), item?.value]));
+    if (
+      platform === "deepseek" &&
+      String(origin?.origin || "").includes("chat.deepseek.com") &&
+      storageValueHasAuth(values.get("userToken"))
+    ) {
+      return true;
+    }
+    if (
+      platform === "kimi" &&
+      String(origin?.origin || "").includes("kimi.com") &&
+      (storageValueHasAuth(values.get("access_token")) || storageValueHasAuth(values.get("refresh_token")))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stateHasVerifiedAuth(state, platform) {
+  const cookies = Array.isArray(state?.cookies) ? state.cookies : [];
+  return (
+    cookies.some((cookie) => cookieMatchesPlatform(cookie, platform)) ||
+    stateHasBrowserStorageAuth(state, platform)
+  );
+}
+
+async function platformHasBrowserStorageAuth(page, platform) {
+  if (!new Set(["deepseek", "kimi"]).has(platform)) return false;
+  return page.evaluate((currentPlatform) => {
+    const hasAuthValue = (rawValue) => {
+      const raw = String(rawValue ?? "").trim();
+      if (!raw || raw === "null" || raw === "undefined") return false;
+      try {
+        const parsed = JSON.parse(raw);
+        const value = parsed && typeof parsed === "object" && "value" in parsed
+          ? parsed.value
+          : parsed;
+        return typeof value === "string" ? value.trim().length > 0 : Boolean(value);
+      } catch {
+        return true;
+      }
+    };
+    if (currentPlatform === "deepseek") {
+      return hasAuthValue(window.localStorage.getItem("userToken"));
+    }
+    return (
+      hasAuthValue(window.localStorage.getItem("access_token")) ||
+      hasAuthValue(window.localStorage.getItem("refresh_token"))
+    );
+  }, platform).catch(() => false);
+}
+
+async function platformHasAuthEvidence(page, platform) {
+  return (
+    await platformHasAuthCookie(page, platform) ||
+    await platformHasBrowserStorageAuth(page, platform)
+  );
+}
+
 function validateSavedState(storageState, platform) {
   const raw = fs.readFileSync(storageState, "utf8");
   const state = JSON.parse(raw);
   const cookies = Array.isArray(state.cookies) ? state.cookies : [];
-  const origins = Array.isArray(state.origins) ? state.origins : [];
   const hasAuthCookie = cookies.some((cookie) => cookieMatchesPlatform(cookie, platform));
-  const stateHosts = PLATFORM_STATE_HOSTS[platform] || [];
-  const hasPlatformOrigin = origins.some((item) => {
-    try {
-      const host = new URL(String(item?.origin || "")).hostname.toLowerCase();
-      return stateHosts.some((expected) => host === expected || host.endsWith(`.${expected}`));
-    } catch {
-      return false;
-    }
-  });
-  if (!hasAuthCookie && !hasPlatformOrigin) {
-    throw new Error(`saved state has no ${platform} login cookie or browser storage`);
+  const hasBrowserStorageAuth = stateHasBrowserStorageAuth(state, platform);
+  if (!stateHasVerifiedAuth(state, platform)) {
+    throw new Error(`saved state has no verified ${platform} login credential`);
   }
-  return { hasAuthCookie, hasPlatformOrigin };
+  return { hasAuthCookie, hasBrowserStorageAuth };
 }
 
 async function saveStorageState(context, adapter, storageState) {
@@ -153,12 +213,9 @@ async function saveVerifiedStorageState(context, adapter, page, platform, storag
     }
     await saveStorageState(context, adapter, tempState);
     const evidence = validateSavedState(tempState, platform);
-    if (platform === "kimi" && !evidence.hasAuthCookie) {
-      throw new Error("Kimi login cookie was not found; the page is still logged out");
-    }
     fs.copyFileSync(tempState, storageState);
     console.log(
-      `[GEO] ${platform}: login state saved (${evidence.hasAuthCookie ? "auth cookie" : "browser storage"}) -> ${storageState}`
+      `[GEO] ${platform}: login state saved (${evidence.hasAuthCookie ? "auth cookie" : "browser token"}) -> ${storageState}`
     );
   } finally {
     fs.rmSync(tempState, { force: true });
@@ -287,7 +344,12 @@ async function qwenHasSessionCookie(page) {
     const name = String(cookie.name || "");
     const expires = Number(cookie.expires || 0);
     const notExpired = expires <= 0 || expires > Date.now() / 1000;
-    return domain.includes("qianwen.com") && name === "b-user-id" && notExpired;
+    return (
+      domain.includes("qianwen.com") &&
+      ["tongyi_sso_ticket", "tongyi_sso_ticket_hash"].includes(name) &&
+      Boolean(cookie.value) &&
+      notExpired
+    );
   });
 }
 
@@ -358,9 +420,9 @@ async function qwenLoginState(page) {
   if (!state.loginAction) {
     state.accountSignal = await qwenHasAccountSignal(page);
   }
-  // Guest pages can expose either a visitor cookie or account-like CSS names.
-  // Require both independent signals so a logged-out Qwen page is never skipped.
-  state.loggedIn = !state.loginAction && state.sessionCookie && state.accountSignal;
+  // b-user-id exists for guests. The SSO ticket is the actual login signal;
+  // account/avatar markup is only diagnostic because the current UI may hide it.
+  state.loggedIn = !state.loginAction && state.sessionCookie;
   return state;
 }
 
@@ -397,13 +459,13 @@ async function waitForPlatformReady(adapter, page, timeoutMs, platformOverride =
         typeof adapter.isLoggedIn === "function"
           ? await adapter.isLoggedIn(page).catch(() => false)
           : !(await pageHasLoginBlocker(page));
-      const authCookie = await platformHasAuthCookie(page, platform);
-      const visibleLoginBlocker = authCookie
+      const authEvidence = await platformHasAuthEvidence(page, platform);
+      const visibleLoginBlocker = authEvidence
         ? await pageHasLoginBlocker(page).catch(() => false)
         : true;
-      loggedIn = adapterLoggedIn || (authCookie && !visibleLoginBlocker);
-      // Kimi exposes a guest composer. Never accept it without the real login cookie.
-      if (platform === "kimi") loggedIn = authCookie && !visibleLoginBlocker;
+      // Guest pages can expose a working-looking composer. Every supported
+      // platform must have a verified login cookie/token before it can pass.
+      loggedIn = authEvidence && (adapterLoggedIn || !visibleLoginBlocker);
     }
     let ready = false;
     if (loggedIn && typeof adapter.waitUntilInputReady === "function") {
@@ -540,7 +602,14 @@ async function main() {
   console.log("[GEO] all platform logins are ready.");
 }
 
-main().catch((error) => {
-  console.error(`[GEO] auth preflight failed: ${error?.message || String(error)}`);
-  process.exitCode = 1;
-});
+const isDirectRun = Boolean(process.argv[1]) &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href;
+
+if (isDirectRun) {
+  main().catch((error) => {
+    console.error(`[GEO] auth preflight failed: ${error?.message || String(error)}`);
+    process.exitCode = 1;
+  });
+}
+
+export { qwenLoginState, stateHasVerifiedAuth };
