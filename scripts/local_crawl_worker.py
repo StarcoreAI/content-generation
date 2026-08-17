@@ -479,6 +479,7 @@ def main(argv=None):
     log(f"local worker: {args.worker_id}; platforms: {', '.join(platforms)}")
     log(f"crawler concurrency per platform job: {args.crawler_concurrency}")
     if args.local_login_only:
+        failed_platforms = []
         for platform in platforms:
             storage_state_path = platform_storage_state_path(platform)
             log(f"opening local login setup: {platform} -> {storage_state_path}")
@@ -490,7 +491,10 @@ def main(argv=None):
             )
             if not auth_result.get("ok"):
                 log(f"local login setup failed: {platform}: {auth_result.get('message', '')}")
-                return 1
+                failed_platforms.append(platform)
+        if failed_platforms:
+            log(f"local login setup finished with failures: {', '.join(failed_platforms)}")
+            return 1
         log("local login setup passed")
         return 0
     if args.check:

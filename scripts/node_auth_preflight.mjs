@@ -40,11 +40,23 @@ function packagedBrowserRoot(crawlerRoot) {
     const chromiumRoot = path.join(browserRoot, entry.name);
     if (fs.existsSync(path.join(chromiumRoot, "chrome-win64", "chrome.exe"))) return browserRoot;
     if (fs.existsSync(path.join(chromiumRoot, "chrome-win", "chrome.exe"))) return browserRoot;
-    if (fs.existsSync(path.join(chromiumRoot, "chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium"))) {
-      return browserRoot;
-    }
+    if (hasMacChromiumExecutable(chromiumRoot)) return browserRoot;
   }
   return "";
+}
+
+function hasMacChromiumExecutable(chromiumRoot) {
+  for (const entry of fs.readdirSync(chromiumRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory() || !entry.name.startsWith("chrome-mac")) continue;
+    const macRoot = path.join(chromiumRoot, entry.name);
+    for (const app of fs.readdirSync(macRoot, { withFileTypes: true })) {
+      if (!app.isDirectory() || !app.name.endsWith(".app")) continue;
+      const executableRoot = path.join(macRoot, app.name, "Contents", "MacOS");
+      if (!fs.existsSync(executableRoot)) continue;
+      if (fs.readdirSync(executableRoot, { withFileTypes: true }).some((item) => item.isFile())) return true;
+    }
+  }
+  return false;
 }
 
 const STRICT_LOGIN_PLATFORMS = new Set(["qwen"]);
@@ -255,7 +267,9 @@ async function qwenLoginState(page) {
   if (!state.loginAction) {
     state.accountSignal = await qwenHasAccountSignal(page);
   }
-  state.loggedIn = !state.loginAction && (state.sessionCookie || state.accountSignal);
+  // Guest pages can expose either a visitor cookie or account-like CSS names.
+  // Require both independent signals so a logged-out Qwen page is never skipped.
+  state.loggedIn = !state.loginAction && state.sessionCookie && state.accountSignal;
   return state;
 }
 

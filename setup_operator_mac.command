@@ -3,6 +3,23 @@ set -euo pipefail
 
 cd "$(dirname "$0")"
 
+clear_macos_quarantine() {
+  if ! command -v xattr >/dev/null 2>&1; then
+    return
+  fi
+  for target in "$@"; do
+    [[ -e "$target" ]] || continue
+    xattr -dr com.apple.quarantine "$target" 2>/dev/null || true
+  done
+}
+
+clear_macos_quarantine "$(pwd)"
+
+PACKAGED_NODE_BIN="$(pwd)/runtime/node/bin"
+if [[ -x "$PACKAGED_NODE_BIN/node" ]]; then
+  export PATH="$PACKAGED_NODE_BIN:$PATH"
+fi
+
 source scripts/operator_log.sh
 start_operator_log setup-mac
 
@@ -21,7 +38,8 @@ if ! command -v python3 >/dev/null 2>&1; then
 fi
 
 if ! command -v node >/dev/null 2>&1; then
-  echo "[ERROR] node was not found. Install Node.js LTS, then run this file again."
+  echo "[ERROR] node was not found in this operator package."
+  echo "[ERROR] Download the latest Mac operator package instead of installing Node.js manually."
   exit 1
 fi
 
@@ -29,6 +47,8 @@ echo "[GEO] detecting local crawler folder..."
 GEO_NODE_CRAWLER_ROOT="$(python3 scripts/resolve_node_crawler_root.py)"
 export GEO_NODE_CRAWLER_ROOT
 echo "[GEO] crawler root: $GEO_NODE_CRAWLER_ROOT"
+clear_macos_quarantine "$GEO_NODE_CRAWLER_ROOT"
+find "$GEO_NODE_CRAWLER_ROOT/ms-playwright" -path "*/chrome-mac*/*.app/Contents/MacOS/*" -type f -exec chmod +x {} \; 2>/dev/null || true
 
 if [[ ! -f "$GEO_NODE_CRAWLER_ROOT/package.json" ]]; then
   echo "[ERROR] Missing Node crawler package.json: $GEO_NODE_CRAWLER_ROOT/package.json"
@@ -47,9 +67,9 @@ if [[ ! -f "$GEO_NODE_CRAWLER_ROOT/node_modules/playwright-core/package.json" ]]
   exit 1
 fi
 
-if ! find "$GEO_NODE_CRAWLER_ROOT/ms-playwright" -path "*/chrome-mac/Chromium.app/Contents/MacOS/Chromium" -type f -print -quit | grep -q .; then
+if ! find "$GEO_NODE_CRAWLER_ROOT/ms-playwright" -path "*/chrome-mac*/*.app/Contents/MacOS/*" -type f -print -quit | grep -q .; then
   echo "[ERROR] Operator package is incomplete: missing packaged Playwright Chromium."
-  echo "[ERROR] Expected a path like: $GEO_NODE_CRAWLER_ROOT/ms-playwright/chromium-*/chrome-mac/Chromium.app"
+  echo "[ERROR] Expected a path like: $GEO_NODE_CRAWLER_ROOT/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app"
   exit 1
 fi
 

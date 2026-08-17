@@ -578,17 +578,20 @@ async def wait_for_captcha_if_needed(page, worker_id=0):
 # ── 新对话 ───────────────────────────────────────────────
 async def goto_new_chat(page):
     """
-    确保真正开启新对话：验证 URL 已变为新的 chat 页面才算成功。
-    策略1：点击"新对话"按钮 + 等待URL变化确认
+    确保真正开启新对话。新版豆包切换对话时 URL 可能不变化，
+    因此点击成功且输入框恢复可用即可交给外层的空会话校验继续确认。
+    策略1：点击"新对话"按钮 + 等待输入框或URL变化
     策略2：直接 goto 首页（首页每次都是全新对话入口）
     """
     old_url = page.url
 
     # ── 策略1：点击"新对话"按钮 ─────────────────────────
-    await page.evaluate("""() => {
+    clicked = await page.evaluate("""() => {
         const keywords = ['新对话', '新建对话', 'New Chat', '新聊天'];
         const candidates = Array.from(document.querySelectorAll(
             'button, a, [role="button"], [class*="new-chat"], [class*="newchat"], ' +
+            '#flow_chat_sidebar [class*="nav-link-"], ' +
+            '#flow_chat_sidebar .cursor-pointer, ' +
             '[class*="sidebar"] button, [class*="nav"] button'
         ));
         for (const el of candidates) {
@@ -600,6 +603,23 @@ async def goto_new_chat(page):
         }
         return false;
     }""")
+
+    # 新版页面会在同一 URL 内清空会话；是否确实为空由 crawl_worker
+    # 后续的输入框和历史消息两项检查负责，避免这里误判后又跳回旧会话。
+    if clicked:
+        for _ in range(10):
+            await page.wait_for_timeout(300)
+            for selector in [
+                'textarea[placeholder*="发消息"]',
+                'textarea[placeholder*="消息"]',
+                'textarea[placeholder*="输入"]',
+                '[contenteditable="true"][role="textbox"]',
+                'textarea',
+            ]:
+                input_box = await page.query_selector(selector)
+                if input_box and await input_box.is_visible():
+                    print("  → 点击新对话成功 (输入框已就绪)")
+                    return
 
     # 等待 URL 变化（最多5秒），URL变了说明真正进入了新对话页
     new_url_detected = False
@@ -621,7 +641,7 @@ async def goto_new_chat(page):
             pass  # URL变了但textarea没出现，继续降级
 
     # ── 策略2：直接 goto 豆包首页（首页每次都是全新对话）──
-    print("  → 点击新对话未检测到URL变化，降级goto首页...")
+    print("  → 点击新对话未生效，降级goto首页...")
     try:
         await page.goto(DOUBAO_URL, wait_until="domcontentloaded", timeout=20000)
         await page.wait_for_selector('textarea', timeout=8000)
@@ -636,6 +656,29 @@ async def goto_new_chat(page):
             pass
 
 # ── 登录 ─────────────────────────────────────────────────
+async def wait_for_manual_login(page, context, worker_id=0):
+    """Keep the crawl window open while the operator completes Doubao login."""
+    print(f"\n  [Worker {worker_id}] 豆包尚未登录，请在当前浏览器窗口完成登录")
+    print(f"  [Worker {worker_id}] 登录成功后会自动继续，最长等待5分钟...\n")
+
+    for _ in range(150):
+        try:
+            await page.wait_for_timeout(2000)
+        except Exception:
+            return False
+        if not await check_logged_in(page):
+            continue
+
+        await page.wait_for_timeout(2000)
+        await save_cookies(context)
+        await save_storage_state(context, PLATFORM, mark_ok=True)
+        print(f"  [Worker {worker_id}] 豆包登录成功，状态已保存，继续爬取")
+        return True
+
+    print(f"  [Worker {worker_id}] 等待豆包登录超时")
+    return False
+
+
 async def login_doubao_async():
     """打开浏览器让用户手动登录豆包，自动检测并复验后保存状态。"""
     os.makedirs(str(_pl.Path(COOKIE_FILE).parent), exist_ok=True)
@@ -711,11 +754,12 @@ async def crawl_worker(worker_id, questions, pw, results_dict, lock):
 
     # 检查登录状态
     if not await check_logged_in(page):
-        await browser.close()
-        async with lock:
-            for idx, q in questions:
-                results_dict[idx] = {"ok": False, "error": "need_login", "question": q}
-        return
+        if not await wait_for_manual_login(page, context, worker_id):
+            await browser.close()
+            async with lock:
+                for idx, q in questions:
+                    results_dict[idx] = {"ok": False, "error": "need_login", "question": q}
+            return
     print(f"  [Worker {worker_id}] 已登录，开始爬取 {len(questions)} 题")
 
     for i, (idx, question) in enumerate(questions):

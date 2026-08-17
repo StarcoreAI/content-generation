@@ -322,6 +322,25 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             ],
         )
 
+    def test_main_local_login_only_attempts_remaining_platforms_after_one_fails(self):
+        with mock.patch.object(local_crawl_worker, "build_cloud_client") as build_cloud_client, \
+                mock.patch.object(local_crawl_worker, "run_node_auth_preflight") as run_auth:
+            build_cloud_client.side_effect = AssertionError("cloud should not be used for local login setup")
+            run_auth.side_effect = [
+                {"ok": False, "message": "deepseek login not confirmed"},
+                {"ok": True, "message": "yuanbao ready"},
+            ]
+
+            code = local_crawl_worker.main(
+                ["--local-login-only", "--platforms", "deepseek,yuanbao"]
+            )
+
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            [call.args[0] for call in run_auth.call_args_list],
+            [["deepseek"], ["yuanbao"]],
+        )
+
     def test_main_check_does_not_start_auth_preflight_when_basic_check_fails(self):
         with mock.patch.object(local_crawl_worker, "build_cloud_client", return_value=FakeCloudClient([])), \
                 mock.patch.object(local_crawl_worker, "check_environment") as check_environment, \

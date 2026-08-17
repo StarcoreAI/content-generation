@@ -297,7 +297,8 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
         self.assertIn("soft login check did not confirm readiness; continuing", script)
         self.assertIn("await waitForPlatformReady(adapter, page, timeoutMs, platform)", script)
         self.assertIn("chrome-mac", script)
-        self.assertIn("Chromium.app", script)
+        self.assertIn('app.name.endsWith(".app")', script)
+        self.assertIn('path.join(macRoot, app.name, "Contents", "MacOS")', script)
 
     def test_node_auth_preflight_requires_qwen_login_not_just_input(self):
         script = (Path(__file__).resolve().parents[1] / "scripts" / "node_auth_preflight.mjs").read_text(encoding="utf-8")
@@ -317,7 +318,10 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             script.index("state.sessionCookie = await qwenHasSessionCookie(page)"),
         )
         self.assertIn("qwenHasSessionCookie(page)", script)
-        self.assertIn("!state.loginAction && (state.sessionCookie || state.accountSignal)", script)
+        self.assertIn(
+            "!state.loginAction && state.sessionCookie && state.accountSignal",
+            script,
+        )
         self.assertIn("platform === \"qwen\"", script)
         self.assertIn("qwenIsLoggedIn(page)", script)
         self.assertIn("\\u767b\\u5f55", script)
@@ -759,7 +763,7 @@ ok
         self.assertNotIn("--accounts-file", captured["cmd"])
         self.assertNotIn("--concurrency", captured["cmd"])
 
-    def test_run_node_crawler_does_not_use_parent_storage_env_without_platform_state(self):
+    def test_run_node_crawler_uses_doubao_platform_save_target_without_existing_state(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             crawler_root = root / "crawler"
@@ -810,7 +814,9 @@ ok
                 )
 
         self.assertEqual(result["success"], 2)
-        self.assertNotIn("STORAGE_STATE_PATH", captured["env"])
+        expected_state = Path(__file__).resolve().parents[1] / "data" / "doubao_state.json"
+        self.assertEqual(captured["env"]["STORAGE_STATE_PATH"], str(expected_state))
+        self.assertNotEqual(captured["env"]["STORAGE_STATE_PATH"], str(stale_shared_state))
         self.assertNotIn("--accounts-file", captured["cmd"])
         self.assertNotIn("--concurrency", captured["cmd"])
 

@@ -221,7 +221,7 @@ def _packaged_browser_root(crawler_root):
             return browser_root
         if (chromium_dir / "chrome-win" / "chrome.exe").exists():
             return browser_root
-        if (chromium_dir / "chrome-mac" / "Chromium.app" / "Contents" / "MacOS" / "Chromium").exists():
+        if any(chromium_dir.glob("chrome-mac*/*.app/Contents/MacOS/*")):
             return browser_root
     return None
 
@@ -430,6 +430,8 @@ def run_node_crawler(
             "GEO_NODE_NEW_CONVERSATION_EVERY", "1"
         )
         storage_state_path = prepare_storage_state_for_node(platform, tmp_path)
+        if not storage_state_path and platform == "doubao":
+            storage_state_path = str(_platform_state_path(platform))
         if storage_state_path:
             env["STORAGE_STATE_PATH"] = storage_state_path
         else:
