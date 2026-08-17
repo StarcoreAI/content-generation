@@ -419,11 +419,13 @@ def build_cloud_client(args):
 
 
 def run_platform_loop(args, platform):
-    cloud = build_cloud_client(args)
+    cloud = None
     platform_worker_id = f"{args.worker_id}-{platform}"
     log(f"platform worker started: {platform_worker_id}")
     while True:
         try:
+            if cloud is None:
+                cloud = build_cloud_client(args)
             worked = run_once(
                 cloud,
                 worker_id=platform_worker_id,
@@ -434,6 +436,7 @@ def run_platform_loop(args, platform):
             )
         except Exception as exc:
             log(f"{platform} worker cycle failed: {exc}")
+            cloud = None
             worked = False
         if not worked:
             log(f"{platform} has no job; polling again in {args.poll_interval}s")
@@ -500,7 +503,11 @@ def main(argv=None):
         log("local login setup passed")
         return 0
     if args.check:
-        cloud = build_cloud_client(args)
+        try:
+            cloud = build_cloud_client(args)
+        except Exception as exc:
+            log(f"cloud login failed: {exc}")
+            return 1
         result = check_environment(cloud, platforms)
         print_check_result(result)
         if not result["ok"]:

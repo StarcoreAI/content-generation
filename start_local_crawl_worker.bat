@@ -68,7 +68,7 @@ if not exist "%GEO_NODE_CRAWLER_ROOT%\storage" mkdir "%GEO_NODE_CRAWLER_ROOT%\st
 set "STORAGE_STATE_PATH=%GEO_NODE_CRAWLER_ROOT%\storage\state.json"
 
 echo [GEO] environment preflight check...
-python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --username "%GEO_WORKER_USERNAME%" --password "%GEO_WORKER_PASSWORD%" --platforms "%GEO_WORKER_PLATFORMS%" --check --auth-mode none
+python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --platforms "%GEO_WORKER_PLATFORMS%" --check --auth-mode none
 if errorlevel 1 (
   echo [ERROR] preflight check failed.
   exit /b 1
@@ -78,7 +78,7 @@ echo [GEO] opening local control panel...
 start "GEO Local Crawler Control" powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%~dp0scripts\local_worker_control_panel.ps1"
 
 echo [GEO] waiting for cloud crawl jobs...
-python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --username "%GEO_WORKER_USERNAME%" --password "%GEO_WORKER_PASSWORD%" --platforms "%GEO_WORKER_PLATFORMS%"
+python scripts\local_crawl_worker.py --base-url "%GEO_WORKER_BASE_URL%" --platforms "%GEO_WORKER_PLATFORMS%"
 set "GEO_EXIT=%ERRORLEVEL%"
 
 echo [GEO] worker exited.
