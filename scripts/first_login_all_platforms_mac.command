@@ -46,7 +46,8 @@ mkdir -p "$GEO_NODE_CRAWLER_ROOT/storage"
 export STORAGE_STATE_PATH="$GEO_NODE_CRAWLER_ROOT/storage/state.json"
 
 echo "[GEO] opening each platform for login..."
-echo "[GEO] Finish login in the browser. The next platform opens automatically."
+echo "[GEO] Finish login in the browser and DO NOT close it manually."
+echo "[GEO] The browser closes only after the login state is saved, then the next platform opens."
 python3 scripts/local_crawl_worker.py --platforms "$GEO_WORKER_PLATFORMS" --local-login-only
 
 echo "[GEO] first login finished."

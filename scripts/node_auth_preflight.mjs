@@ -61,16 +61,108 @@ function hasMacChromiumExecutable(chromiumRoot) {
 
 const STRICT_LOGIN_PLATFORMS = new Set(["qwen"]);
 
+const PLATFORM_AUTH_COOKIES = {
+  deepseek: [{ hosts: ["deepseek.com"], names: ["ds_session_id"] }],
+  doubao: [{
+    hosts: ["doubao.com", "bytedance.com"],
+    names: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"]
+  }],
+  kimi: [{ hosts: ["kimi.com", "moonshot.cn"], names: ["kimi-auth"] }],
+  qwen: [{ hosts: ["qianwen.com"], names: ["b-user-id", "tongyi_sso_ticket"] }],
+  yuanbao: [{ hosts: ["tencent.com", "yuanbao.tencent.com"], names: ["hy_token", "hy_user"] }],
+  wenxin: [{
+    hosts: ["baidu.com", "yiyan.baidu.com"],
+    names: ["BDUSS", "BDUSS_BFESS", "STOKEN", "STOKEN_BFESS"]
+  }]
+};
+
+const PLATFORM_STATE_HOSTS = {
+  deepseek: ["deepseek.com"],
+  doubao: ["doubao.com", "bytedance.com"],
+  kimi: ["kimi.com", "moonshot.cn"],
+  qwen: ["qianwen.com"],
+  yuanbao: ["tencent.com"],
+  wenxin: ["baidu.com"]
+};
+
+function cookieIsUsable(cookie) {
+  const expires = Number(cookie?.expires || 0);
+  return Boolean(cookie?.value) && (expires <= 0 || expires > Date.now() / 1000);
+}
+
+function cookieMatchesPlatform(cookie, platform) {
+  if (!cookieIsUsable(cookie)) return false;
+  const domain = String(cookie.domain || "").toLowerCase();
+  const name = String(cookie.name || "");
+  return (PLATFORM_AUTH_COOKIES[platform] || []).some(
+    (rule) => rule.names.includes(name) && rule.hosts.some((host) => {
+      const normalizedDomain = domain.replace(/^\./, "");
+      return normalizedDomain === host || normalizedDomain.endsWith(`.${host}`);
+    })
+  );
+}
+
+async function platformHasAuthCookie(page, platform) {
+  const cookies = await page.context().cookies().catch(() => []);
+  return cookies.some((cookie) => cookieMatchesPlatform(cookie, platform));
+}
+
+function validateSavedState(storageState, platform) {
+  const raw = fs.readFileSync(storageState, "utf8");
+  const state = JSON.parse(raw);
+  const cookies = Array.isArray(state.cookies) ? state.cookies : [];
+  const origins = Array.isArray(state.origins) ? state.origins : [];
+  const hasAuthCookie = cookies.some((cookie) => cookieMatchesPlatform(cookie, platform));
+  const stateHosts = PLATFORM_STATE_HOSTS[platform] || [];
+  const hasPlatformOrigin = origins.some((item) => {
+    try {
+      const host = new URL(String(item?.origin || "")).hostname.toLowerCase();
+      return stateHosts.some((expected) => host === expected || host.endsWith(`.${expected}`));
+    } catch {
+      return false;
+    }
+  });
+  if (!hasAuthCookie && !hasPlatformOrigin) {
+    throw new Error(`saved state has no ${platform} login cookie or browser storage`);
+  }
+  return { hasAuthCookie, hasPlatformOrigin };
+}
+
 async function saveStorageState(context, adapter, storageState) {
   const adapterOptions =
     typeof adapter.getStorageStateOptions === "function"
       ? adapter.getStorageStateOptions()
       : {};
-  await context.storageState({
-    path: storageState,
-    indexedDB: true,
-    ...adapterOptions
-  });
+  try {
+    await context.storageState({
+      path: storageState,
+      indexedDB: true,
+      ...adapterOptions
+    });
+  } catch (error) {
+    console.log(`[GEO] storage-state extended save failed; retrying compatible mode: ${error.message}`);
+    await context.storageState({ path: storageState, indexedDB: true });
+  }
+}
+
+async function saveVerifiedStorageState(context, adapter, page, platform, storageState) {
+  const tempState = `${storageState}.tmp-${process.pid}-${Date.now()}`;
+  try {
+    if (page.isClosed()) {
+      throw new Error("browser page was closed before login state could be saved");
+    }
+    await saveStorageState(context, adapter, tempState);
+    const evidence = validateSavedState(tempState, platform);
+    if (platform === "kimi" && !evidence.hasAuthCookie) {
+      throw new Error("Kimi login cookie was not found; the page is still logged out");
+    }
+    fs.copyFileSync(tempState, storageState);
+    console.log(
+      `[GEO] ${platform}: login state saved (${evidence.hasAuthCookie ? "auth cookie" : "browser storage"}) -> ${storageState}`
+    );
+  } finally {
+    fs.rmSync(tempState, { force: true });
+  }
 }
 
 async function genericInputReady(page, timeoutMs = 1500) {
@@ -110,21 +202,20 @@ async function pageHasLoginBlocker(page) {
       if (/login|passport|oauth|signin|sign-in/i.test(url)) return true;
 
       const loginPattern =
-        /\u767b\u5f55|\u767b\u5165|\u626b\u7801\u767b\u5f55|\u624b\u673a\u53f7\u767b\u5f55|\u9a8c\u8bc1\u7801\u767b\u5f55|Log in|Sign in/i;
+        /\u767b\u5f55|\u767b\u5165|\u6ce8\u518c|\u626b\u7801\u767b\u5f55|\u624b\u673a\u53f7\u767b\u5f55|\u9a8c\u8bc1\u7801\u767b\u5f55|Log in|Sign in|Sign up/i;
       const roots = Array.from(
         document.querySelectorAll(
           "[role='dialog'], [aria-modal='true'], [class*='modal'], [class*='dialog'], [class*='login'], [class*='passport']"
         )
       ).filter(visible);
-      const candidates = roots.length ? roots : [document.body].filter(Boolean);
-      if (candidates.some((root) => loginPattern.test(compact(root.innerText || root.textContent || "")))) {
+      if (roots.some((root) => loginPattern.test(compact(root.innerText || root.textContent || "")))) {
         return true;
       }
 
       return Array.from(document.querySelectorAll("button, a, [role='button']"))
         .filter(visible)
         .some((node) =>
-          /^(\u767b\u5f55|\u767b\u5165|\u7acb\u5373\u767b\u5f55|\u626b\u7801\u767b\u5f55|Log in|Sign in)$/i.test(
+          /^(\u767b\u5f55|\u767b\u5165|\u6ce8\u518c|\u767b\u5f55\s*\/\s*\u6ce8\u518c|\u7acb\u5373\u767b\u5f55|\u626b\u7801\u767b\u5f55|Log in|Sign in|Sign up)$/i.test(
             compact(node.textContent || node.getAttribute("aria-label") || node.getAttribute("title") || "")
           )
         );
@@ -282,6 +373,10 @@ async function waitForPlatformReady(adapter, page, timeoutMs, platformOverride =
   const platform = platformOverride || adapter?.name || "";
   let lastQwenStateMessage = "";
   while (Date.now() < deadline) {
+    if (page.isClosed()) {
+      console.log(`[GEO] ${platform}: browser was closed before login state was saved.`);
+      return false;
+    }
     let loggedIn = false;
     if (platform === "qwen" && STRICT_LOGIN_PLATFORMS.has(platform)) {
       const state = await qwenLoginState(page).catch(() => ({
@@ -298,10 +393,17 @@ async function waitForPlatformReady(adapter, page, timeoutMs, platformOverride =
         lastQwenStateMessage = stateMessage;
       }
     } else {
-      loggedIn =
+      const adapterLoggedIn =
         typeof adapter.isLoggedIn === "function"
           ? await adapter.isLoggedIn(page).catch(() => false)
           : !(await pageHasLoginBlocker(page));
+      const authCookie = await platformHasAuthCookie(page, platform);
+      const visibleLoginBlocker = authCookie
+        ? await pageHasLoginBlocker(page).catch(() => false)
+        : true;
+      loggedIn = adapterLoggedIn || (authCookie && !visibleLoginBlocker);
+      // Kimi exposes a guest composer. Never accept it without the real login cookie.
+      if (platform === "kimi") loggedIn = authCookie && !visibleLoginBlocker;
     }
     let ready = false;
     if (loggedIn && typeof adapter.waitUntilInputReady === "function") {
@@ -374,14 +476,14 @@ async function runPlatform(platform, adapter, browser, storageState, timeoutMs, 
     }
     if (!ready) {
       const action = authMode === "manual" ? "finish login" : "confirm login";
-      console.log(`[GEO] ${platform}: please ${action} in the browser. The worker will continue automatically.`);
+      console.log(`[GEO] ${platform}: please ${action} in the browser. Keep the browser open; it will close automatically after the login state is safely saved.`);
       ready = await waitForPlatformReady(adapter, page, timeoutMs, platform);
     }
     if (!ready) {
-      console.log(`[GEO] ${platform}: login was not completed before timeout.`);
+      console.log(`[GEO] ${platform}: login was not completed or the browser was closed before saving.`);
       return false;
     }
-    await saveStorageState(context, adapter, storageState);
+    await saveVerifiedStorageState(context, adapter, page, platform, storageState);
     console.log(`[GEO] ${platform}: login ready.`);
     return true;
   } finally {
