@@ -2617,6 +2617,13 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(claimed["job"]["status"], "running")
             self.assertEqual(claimed["job"]["assigned_to"], "ops-laptop-1")
 
+            single_job_response = self.client.get(
+                f"/api/crawl_jobs?job_id={created['job']['id']}"
+            )
+            self.assertEqual(single_job_response.status_code, 200)
+            single_jobs = single_job_response.get_json()["jobs"]
+            self.assertEqual([job["id"] for job in single_jobs], [created["job"]["id"]])
+
             empty_claim = self.client.get("/api/crawl_jobs/next?worker_id=ops-laptop-2&platform=qwen")
             self.assertEqual(empty_claim.status_code, 200)
             self.assertFalse(empty_claim.get_json()["job"])

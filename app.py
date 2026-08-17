@@ -4394,10 +4394,13 @@ def current_crawl_job_worker_owner_filter():
 @app.route("/api/crawl_jobs", methods=["GET"])
 def list_crawl_jobs_api():
     client_id = request.args.get("client_id", "").strip()
+    job_id = request.args.get("job_id", "").strip()
     jobs = crawl_job_store.filter_jobs_by_owner(
         crawl_job_store.load_jobs(F_CRAWL_JOBS),
         current_crawl_job_owner_filter(),
     )
+    if job_id:
+        jobs = [job for job in jobs if job.get("id") == job_id]
     if client_id:
         jobs = [job for job in jobs if job.get("client_id") == client_id]
     return jsonify({"ok": True, "jobs": jobs})

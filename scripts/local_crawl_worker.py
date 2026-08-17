@@ -105,7 +105,9 @@ class CloudClient:
         return payload.get("jobs") or []
 
     def is_job_canceled(self, job_id):
-        for job in self.list_jobs():
+        query = urllib.parse.urlencode({"job_id": job_id})
+        payload = self.request_json("GET", f"/api/crawl_jobs?{query}")
+        for job in payload.get("jobs") or []:
             if job.get("id") == job_id:
                 return job.get("status") == "canceled"
         return False

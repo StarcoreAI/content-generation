@@ -53,6 +53,18 @@ class FlakySubmitCloudClient(FakeCloudClient):
 
 
 class LocalCrawlWorkerTests(unittest.TestCase):
+    def test_cancel_check_requests_only_the_target_job(self):
+        client = local_crawl_worker.CloudClient("http://worker.example")
+        client.request_json = mock.Mock(return_value={
+            "jobs": [{"id": "job/1", "status": "canceled"}]
+        })
+
+        self.assertTrue(client.is_job_canceled("job/1"))
+        client.request_json.assert_called_once_with(
+            "GET",
+            "/api/crawl_jobs?job_id=job%2F1",
+        )
+
     def test_default_platforms_include_kimi_before_doubao(self):
         self.assertEqual(
             local_crawl_worker.parse_platforms("all"),
