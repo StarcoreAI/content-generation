@@ -66,7 +66,10 @@ class CloudClient:
         self.password = password
         self.timeout = timeout
         self.cookie_jar = CookieJar()
-        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.cookie_jar))
+        self.opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}),
+            urllib.request.HTTPCookieProcessor(self.cookie_jar),
+        )
 
     def request_json(self, method, path, body=None):
         url = urllib.parse.urljoin(self.base_url, path.lstrip("/"))
