@@ -177,11 +177,60 @@ def finish_job(path, job_id, payload, now_fn, created_by=None):
                 item["updated_at"] = now_fn()
                 item["result_summary"] = sanitize_worker_payload(result_summary)
                 item["result_payload"] = result_payload
+                if status == "completed":
+                    try:
+                        final_total = max(0, int(result_summary.get("total") or 0))
+                    except (TypeError, ValueError):
+                        final_total = len(payload.get("results") or [])
+                    item["progress_completed"] = final_total
+                    item["progress_total"] = final_total
                 finished = deepcopy(item)
             updated.append(item)
         return updated, deepcopy(finished)
 
     return update_json(path, [], update_job)
+
+
+def update_job_progress(path, job_id, payload, now_fn, created_by=None):
+    payload = payload or {}
+    try:
+        completed = max(0, int(payload.get("completed") or 0))
+    except (TypeError, ValueError):
+        completed = 0
+    try:
+        total = max(0, int(payload.get("total") or 0))
+    except (TypeError, ValueError):
+        total = 0
+    if total:
+        completed = min(completed, total)
+    message = str(payload.get("message") or "").strip()[:200]
+    updated_job = None
+
+    def update(jobs):
+        nonlocal updated_job
+        jobs = jobs if isinstance(jobs, list) else []
+        result = []
+        for job in jobs:
+            item = dict(job)
+            if item.get("id") == job_id:
+                if created_by is not None and str(item.get("created_by") or "") != str(created_by or ""):
+                    result.append(item)
+                    continue
+                if item.get("status") != "running":
+                    updated_job = deepcopy(item)
+                    result.append(item)
+                    continue
+                now_value = now_fn()
+                item["progress_completed"] = completed
+                item["progress_total"] = total
+                item["progress_message"] = message
+                item["heartbeat_at"] = now_value
+                item["updated_at"] = now_value
+                updated_job = deepcopy(item)
+            result.append(item)
+        return result, deepcopy(updated_job)
+
+    return update_json(path, [], update)
 
 
 def record_persist_result(path, job_id, persist_result, now_fn):

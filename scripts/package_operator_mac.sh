@@ -77,6 +77,13 @@ if ! find "$crawler_root/ms-playwright" -path "*/chrome-mac*/*.app/Contents/MacO
   exit 1
 fi
 
+find "$crawler_root/ms-playwright" -type f \( \
+  -path "*/chrome-mac*/*.app/Contents/MacOS/*" -o \
+  -name chrome_crashpad_handler -o \
+  -name app_mode_loader -o \
+  -name web_app_shortcut_copier \
+\) -exec chmod +x {} \;
+
 timestamp="$(date +%Y%m%d-%H%M%S)"
 package_name="GEO-operator-worker-macos-arm64-$timestamp"
 artifact_root="$project_root/deploy_artifacts"

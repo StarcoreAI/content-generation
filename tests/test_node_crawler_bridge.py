@@ -398,6 +398,8 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             )
             self.assertNotIn("GEO_NODE_NEW_PAGE_PER_QUERY", captured["env"])
             self.assertEqual(captured["env"]["GEO_NODE_NEW_CONVERSATION_EVERY"], "1")
+            self.assertIn("--viewport", captured["cmd"])
+            self.assertEqual(captured["cmd"][captured["cmd"].index("--viewport") + 1], "1440x900")
             self.assertTrue((output_dir / "qwen-test.md").exists())
             self.assertEqual((output_dir / "node-stdout.log").read_text(encoding="utf-8"), "node stdout")
             self.assertEqual((output_dir / "node-stderr.log").read_text(encoding="utf-8"), "node stderr")

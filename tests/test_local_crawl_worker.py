@@ -34,6 +34,16 @@ class FakeCloudClient:
         return {"ok": True, "job": {"id": job_id, "status": payload["status"]}}
 
 
+class ProgressCloudClient(FakeCloudClient):
+    def __init__(self, jobs):
+        super().__init__(jobs)
+        self.progress_updates = []
+
+    def update_progress(self, job_id, payload):
+        self.progress_updates.append((job_id, payload))
+        return {"ok": True}
+
+
 class StatusCheckFailingCloudClient(FakeCloudClient):
     def is_job_canceled(self, job_id):
         raise RuntimeError("status check failed")
@@ -63,6 +73,18 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         client.request_json.assert_called_once_with(
             "GET",
             "/api/crawl_jobs?job_id=job%2F1",
+        )
+
+    def test_progress_update_targets_only_the_claimed_job(self):
+        client = local_crawl_worker.CloudClient("http://worker.example")
+        client.request_json = mock.Mock(return_value={"ok": True})
+
+        client.update_progress("job/1", {"completed": 2, "total": 5})
+
+        client.request_json.assert_called_once_with(
+            "POST",
+            "/api/crawl_jobs/job/1/progress",
+            {"completed": 2, "total": 5},
         )
 
     def test_default_platforms_include_kimi_before_doubao(self):
@@ -497,6 +519,38 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertEqual(calls[0]["kwargs"]["concurrency"], 2)
         self.assertEqual(calls[1]["kwargs"]["concurrency"], 2)
         self.assertEqual(login_calls, [("qwen", 77)])
+
+    def test_run_once_reports_node_question_progress(self):
+        cloud = ProgressCloudClient([{
+            "id": "job-1",
+            "platform": "qwen",
+            "questions": ["问题A", "问题B"],
+            "repeat_count": 1,
+        }])
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            kwargs["progress_callback"]({"completed": 1, "total": 2, "message": "running"})
+            return {
+                "ok": True,
+                "total": 2,
+                "success": 2,
+                "results": [
+                    {"ok": True, "question": question, "answer": "回答", "refs": []}
+                    for question in questions
+                ],
+            }
+
+        local_crawl_worker.run_once(
+            cloud,
+            worker_id="ops-laptop",
+            platforms=["qwen"],
+            run_crawler=fake_run_node_crawler,
+        )
+
+        self.assertEqual(cloud.progress_updates, [(
+            "job-1",
+            {"completed": 1, "total": 2, "message": "running"},
+        )])
 
     def test_run_job_recovers_verification_failure_with_one_browser_retry(self):
         calls = []

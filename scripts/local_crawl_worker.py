@@ -123,6 +123,13 @@ class CloudClient:
     def submit_result(self, job_id, payload):
         return self.request_json("POST", f"/api/crawl_jobs/{urllib.parse.quote(job_id)}/result", payload)
 
+    def update_progress(self, job_id, payload):
+        return self.request_json(
+            "POST",
+            f"/api/crawl_jobs/{urllib.parse.quote(job_id)}/progress",
+            payload,
+        )
+
 
 def parse_platforms(value):
     if not value or value.strip().lower() == "all":
@@ -217,6 +224,7 @@ def run_job(
     output_root=None,
     timeout_s=1800,
     crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
+    progress_callback=None,
 ):
     platform = job.get("platform", "")
     questions = expand_job_questions(job)
@@ -233,6 +241,7 @@ def run_job(
             timeout_s=timeout_s,
             output_dir=output_dir,
             concurrency=effective_concurrency,
+            progress_callback=progress_callback,
         )
         return {
             "status": "completed",
@@ -364,12 +373,23 @@ def run_once(
         if job_type == "login":
             payload = run_login_job(job, timeout_s=timeout_s)
         else:
+            update_progress = getattr(cloud_client, "update_progress", None)
+
+            def report_progress(progress):
+                if not callable(update_progress):
+                    return
+                try:
+                    update_progress(job["id"], progress)
+                except Exception as exc:
+                    log(f"failed to report crawl progress: {job.get('id')} / {exc}")
+
             payload = run_job(
                 job,
                 run_crawler=run_crawler,
                 output_root=output_root,
                 timeout_s=timeout_s,
                 crawler_concurrency=crawler_concurrency,
+                progress_callback=report_progress,
             )
         try:
             canceled = cloud_client.is_job_canceled(job["id"])

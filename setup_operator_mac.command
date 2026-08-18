@@ -48,7 +48,35 @@ GEO_NODE_CRAWLER_ROOT="$(python3 scripts/resolve_node_crawler_root.py)"
 export GEO_NODE_CRAWLER_ROOT
 echo "[GEO] crawler root: $GEO_NODE_CRAWLER_ROOT"
 clear_macos_quarantine "$GEO_NODE_CRAWLER_ROOT"
-find "$GEO_NODE_CRAWLER_ROOT/ms-playwright" -path "*/chrome-mac*/*.app/Contents/MacOS/*" -type f -exec chmod +x {} \; 2>/dev/null || true
+
+repair_packaged_chromium() {
+  local browser_root="$GEO_NODE_CRAWLER_ROOT/ms-playwright"
+  [[ -d "$browser_root" ]] || return
+
+  find "$browser_root" -type f \( \
+    -path "*/chrome-mac*/*.app/Contents/MacOS/*" -o \
+    -name chrome_crashpad_handler -o \
+    -name app_mode_loader -o \
+    -name web_app_shortcut_copier \
+  \) -exec chmod +x {} \; 2>/dev/null || true
+
+  while IFS= read -r -d '' framework; do
+    local versions="$framework/Versions"
+    local version=""
+    version="$(find "$versions" -mindepth 1 -maxdepth 1 -type d ! -name Current -print -quit 2>/dev/null || true)"
+    [[ -n "$version" ]] || continue
+    version="$(basename "$version")"
+
+    rm -f "$versions/Current"
+    ln -s "$version" "$versions/Current"
+    for name in "Google Chrome for Testing Framework" Helpers Libraries Resources; do
+      rm -f "$framework/$name"
+      ln -s "Versions/Current/$name" "$framework/$name"
+    done
+  done < <(find "$browser_root" -type d -name "Google Chrome for Testing Framework.framework" -print0 2>/dev/null)
+}
+
+repair_packaged_chromium
 
 if [[ ! -f "$GEO_NODE_CRAWLER_ROOT/package.json" ]]; then
   echo "[ERROR] Missing Node crawler package.json: $GEO_NODE_CRAWLER_ROOT/package.json"

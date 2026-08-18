@@ -354,8 +354,22 @@ def _stop_process(process):
             pass
 
 
-def _run_node_process(cmd, *, cwd, env, stdout_path, stderr_path, timeout_s, output_path, platform):
+def _run_node_process(
+    cmd,
+    *,
+    cwd,
+    env,
+    stdout_path,
+    stderr_path,
+    timeout_s,
+    output_path,
+    platform,
+    progress_callback=None,
+    progress_total=0,
+):
     start = time.monotonic()
+    last_progress = -1
+    last_heartbeat = 0.0
     with open(stdout_path, "w", encoding="utf-8", errors="replace") as stdout_log, \
             open(stderr_path, "w", encoding="utf-8", errors="replace") as stderr_log:
         process = subprocess.Popen(
@@ -369,6 +383,26 @@ def _run_node_process(cmd, *, cwd, env, stdout_path, stderr_path, timeout_s, out
             returncode = process.poll()
             if returncode is not None:
                 return subprocess.CompletedProcess(cmd, returncode)
+            now = time.monotonic()
+            if progress_callback and (now - last_heartbeat >= 10 or last_progress < 0):
+                text = ""
+                try:
+                    text = Path(stdout_path).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    pass
+                matches = re.findall(r"\[保存\]\s*已写入\s*(\d+)\s*条", text)
+                completed_count = int(matches[-1]) if matches else max(0, last_progress)
+                if completed_count != last_progress or now - last_heartbeat >= 10:
+                    try:
+                        progress_callback({
+                            "completed": completed_count,
+                            "total": max(0, int(progress_total or 0)),
+                            "message": "本地浏览器正在爬取",
+                        })
+                    except Exception:
+                        pass
+                    last_progress = completed_count
+                    last_heartbeat = now
             if _node_output_is_final(stdout_path, output_path, platform):
                 _stop_process(process)
                 return subprocess.CompletedProcess(cmd, 0)
@@ -398,6 +432,7 @@ def run_node_crawler(
     citations_limit=10,
     output_dir=None,
     concurrency=None,
+    progress_callback=None,
 ):
     """Run the external Node crawler CLI and normalize its Markdown output.
 
@@ -452,6 +487,8 @@ def run_node_crawler(
             str(query_file),
             "--citations-limit",
             str(citations_limit),
+            "--viewport",
+            os.environ.get("GEO_NODE_VIEWPORT", "1440x900"),
         ]
         if accounts_file:
             cmd.extend(["--accounts-file", accounts_file, "--concurrency", str(effective_concurrency)])
@@ -466,6 +503,8 @@ def run_node_crawler(
                 timeout_s=timeout_s,
                 output_path=output_path,
                 platform=platform,
+                progress_callback=progress_callback,
+                progress_total=len(questions),
             )
         except subprocess.TimeoutExpired as exc:
             raise NodeCrawlerBridgeError(

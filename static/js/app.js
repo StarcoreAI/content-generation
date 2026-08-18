@@ -50,6 +50,7 @@ let currentClientId = '';
 let distributionFavorites = [];
 let distributionFavoriteMatchJob = {status: 'idle'};
 let distributionFavoriteMatchTimer = null;
+let crawlJobProgressTimer = null;
 
 async function loadPublishPage() {
   const el = document.getElementById('publishDraftList');
@@ -1493,6 +1494,48 @@ function getGroupCrawlPlatformChoicesForJobs() {
   })));
 }
 
+function crawlJobProgressLabel(job) {
+  const completed = Number(job.progress_completed || 0);
+  const total = Number(job.progress_total || (job.questions || []).length || 0);
+  const names = {
+    pending: '等待本地 Worker',
+    running: '本地浏览器运行中',
+    completed: '已完成',
+    failed: '失败',
+    canceled: '已取消',
+    expired: '已过期'
+  };
+  const progress = total ? ` · ${completed}/${total} 题` : '';
+  const heartbeat = job.heartbeat_at ? ` · 心跳 ${job.heartbeat_at}` : '';
+  return `${names[job.status] || job.status || '未知状态'}${progress}${heartbeat}`;
+}
+
+async function pollCrawlJobProgress(jobIds) {
+  const jobs = await Promise.all(jobIds.map(async jobId => {
+    const resp = await fetch(`/api/crawl_jobs?job_id=${encodeURIComponent(jobId)}`);
+    const data = await resp.json();
+    return (data.jobs || [])[0] || null;
+  }));
+  let active = 0;
+  jobs.filter(Boolean).forEach(job => {
+    const statusEl = document.querySelector(`[data-crawl-job-status="${job.id}"]`);
+    if (statusEl) statusEl.textContent = crawlJobProgressLabel(job);
+    if (job.status === 'pending' || job.status === 'running') active += 1;
+  });
+  if (!active && crawlJobProgressTimer) {
+    clearInterval(crawlJobProgressTimer);
+    crawlJobProgressTimer = null;
+  }
+}
+
+function startCrawlJobProgressPolling(jobIds) {
+  if (crawlJobProgressTimer) clearInterval(crawlJobProgressTimer);
+  pollCrawlJobProgress(jobIds).catch(() => {});
+  crawlJobProgressTimer = setInterval(() => {
+    pollCrawlJobProgress(jobIds).catch(() => {});
+  }, 3000);
+}
+
 async function enqueueGroupCrawlJobs() {
   if (!currentClientId) { toast('请先选择客户','err'); return; }
   if (!currentGroupId) { toast('请先打开问题组','err'); return; }
@@ -1540,12 +1583,15 @@ async function enqueueGroupCrawlJobs() {
         <div style="font-weight:900;color:var(--text);margin-bottom:6px">本地 worker 任务已创建</div>
         ${jobs.map(({platform, job}) => `
           <div style="display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--border2);padding:6px 0">
-            <span>${escHtml(platform.name)} · ${escHtml(job.id)}</span>
+            <span>${escHtml(platform.name)} · ${escHtml(job.id)}<br><small data-crawl-job-status="${escHtml(job.id)}">${escHtml(crawlJobProgressLabel(job))}</small></span>
             <button class="btn btn-danger btn-sm" onclick="cancelCrawlJob('${escHtml(job.id)}')">取消</button>
           </div>`).join('')}
         ${errors.length ? `<div style="color:var(--red);margin-top:8px">${errors.map(escHtml).join('<br>')}</div>` : ''}
       </div>`;
-    if (jobs.length) toast('本地 worker 任务已创建');
+    if (jobs.length) {
+      startCrawlJobProgressPolling(jobs.map(({job}) => job.id));
+      toast('本地 worker 任务已创建');
+    }
   } catch(e) {
     toast('创建任务失败：' + e.message, 'err');
     document.getElementById('grpCrawlStatus').textContent = '创建任务失败';

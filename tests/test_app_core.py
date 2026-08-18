@@ -2628,6 +2628,18 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(empty_claim.status_code, 200)
             self.assertFalse(empty_claim.get_json()["job"])
 
+            progress_response = self.client.post(
+                f"/api/crawl_jobs/{created['job']['id']}/progress",
+                json={"completed": 1, "total": 4, "message": "本地浏览器正在爬取"},
+            )
+            self.assertEqual(progress_response.status_code, 200)
+            progress_job = progress_response.get_json()["job"]
+            self.assertEqual(progress_job["status"], "running")
+            self.assertEqual(progress_job["progress_completed"], 1)
+            self.assertEqual(progress_job["progress_total"], 4)
+            self.assertEqual(progress_job["progress_message"], "本地浏览器正在爬取")
+            self.assertTrue(progress_job["heartbeat_at"])
+
             result_response = self.client.post(f"/api/crawl_jobs/{created['job']['id']}/result", json={
                 "status": "completed",
                 "summary": {"total": 2, "success": 2},

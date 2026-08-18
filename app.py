@@ -4517,6 +4517,20 @@ def finish_crawl_job_api(job_id):
     return jsonify({"ok": True, "job": job, "persisted": persisted})
 
 
+@app.route("/api/crawl_jobs/<job_id>/progress", methods=["POST"])
+def update_crawl_job_progress_api(job_id):
+    job = crawl_job_store.update_job_progress(
+        F_CRAWL_JOBS,
+        job_id,
+        request.json or {},
+        now_str,
+        created_by=current_crawl_job_worker_owner_filter(),
+    )
+    if not job:
+        return jsonify({"error": "job_not_found"}), 404
+    return jsonify({"ok": True, "job": job})
+
+
 @app.route("/api/platform/crawl", methods=["POST"])
 def platform_crawl():
     payload = request.get_json(silent=True) or {}
