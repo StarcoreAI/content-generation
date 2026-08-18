@@ -49,6 +49,30 @@ export GEO_NODE_CRAWLER_ROOT
 echo "[GEO] crawler root: $GEO_NODE_CRAWLER_ROOT"
 clear_macos_quarantine "$GEO_NODE_CRAWLER_ROOT"
 
+install_packaged_chromium_archive() {
+  local browser_root="$GEO_NODE_CRAWLER_ROOT/ms-playwright"
+  local archive=""
+  archive="$(find "$browser_root" -type f -name chrome-mac-arm64.zip -print -quit 2>/dev/null || true)"
+  [[ -n "$archive" ]] || return
+
+  local chromium_root="$(dirname "$archive")"
+  local extract_root="$chromium_root/.chrome-mac-arm64.extracting-$$"
+  local extracted="$extract_root/chrome-mac-arm64"
+  local target="$chromium_root/chrome-mac-arm64"
+  echo "[GEO] installing packaged macOS Chromium with the system archive tool..."
+  rm -rf "$extract_root"
+  mkdir -p "$extract_root"
+  ditto -x -k "$archive" "$extract_root"
+  if [[ ! -x "$extracted/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing" ]]; then
+    echo "[ERROR] Packaged macOS Chromium archive is incomplete or damaged: $archive"
+    rm -rf "$extract_root"
+    exit 1
+  fi
+  rm -rf "$target"
+  mv "$extracted" "$target"
+  rm -rf "$extract_root"
+}
+
 repair_packaged_chromium() {
   local browser_root="$GEO_NODE_CRAWLER_ROOT/ms-playwright"
   [[ -d "$browser_root" ]] || return
@@ -67,15 +91,20 @@ repair_packaged_chromium() {
     [[ -n "$version" ]] || continue
     version="$(basename "$version")"
 
-    rm -f "$versions/Current"
-    ln -s "$version" "$versions/Current"
+    if [[ ! -L "$versions/Current" ]]; then
+      rm -f "$versions/Current"
+      ln -s "$version" "$versions/Current"
+    fi
     for name in "Google Chrome for Testing Framework" Helpers Libraries Resources; do
-      rm -f "$framework/$name"
-      ln -s "Versions/Current/$name" "$framework/$name"
+      if [[ ! -L "$framework/$name" ]]; then
+        rm -f "$framework/$name"
+        ln -s "Versions/Current/$name" "$framework/$name"
+      fi
     done
   done < <(find "$browser_root" -type d -name "Google Chrome for Testing Framework.framework" -print0 2>/dev/null)
 }
 
+install_packaged_chromium_archive
 repair_packaged_chromium
 
 if [[ ! -f "$GEO_NODE_CRAWLER_ROOT/package.json" ]]; then
