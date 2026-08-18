@@ -32,6 +32,21 @@ class MacChromiumArchiveSetupTests(unittest.TestCase):
         self.assertIn('if [[ ! -L "$versions/Current" ]]', script)
         self.assertIn('if [[ ! -L "$framework/$name" ]]', script)
 
+    def test_setup_repairs_windows_flattened_playwright_tools(self):
+        path = os.path.join(ROOT, "setup_operator_mac.command")
+        with open(path, "r", encoding="utf-8") as script_file:
+            script = script_file.read()
+
+        self.assertIn('chmod +x "$PACKAGED_NODE_BIN/node"', script)
+        self.assertIn("repair_packaged_playwright_tools", script)
+        self.assertIn("-name ffmpeg-mac -exec chmod +x", script)
+        self.assertIn("for tool in playwright playwright-core", script)
+        self.assertIn('ln -s "../$tool/cli.js" "$bin_dir/$tool"', script)
+        self.assertIn(
+            "repair_packaged_chromium\nrepair_packaged_playwright_tools",
+            script,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

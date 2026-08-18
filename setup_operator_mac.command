@@ -16,6 +16,9 @@ clear_macos_quarantine() {
 clear_macos_quarantine "$(pwd)"
 
 PACKAGED_NODE_BIN="$(pwd)/runtime/node/bin"
+if [[ -f "$PACKAGED_NODE_BIN/node" ]]; then
+  chmod +x "$PACKAGED_NODE_BIN/node"
+fi
 if [[ -x "$PACKAGED_NODE_BIN/node" ]]; then
   export PATH="$PACKAGED_NODE_BIN:$PATH"
 fi
@@ -104,8 +107,25 @@ repair_packaged_chromium() {
   done < <(find "$browser_root" -type d -name "Google Chrome for Testing Framework.framework" -print0 2>/dev/null)
 }
 
+repair_packaged_playwright_tools() {
+  local browser_root="$GEO_NODE_CRAWLER_ROOT/ms-playwright"
+  local bin_dir="$GEO_NODE_CRAWLER_ROOT/node_modules/.bin"
+  local tool=""
+
+  find "$browser_root" -type f -name ffmpeg-mac -exec chmod +x {} \; 2>/dev/null || true
+
+  mkdir -p "$bin_dir"
+  for tool in playwright playwright-core; do
+    if [[ -f "$GEO_NODE_CRAWLER_ROOT/node_modules/$tool/cli.js" ]]; then
+      rm -f "$bin_dir/$tool"
+      ln -s "../$tool/cli.js" "$bin_dir/$tool"
+    fi
+  done
+}
+
 install_packaged_chromium_archive
 repair_packaged_chromium
+repair_packaged_playwright_tools
 
 if [[ ! -f "$GEO_NODE_CRAWLER_ROOT/package.json" ]]; then
   echo "[ERROR] Missing Node crawler package.json: $GEO_NODE_CRAWLER_ROOT/package.json"
