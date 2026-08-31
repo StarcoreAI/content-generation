@@ -6,6 +6,7 @@ from unittest import mock
 from pathlib import Path
 
 from scripts import local_crawl_worker
+from services.node_crawler_bridge import NodeCrawlerStopped
 
 
 class FakeCloudClient:
@@ -44,9 +45,22 @@ class ProgressCloudClient(FakeCloudClient):
         return {"ok": True}
 
 
+class CancelOnProgressCloudClient(FakeCloudClient):
+    def __init__(self, jobs):
+        super().__init__(jobs, canceled_jobs={job["id"] for job in jobs})
+
+    def update_progress(self, job_id, payload):
+        return {"ok": True, "job": {"id": job_id, "status": "canceled"}}
+
+
 class StatusCheckFailingCloudClient(FakeCloudClient):
     def is_job_canceled(self, job_id):
         raise RuntimeError("status check failed")
+
+
+class ExpiredAfterCrawlCloudClient(FakeCloudClient):
+    def get_job_status(self, job_id):
+        return "expired"
 
 
 class FlakySubmitCloudClient(FakeCloudClient):
@@ -86,6 +100,14 @@ class LocalCrawlWorkerTests(unittest.TestCase):
             "/api/crawl_jobs/job/1/progress",
             {"completed": 2, "total": 5},
         )
+
+    def test_job_status_returns_server_status(self):
+        client = local_crawl_worker.CloudClient("http://worker.example")
+        client.request_json = mock.Mock(return_value={
+            "jobs": [{"id": "job/1", "status": "expired"}]
+        })
+
+        self.assertEqual(client.get_job_status("job/1"), "expired")
 
     def test_default_platforms_include_kimi_before_doubao(self):
         self.assertEqual(
@@ -414,6 +436,123 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertTrue(worked)
         self.assertEqual(len(calls), 1)
         self.assertEqual(cloud.submitted, [])
+
+    def test_run_once_skips_submit_when_job_expired_after_crawl(self):
+        cloud = ExpiredAfterCrawlCloudClient([
+            {"id": "job-1", "platform": "qwen", "questions": ["问题A"], "repeat_count": 1}
+        ])
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            return {
+                "ok": True,
+                "total": 1,
+                "success": 1,
+                "results": [{"ok": True, "question": "问题A", "answer": "回答", "refs": []}],
+            }
+
+        worked = local_crawl_worker.run_once(
+            cloud,
+            worker_id="ops-laptop",
+            platforms=["qwen"],
+            run_crawler=fake_run_node_crawler,
+        )
+
+        self.assertTrue(worked)
+        self.assertEqual(cloud.submitted, [])
+
+    def test_run_once_stops_crawler_when_progress_reports_canceled_job(self):
+        cloud = CancelOnProgressCloudClient([{
+            "id": "job-1",
+            "platform": "qwen",
+            "questions": ["问题A"],
+            "repeat_count": 1,
+        }])
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            reason = kwargs["progress_callback"]({
+                "completed": 0,
+                "total": 1,
+                "message": "running",
+            })
+            self.assertEqual(reason, "server job status changed to canceled")
+            raise NodeCrawlerStopped(reason)
+
+        worked = local_crawl_worker.run_once(
+            cloud,
+            worker_id="ops-laptop",
+            platforms=["qwen"],
+            run_crawler=fake_run_node_crawler,
+        )
+
+        self.assertTrue(worked)
+        self.assertEqual(cloud.submitted, [])
+
+    def test_run_once_fails_and_releases_job_after_progress_stalls(self):
+        cloud = ProgressCloudClient([{
+            "id": "job-1",
+            "platform": "qwen",
+            "questions": ["问题A"],
+            "repeat_count": 1,
+        }])
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            reason = kwargs["progress_callback"]({
+                "completed": 0,
+                "total": 1,
+                "message": "running",
+            })
+            self.assertEqual(reason, "no completed question for 5 seconds")
+            raise NodeCrawlerStopped(reason)
+
+        with mock.patch.object(local_crawl_worker.time, "monotonic", side_effect=[100, 106]):
+            worked = local_crawl_worker.run_once(
+                cloud,
+                worker_id="ops-laptop",
+                platforms=["qwen"],
+                run_crawler=fake_run_node_crawler,
+                stalled_timeout_s=5,
+            )
+
+        self.assertTrue(worked)
+        self.assertEqual(len(cloud.submitted), 1)
+        self.assertEqual(cloud.submitted[0][1]["status"], "failed")
+        self.assertIn("no completed question for 5 seconds", cloud.submitted[0][1]["error"])
+
+    def test_newly_completed_question_resets_stalled_timeout(self):
+        cloud = ProgressCloudClient([{
+            "id": "job-1",
+            "platform": "qwen",
+            "questions": ["问题A", "问题B"],
+            "repeat_count": 1,
+        }])
+
+        def fake_run_node_crawler(platform, questions, **kwargs):
+            first_reason = kwargs["progress_callback"]({"completed": 0, "total": 2})
+            second_reason = kwargs["progress_callback"]({"completed": 1, "total": 2})
+            third_reason = kwargs["progress_callback"]({"completed": 1, "total": 2})
+            self.assertEqual([first_reason, second_reason, third_reason], ["", "", ""])
+            return {
+                "ok": True,
+                "total": 2,
+                "success": 2,
+                "results": [{"ok": True}, {"ok": True}],
+            }
+
+        with mock.patch.object(
+            local_crawl_worker.time,
+            "monotonic",
+            side_effect=[100, 104, 108, 112],
+        ):
+            worked = local_crawl_worker.run_once(
+                cloud,
+                worker_id="ops-laptop",
+                platforms=["qwen"],
+                run_crawler=fake_run_node_crawler,
+                stalled_timeout_s=5,
+            )
+
+        self.assertTrue(worked)
+        self.assertEqual(cloud.submitted[0][1]["status"], "completed")
 
     def test_run_once_still_submits_when_cancel_status_check_fails(self):
         cloud = StatusCheckFailingCloudClient([

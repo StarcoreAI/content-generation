@@ -17,6 +17,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from services.node_crawler_bridge import (
+    NodeCrawlerStopped,
     SUPPORTED_NODE_PLATFORMS,
     default_node_crawler_root,
     run_node_auth_preflight,
@@ -27,6 +28,7 @@ from services.node_crawler_bridge import (
 DEFAULT_BASE_URL = "http://127.0.0.1:18080"
 DEFAULT_PLATFORMS = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
 DEFAULT_CRAWLER_CONCURRENCY = 2
+DEFAULT_STALLED_TIMEOUT = 300
 LOGIN_RECOVERY_MARKERS = [
     "need_login",
     "cookie_expired",
@@ -108,12 +110,15 @@ class CloudClient:
         return payload.get("jobs") or []
 
     def is_job_canceled(self, job_id):
+        return self.get_job_status(job_id) == "canceled"
+
+    def get_job_status(self, job_id):
         query = urllib.parse.urlencode({"job_id": job_id})
         payload = self.request_json("GET", f"/api/crawl_jobs?{query}")
         for job in payload.get("jobs") or []:
             if job.get("id") == job_id:
-                return job.get("status") == "canceled"
-        return False
+                return str(job.get("status") or "")
+        return ""
 
     def claim_next(self, worker_id, platform):
         query = urllib.parse.urlencode({"worker_id": worker_id, "platform": platform})
@@ -258,6 +263,8 @@ def run_job(
         return crawl_once()
     except Exception as exc:
         first_error = str(exc)
+        if isinstance(exc, NodeCrawlerStopped):
+            log(f"{platform} crawler stopped: {first_error}")
         if is_login_recovery_error(first_error):
             log(f"{platform} login expired during crawl; opening manual login and retrying job once")
             login_payload = run_login(job, timeout_s=timeout_s)
@@ -357,6 +364,7 @@ def run_once(
     run_crawler=run_node_crawler,
     output_root=None,
     timeout_s=1800,
+    stalled_timeout_s=DEFAULT_STALLED_TIMEOUT,
     crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
 ):
     for platform in platforms:
@@ -374,14 +382,33 @@ def run_once(
             payload = run_login_job(job, timeout_s=timeout_s)
         else:
             update_progress = getattr(cloud_client, "update_progress", None)
+            last_completed = 0
+            last_progress_at = time.monotonic()
 
             def report_progress(progress):
-                if not callable(update_progress):
-                    return
+                nonlocal last_completed, last_progress_at
+                now = time.monotonic()
                 try:
-                    update_progress(job["id"], progress)
-                except Exception as exc:
-                    log(f"failed to report crawl progress: {job.get('id')} / {exc}")
+                    completed = max(0, int((progress or {}).get("completed") or 0))
+                except (TypeError, ValueError):
+                    completed = 0
+                if completed > last_completed:
+                    last_completed = completed
+                    last_progress_at = now
+                if not callable(update_progress):
+                    response = {}
+                else:
+                    try:
+                        response = update_progress(job["id"], progress) or {}
+                    except Exception as exc:
+                        response = {}
+                        log(f"failed to report crawl progress: {job.get('id')} / {exc}")
+                server_status = str(((response.get("job") or {}).get("status") or "")).strip()
+                if server_status and server_status != "running":
+                    return f"server job status changed to {server_status}"
+                if now - last_progress_at >= max(1, stalled_timeout_s):
+                    return f"no completed question for {max(1, stalled_timeout_s)} seconds"
+                return ""
 
             payload = run_job(
                 job,
@@ -392,12 +419,16 @@ def run_once(
                 progress_callback=report_progress,
             )
         try:
-            canceled = cloud_client.is_job_canceled(job["id"])
+            get_job_status = getattr(cloud_client, "get_job_status", None)
+            if callable(get_job_status):
+                server_status = get_job_status(job["id"])
+            else:
+                server_status = "canceled" if cloud_client.is_job_canceled(job["id"]) else "running"
         except Exception as exc:
-            canceled = False
-            log(f"failed to check cancellation state, submitting result anyway: {exc}")
-        if canceled:
-            log(f"job was canceled; skip submit: {job.get('id')}")
+            server_status = "running"
+            log(f"failed to check job state, submitting result anyway: {exc}")
+        if server_status and server_status != "running":
+            log(f"job is {server_status}; skip submit: {job.get('id')}")
             return True
         submit_result_with_retry(cloud_client, job["id"], payload)
         log(f"job submitted: {job.get('id')} / {payload['status']}")
@@ -412,6 +443,7 @@ def run_once_parallel(
     run_crawler=run_node_crawler,
     output_root=None,
     timeout_s=1800,
+    stalled_timeout_s=DEFAULT_STALLED_TIMEOUT,
     crawler_concurrency=DEFAULT_CRAWLER_CONCURRENCY,
 ):
     platforms = list(platforms or [])
@@ -427,6 +459,7 @@ def run_once_parallel(
             run_crawler=run_crawler,
             output_root=output_root,
             timeout_s=timeout_s,
+            stalled_timeout_s=stalled_timeout_s,
             crawler_concurrency=crawler_concurrency,
         )
 
@@ -455,6 +488,7 @@ def run_platform_loop(args, platform):
                 platforms=[platform],
                 output_root=Path("logs") / "local-worker",
                 timeout_s=args.timeout,
+                stalled_timeout_s=args.stalled_timeout,
                 crawler_concurrency=args.crawler_concurrency,
             )
         except Exception as exc:
@@ -482,6 +516,12 @@ def build_parser():
     parser.add_argument("--poll-interval", type=int, default=int(os.environ.get("GEO_WORKER_POLL_INTERVAL", "10")))
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("GEO_WORKER_CRAWL_TIMEOUT", "1800")))
     parser.add_argument(
+        "--stalled-timeout",
+        type=int,
+        default=positive_int(os.environ.get("GEO_WORKER_STALLED_TIMEOUT"), DEFAULT_STALLED_TIMEOUT),
+        help="stop a crawler after this many seconds without a newly completed question",
+    )
+    parser.add_argument(
         "--crawler-concurrency",
         type=int,
         default=positive_int(os.environ.get("GEO_WORKER_CRAWLER_CONCURRENCY"), DEFAULT_CRAWLER_CONCURRENCY),
@@ -506,6 +546,7 @@ def main(argv=None):
     log(f"cloud base url: {args.base_url}")
     log(f"local worker: {args.worker_id}; platforms: {', '.join(platforms)}")
     log(f"crawler concurrency per platform job: {args.crawler_concurrency}")
+    log(f"crawler stalled timeout: {args.stalled_timeout}s")
     if args.local_login_only:
         failed_platforms = []
         for platform in platforms:
@@ -552,6 +593,7 @@ def main(argv=None):
             platforms=platforms,
             output_root=output_root,
             timeout_s=args.timeout,
+            stalled_timeout_s=args.stalled_timeout,
             crawler_concurrency=args.crawler_concurrency,
         )
         return 0 if worked else 2
@@ -577,6 +619,7 @@ def main(argv=None):
             platforms=platforms,
             output_root=output_root,
             timeout_s=args.timeout,
+            stalled_timeout_s=args.stalled_timeout,
             crawler_concurrency=args.crawler_concurrency,
         )
         if args.once:

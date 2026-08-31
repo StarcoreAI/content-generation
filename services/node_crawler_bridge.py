@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import signal
 import shutil
 import subprocess
 import tempfile
@@ -14,6 +15,10 @@ SUPPORTED_NODE_PLATFORMS = {"doubao", "deepseek", "qwen", "yuanbao", "kimi", "we
 
 
 class NodeCrawlerBridgeError(RuntimeError):
+    pass
+
+
+class NodeCrawlerStopped(NodeCrawlerBridgeError):
     pass
 
 
@@ -343,6 +348,31 @@ def run_node_auth_preflight(
 def _stop_process(process):
     if process.poll() is not None:
         return
+    if os.name == "nt":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=10,
+            )
+            process.wait(timeout=5)
+            return
+        except Exception:
+            pass
+    else:
+        try:
+            os.killpg(os.getpgid(process.pid), signal.SIGTERM)
+            process.wait(timeout=5)
+            return
+        except Exception:
+            try:
+                os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                process.wait(timeout=5)
+                return
+            except Exception:
+                pass
     try:
         process.terminate()
         process.wait(timeout=5)
@@ -372,12 +402,18 @@ def _run_node_process(
     last_heartbeat = 0.0
     with open(stdout_path, "w", encoding="utf-8", errors="replace") as stdout_log, \
             open(stderr_path, "w", encoding="utf-8", errors="replace") as stderr_log:
+        popen_group_kwargs = (
+            {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+            if os.name == "nt"
+            else {"start_new_session": True}
+        )
         process = subprocess.Popen(
             cmd,
             cwd=cwd,
             env=env,
             stdout=stdout_log,
             stderr=stderr_log,
+            **popen_group_kwargs,
         )
         while True:
             returncode = process.poll()
@@ -393,14 +429,18 @@ def _run_node_process(
                 matches = re.findall(r"\[保存\]\s*已写入\s*(\d+)\s*条", text)
                 completed_count = int(matches[-1]) if matches else max(0, last_progress)
                 if completed_count != last_progress or now - last_heartbeat >= 10:
+                    stop_reason = ""
                     try:
-                        progress_callback({
+                        stop_reason = progress_callback({
                             "completed": completed_count,
                             "total": max(0, int(progress_total or 0)),
                             "message": "本地浏览器正在爬取",
                         })
                     except Exception:
                         pass
+                    if stop_reason:
+                        _stop_process(process)
+                        raise NodeCrawlerStopped(str(stop_reason))
                     last_progress = completed_count
                     last_heartbeat = now
             if _node_output_is_final(stdout_path, output_path, platform):
@@ -487,9 +527,10 @@ def run_node_crawler(
             str(query_file),
             "--citations-limit",
             str(citations_limit),
-            "--viewport",
-            os.environ.get("GEO_NODE_VIEWPORT", "1440x900"),
         ]
+        viewport = str(os.environ.get("GEO_NODE_VIEWPORT") or "").strip()
+        if viewport:
+            cmd.extend(["--viewport", viewport])
         if accounts_file:
             cmd.extend(["--accounts-file", accounts_file, "--concurrency", str(effective_concurrency)])
         stdout_path, stderr_path = _next_node_log_paths(output_path)

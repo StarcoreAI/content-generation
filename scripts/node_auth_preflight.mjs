@@ -65,7 +65,16 @@ const PLATFORM_AUTH_COOKIES = {
   deepseek: [],
   doubao: [{
     hosts: ["doubao.com", "bytedance.com"],
-    names: ["sessionid", "sessionid_ss", "sid_tt", "uid_tt"]
+    names: [
+      "sessionid",
+      "sessionid_ss",
+      "sid_tt",
+      "sid_guard",
+      "sid_ucp_v1",
+      "ssid_ucp_v1",
+      "uid_tt",
+      "uid_tt_ss"
+    ]
   }],
   kimi: [{ hosts: ["kimi.com", "moonshot.cn"], names: ["kimi-auth"] }],
   qwen: [{ hosts: ["qianwen.com"], names: ["tongyi_sso_ticket", "tongyi_sso_ticket_hash"] }],

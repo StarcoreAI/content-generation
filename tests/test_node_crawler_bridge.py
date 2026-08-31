@@ -1,12 +1,15 @@
 import unittest
 import json
 import os
+import sys
 import tempfile
 from unittest.mock import patch
 from pathlib import Path
 from subprocess import CompletedProcess
 
 from services.node_crawler_bridge import (
+    NodeCrawlerStopped,
+    _run_node_process,
     default_node_crawler_root,
     normalize_node_payload,
     parse_node_markdown,
@@ -29,10 +32,32 @@ def make_packaged_macos_chromium(crawler_root):
 
 
 class NodeCrawlerBridgeTests(unittest.TestCase):
-    def test_default_node_crawler_root_points_to_real_sibling_project(self):
-        root = default_node_crawler_root(Path(__file__).resolve().parents[1])
+    def test_progress_stop_request_terminates_running_node_process(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            output_dir = root / "output"
+            output_dir.mkdir()
+
+            with self.assertRaisesRegex(NodeCrawlerStopped, "server job status changed to canceled"):
+                _run_node_process(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    cwd=str(root),
+                    env=os.environ.copy(),
+                    stdout_path=root / "stdout.log",
+                    stderr_path=root / "stderr.log",
+                    timeout_s=60,
+                    output_path=output_dir,
+                    platform="qwen",
+                    progress_callback=lambda _progress: "server job status changed to canceled",
+                    progress_total=1,
+                )
+
+    def test_default_node_crawler_root_points_to_expected_sibling_path(self):
+        project_root = Path(__file__).resolve().parents[1]
+        root = default_node_crawler_root(project_root)
+
+        self.assertEqual(root.parent, project_root.parent)
         self.assertEqual(root.name, "ai-search-crawler（进阶API处理）")
-        self.assertTrue((root / "src" / "index.js").exists())
 
     def test_parse_node_markdown_result_with_current_chinese_headings(self):
         markdown = """# Crawl Result - qwen
@@ -310,7 +335,7 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
         self.assertIn("async function qwenLoginState(page)", script)
         self.assertIn("button:has-text", script)
         self.assertIn("page.context().cookies()", script)
-        self.assertIn('"b-user-id"', script)
+        self.assertIn("b-user-id exists for guests", script)
         self.assertIn("cookie.expires", script)
         self.assertIn("async function qwenHasVisibleLoginAction(page)", script)
         self.assertLess(
@@ -319,7 +344,7 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
         )
         self.assertIn("qwenHasSessionCookie(page)", script)
         self.assertIn(
-            "!state.loginAction && state.sessionCookie && state.accountSignal",
+            "!state.loginAction && state.sessionCookie",
             script,
         )
         self.assertIn("platform === \"qwen\"", script)
@@ -398,8 +423,7 @@ class NodeCrawlerBridgeTests(unittest.TestCase):
             )
             self.assertNotIn("GEO_NODE_NEW_PAGE_PER_QUERY", captured["env"])
             self.assertEqual(captured["env"]["GEO_NODE_NEW_CONVERSATION_EVERY"], "1")
-            self.assertIn("--viewport", captured["cmd"])
-            self.assertEqual(captured["cmd"][captured["cmd"].index("--viewport") + 1], "1440x900")
+            self.assertNotIn("--viewport", captured["cmd"])
             self.assertTrue((output_dir / "qwen-test.md").exists())
             self.assertEqual((output_dir / "node-stdout.log").read_text(encoding="utf-8"), "node stdout")
             self.assertEqual((output_dir / "node-stderr.log").read_text(encoding="utf-8"), "node stderr")

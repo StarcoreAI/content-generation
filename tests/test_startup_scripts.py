@@ -257,7 +257,8 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("arm64", setup)
         self.assertIn("node_modules/playwright/package.json", setup)
         self.assertIn("ms-playwright", setup)
-        self.assertIn("chrome-mac/Chromium.app", setup)
+        self.assertIn("chrome-mac-arm64", setup)
+        self.assertIn("Google Chrome for Testing.app", setup)
         self.assertIn("scripts/first_login_all_platforms_mac.command", setup)
         self.assertIn("chrome_crashpad_handler", setup)
         self.assertIn("Google Chrome for Testing Framework.framework", setup)
@@ -284,11 +285,11 @@ class StartupScriptTests(unittest.TestCase):
         script = read_text(os.path.join("scripts", "package_operator_mac.sh"))
 
         self.assertTrue(script.startswith("#!/usr/bin/env bash\n"))
-        self.assertIn("set -euo pipefail", script)
+        self.assertIn("set -Eeuo pipefail", script)
         self.assertIn("uname -m", script)
         self.assertIn("arm64", script)
         self.assertIn("scripts/resolve_node_crawler_root.py", script)
-        self.assertIn("npm install", script)
+        self.assertIn("npm ci --ignore-scripts", script)
         self.assertIn("PLAYWRIGHT_BROWSERS_PATH", script)
         self.assertIn("npx playwright install chromium", script)
         self.assertIn("GEO-operator-worker-macos-arm64", script)
@@ -306,7 +307,7 @@ class StartupScriptTests(unittest.TestCase):
         self.assertIn("setup_operator_mac.command", script)
         self.assertIn("start_local_crawl_worker.command", script)
         self.assertIn("stop_local_crawl_worker.command", script)
-        self.assertIn("zip -qry", script)
+        self.assertIn("ditto -c -k --sequesterRsrc --keepParent", script)
 
     def test_local_worker_launcher_always_prompts_credentials(self):
         script = read_text("start_local_crawl_worker.bat")
