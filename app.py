@@ -79,8 +79,8 @@ from scripts.run_material_reducer import choose_material_reducer_model
 app = Flask(__name__)
 app.secret_key = os.environ.get("GEO_SECRET_KEY", "dev-secret-key-change-before-deploy")
 APP_VERSION = "2.3"
-NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen", "kimi"}
-CLIENT_CONTRACT_PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
+NODE_CRAWLER_DEFAULT_PLATFORMS = {"doubao", "deepseek", "yuanbao", "qwen", "wenxin", "kimi"}
+CLIENT_CONTRACT_PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "wenxin", "kimi", "doubao"]
 crawl_platform_locks_guard = threading.Lock()
 crawl_platform_locks = {}
 content_batch_jobs_guard = threading.RLock()
@@ -386,7 +386,7 @@ def load_client_records(client_id, date=None, group_id=None, platform=None,
     """
     严格按 client_id 过滤爬取记录的唯一入口。
     client_id 为空时强制返回空列表，绝不读取全量数据，防止跨客户串数据。
-    platform: 可选，按来源平台过滤（doubao/deepseek/yuanbao/qwen），None=全部
+    platform: 可选，按来源平台过滤（doubao/deepseek/yuanbao/qwen/wenxin/kimi），None=全部
     """
     return record_store.load_client_records(
         F_RAW_RECORDS,
@@ -4221,6 +4221,7 @@ CRAWL_PLATFORMS = {
     "deepseek": {"name": "DeepSeek", "module": "deepseek_crawler", "url": "https://chat.deepseek.com/"},
     "yuanbao":  {"name": "元宝",     "module": "yuanbao_crawler",  "url": "https://yuanbao.tencent.com/chat"},
     "qwen":     {"name": "千问",     "module": "qwen_crawler",     "url": "https://tongyi.aliyun.com/qianwen"},
+    "wenxin":   {"name": "文心一言", "module": None,               "url": "https://wenxin.baidu.com/"},
     "kimi":     {"name": "Kimi",     "module": "kimi_crawler",     "url": "https://kimi.moonshot.cn"},
 }
 
@@ -4230,6 +4231,8 @@ def get_crawler_module(platform: str):
     cfg = CRAWL_PLATFORMS.get(platform)
     if not cfg:
         raise ValueError(f"不支持的平台: {platform}")
+    if not cfg.get("module"):
+        raise ValueError(f"平台 {platform} 仅支持通过本地 Node worker 爬取")
     return importlib.import_module(cfg["module"])
 
 # 全局进度队列（SSE推送用）
@@ -4242,6 +4245,11 @@ def platform_login():
     platform = d.get("platform", "doubao")
     if platform not in CRAWL_PLATFORMS:
         return jsonify({"error": f"不支持的平台: {platform}"}), 400
+    if not CRAWL_PLATFORMS[platform].get("module"):
+        return jsonify({
+            "error": "local_worker_required",
+            "message": "文心一言请通过本地 worker 补登录任务完成登录",
+        }), 400
 
     def do_login():
         import asyncio
@@ -4551,7 +4559,7 @@ def platform_crawl():
 def platform_crawl_impl():
     """
     多平台批量爬取（增强版）：
-    - 支持 doubao / deepseek / yuanbao / qwen 四个平台
+    - 支持 doubao / deepseek / yuanbao / qwen / wenxin / kimi 六个平台
     - 支持每题自定义爬取次数（repeat_count）
     - 爬取完自动AI分析并录入系统
     - 原始数据保存到每日文件

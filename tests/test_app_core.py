@@ -286,6 +286,7 @@ class CoreFunctionTests(unittest.TestCase):
             self.assertTrue(geo_app.should_use_node_crawler("deepseek"))
             self.assertTrue(geo_app.should_use_node_crawler("yuanbao"))
             self.assertTrue(geo_app.should_use_node_crawler("qwen"))
+            self.assertTrue(geo_app.should_use_node_crawler("wenxin"))
             self.assertTrue(geo_app.should_use_node_crawler("kimi"))
 
             os.environ["GEO_NODE_CRAWLER_PLATFORMS"] = "none"
@@ -1656,12 +1657,12 @@ class FlaskApiTests(unittest.TestCase):
                     "brand": "品牌A",
                     "industry": "汽车音响",
                     "goal": "提升提及率",
-                    "contract_platforms": ["qwen", "doubao", "bad"],
+                    "contract_platforms": ["qwen", "wenxin", "doubao", "bad"],
                 },
             )
             self.assertEqual(response.status_code, 200)
             client = response.get_json()["client"]
-            self.assertEqual(client["contract_platforms"], ["qwen", "doubao"])
+            self.assertEqual(client["contract_platforms"], ["qwen", "wenxin", "doubao"])
 
             update_response = self.client.put(
                 f"/api/clients/{client['id']}",
@@ -1678,7 +1679,7 @@ class FlaskApiTests(unittest.TestCase):
             self.assertEqual(response.status_code, 200)
             payload = response.get_json()
             platform_ids = {item["id"] for item in payload}
-            self.assertEqual(platform_ids, {"doubao", "deepseek", "yuanbao", "qwen", "kimi"})
+            self.assertEqual(platform_ids, {"doubao", "deepseek", "yuanbao", "qwen", "wenxin", "kimi"})
             self.assertTrue(all("logged_in" in item for item in payload))
             self.assertTrue(all("status" in item for item in payload))
             self.assertTrue(all("state_file_exists" in item for item in payload))

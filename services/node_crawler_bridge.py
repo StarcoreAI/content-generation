@@ -32,6 +32,23 @@ def _project_root():
     return Path(__file__).resolve().parents[1]
 
 
+def _node_adapter_override(platform):
+    override = _project_root() / "node_adapter_overrides" / f"{platform}AdapterOverride.mjs"
+    return override if override.exists() else None
+
+
+def _node_command(entry_path, platforms=()):
+    cmd = ["node"]
+    if isinstance(platforms, str):
+        platforms = [platforms]
+    for platform in dict.fromkeys(platforms or []):
+        override = _node_adapter_override(platform)
+        if override:
+            cmd.extend(["--import", override.resolve().as_uri()])
+    cmd.append(str(entry_path))
+    return cmd
+
+
 def _platform_state_path(platform, project_root=None):
     return Path(project_root or _project_root()) / "data" / f"{platform}_state.json"
 
@@ -310,9 +327,7 @@ def run_node_auth_preflight(
     if not script_path.exists():
         return {"ok": False, "status": "missing_probe", "message": f"Auth preflight not found: {script_path}"}
 
-    cmd = [
-        "node",
-        str(script_path),
+    cmd = _node_command(script_path, platforms) + [
         "--platforms",
         ",".join(platforms),
         "--crawler-root",
@@ -326,6 +341,7 @@ def run_node_auth_preflight(
     ]
     env = os.environ.copy()
     env["GEO_NODE_BRIDGE"] = "1"
+    env["GEO_NODE_CRAWLER_ROOT"] = str(root)
     _set_packaged_browser_path(env, root)
     try:
         completed = runner(
@@ -493,7 +509,13 @@ def run_node_crawler(
     with tempfile.TemporaryDirectory(prefix="geo-node-crawler-") as tmp:
         tmp_path = Path(tmp)
         query_file = tmp_path / "queries.txt"
-        output_path = Path(output_dir).resolve() if output_dir else tmp_path / "output"
+        if output_dir:
+            output_path = Path(output_dir)
+            if not output_path.is_absolute():
+                output_path = Path.cwd() / output_path
+            output_path = output_path.resolve()
+        else:
+            output_path = tmp_path / "output"
         output_path.mkdir(parents=True, exist_ok=True)
         query_file.write_text("\n".join(questions) + "\n", encoding="utf-8")
 
@@ -518,9 +540,8 @@ def run_node_crawler(
         )
         effective_concurrency = _effective_node_concurrency(platform, requested_concurrency, len(questions))
         accounts_file = _write_parallel_accounts_file(storage_state_path, tmp_path, effective_concurrency)
-        cmd = [
-            "node",
-            str(index_js),
+        env["GEO_NODE_CRAWLER_ROOT"] = str(root)
+        cmd = _node_command(index_js, platform) + [
             "--platform",
             platform,
             "--query-file",

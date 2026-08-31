@@ -26,7 +26,7 @@ from services.node_crawler_bridge import (
 
 
 DEFAULT_BASE_URL = "http://127.0.0.1:18080"
-DEFAULT_PLATFORMS = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
+DEFAULT_PLATFORMS = ["deepseek", "yuanbao", "qwen", "wenxin", "kimi", "doubao"]
 DEFAULT_CRAWLER_CONCURRENCY = 2
 DEFAULT_STALLED_TIMEOUT = 300
 LOGIN_RECOVERY_MARKERS = [

@@ -357,8 +357,8 @@ let currentPlatform = 'all';  // 数据页固定汇总全部平台
 let currentClientPlatforms = [];
 let recordGroupTrendPlatform = '';
 let groupPlatformMode = 'contract';
-const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
-const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];
+const CRAWL_PLATFORM_NAMES = {all:'全部平台', doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', wenxin:'文心一言', kimi:'Kimi'};
+const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'wenxin', 'kimi', 'doubao'];
 
 function sortCrawlPlatforms(platforms) {
   const rank = new Map(CRAWL_PLATFORM_ORDER.map((id, index) => [id, index]));
@@ -599,7 +599,7 @@ async function delClient(id) {
 
 // ── 平台重新登录 ──────────────────────────────────────
 async function platformLogin(platform) {
-  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', kimi:'Kimi'};
+  const names = {doubao:'豆包', deepseek:'DeepSeek', yuanbao:'元宝', qwen:'千问', wenxin:'文心一言', kimi:'Kimi'};
   const pName = platform.charAt(0).toUpperCase() + platform.slice(1);
   const btnId = `btnLogin${pName}`;
   const btn = document.getElementById(btnId);

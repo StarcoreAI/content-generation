@@ -96,10 +96,11 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertIn(
-            "const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'kimi', 'doubao'];",
+            "const CRAWL_PLATFORM_ORDER = ['deepseek', 'yuanbao', 'qwen', 'wenxin', 'kimi', 'doubao'];",
             html,
         )
         self.assertIn("kimi:'Kimi'", html)
+        self.assertIn("wenxin:'文心一言'", html)
         self.assertIn("function sortCrawlPlatforms(platforms)", html)
 
         job_choice_body = re.search(
@@ -147,7 +148,7 @@ class FrontendCrawlOrderTests(unittest.TestCase):
         html = read_frontend_source()
 
         self.assertIn("平台重新登录：", html)
-        for platform in ["doubao", "deepseek", "yuanbao", "qwen", "kimi"]:
+        for platform in ["doubao", "deepseek", "yuanbao", "qwen", "wenxin", "kimi"]:
             name = platform[:1].upper() + platform[1:]
             self.assertIn(f'id="btnLogin{name}"', html)
             self.assertIn(f"platformLogin('{platform}')", html)

@@ -407,6 +407,29 @@ class StartupScriptTests(unittest.TestCase):
 
             self.assertEqual(os.path.normcase(output), os.path.normcase(packaged_crawler))
 
+    def test_python_crawler_resolver_finds_crawler_one_directory_deep(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            package_root = os.path.join(tmp, "operator-package")
+            project_root = os.path.join(package_root, "geo_v2-pro")
+            scripts_dir = os.path.join(project_root, "scripts")
+            nested_crawler = os.path.join(package_root, "company", "ai-search-crawler-reference")
+
+            os.makedirs(scripts_dir)
+            os.makedirs(os.path.join(nested_crawler, "src", "adapters"))
+            with open(os.path.join(nested_crawler, "src", "adapters", "index.js"), "w", encoding="utf-8") as f:
+                f.write("export function getAdapter() {}\n")
+            shutil.copyfile(
+                os.path.join(ROOT, "scripts", "resolve_node_crawler_root.py"),
+                os.path.join(scripts_dir, "resolve_node_crawler_root.py"),
+            )
+
+            output = subprocess.check_output(
+                [os.sys.executable, os.path.join(scripts_dir, "resolve_node_crawler_root.py")],
+                text=True,
+            ).strip()
+
+            self.assertEqual(os.path.normcase(output), os.path.normcase(nested_crawler))
+
     def test_local_worker_stop_launcher_targets_only_crawler_processes(self):
         script = read_text("stop_local_crawl_worker.bat")
         stopper = read_text(os.path.join("scripts", "stop_local_crawl_worker.ps1"))

@@ -249,6 +249,7 @@ async def get_refs(page):
         # 点击「源」按钮展开引用面板
         clicked = False
         for sel in [
+            '[class*="ToolbarSearchGuid_searchGuidTool__"]',
             '[class*="ToolbarSearchGuid_source"]',
             'span:has-text("源")',
             'button:has-text("源")',
@@ -274,27 +275,50 @@ async def get_refs(page):
             except:
                 pass
 
-        # 用真实 class 提取引用卡片
+        # 同时兼容侧栏条目、data-url 卡片和卡片内真实链接。
         raw = await page.evaluate("""() => {
             const results = [];
-            // 直接找 hyc-common-markdown__ref_card，data-url 就是链接
-            const cards = document.querySelectorAll('[class*="hyc-common-markdown__ref_card"]');
-            for (const card of cards) {
-                // 跳过子元素（只要最外层容器）
-                if (card.closest('[class*="hyc-common-markdown__ref_card"]') !== card) continue;
+            const compact = value => String(value || '').replace(/\s+/g, ' ').trim();
+            const add = (url, title) => {
+                const cleanUrl = compact(url);
+                if (!/^https?:\/\//i.test(cleanUrl)) return;
+                const cleanTitle = compact(title) || cleanUrl;
+                results.push({title: cleanTitle.slice(0, 120), href: cleanUrl});
+            };
 
-                const url = card.getAttribute('data-url') || '';
-                // 标题：h4 > span
+            const items = document.querySelectorAll(
+                '#search-guide-tool .agent-dialogue-references__item, '
+                + '.agent-dialogue-references__item'
+            );
+            for (const item of items) {
+                const title = compact(
+                    item.querySelector('h4 span')?.textContent
+                    || item.querySelector('h4')?.textContent
+                    || item.querySelector('[class*="title"]')?.textContent
+                );
+                const card = item.querySelector('[class*="hyc-common-markdown__ref_card"][data-url], [data-url]');
+                const anchor = item.querySelector('a[href^="http"]');
+                add(card?.getAttribute('data-url') || anchor?.getAttribute('href'), title);
+            }
+
+            const cards = document.querySelectorAll(
+                '#search-guide-tool [class*="hyc-common-markdown__ref_card"][data-url], '
+                + '[class*="hyc-common-markdown__ref_card"][data-url]'
+            );
+            for (const card of cards) {
                 const titleEl = card.querySelector(
                     'h4[class*="ref_card-title"] span, [class*="ref_card-title"] span, h4 span'
                 );
                 const title = (titleEl ? titleEl.innerText : card.querySelector('h4')?.innerText || '').trim();
-
-                if (!title || title.length < 4) continue;
-                results.push({ title: title.slice(0, 120), href: url });
-                if (results.length >= 15) break;
+                add(card.getAttribute('data-url'), title);
             }
-            return results;
+
+            const seen = new Set();
+            return results.filter(item => {
+                if (seen.has(item.href)) return false;
+                seen.add(item.href);
+                return true;
+            }).slice(0, 15);
         }""")
 
         for i, item in enumerate(raw):

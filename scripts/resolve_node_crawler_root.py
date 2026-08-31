@@ -42,6 +42,10 @@ def main():
         for child in base.glob("ai-search-crawler*"):
             if child.is_dir():
                 add_candidate(candidates, seen, child)
+        # Developer workspaces often group crawler variants under one company/project folder.
+        for child in base.glob("*/ai-search-crawler*"):
+            if child.is_dir():
+                add_candidate(candidates, seen, child)
 
     add_candidate(candidates, seen, os.environ.get("GEO_NODE_CRAWLER_ROOT"))
 

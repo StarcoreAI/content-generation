@@ -1,6 +1,8 @@
 import unittest
 import json
 import os
+import shutil
+import subprocess
 import sys
 import tempfile
 from unittest.mock import patch
@@ -9,6 +11,7 @@ from subprocess import CompletedProcess
 
 from services.node_crawler_bridge import (
     NodeCrawlerStopped,
+    _node_command,
     _run_node_process,
     default_node_crawler_root,
     normalize_node_payload,
@@ -32,6 +35,122 @@ def make_packaged_macos_chromium(crawler_root):
 
 
 class NodeCrawlerBridgeTests(unittest.TestCase):
+    def test_node_command_loads_all_managed_platform_overrides_for_auth_preflight(self):
+        cmd = _node_command(Path("probe.mjs"), ["deepseek", "yuanbao", "wenxin"])
+
+        self.assertEqual(cmd.count("--import"), 2)
+        imports = [cmd[index + 1] for index, value in enumerate(cmd) if value == "--import"]
+        self.assertTrue(any("yuanbaoAdapterOverride.mjs" in value for value in imports))
+        self.assertTrue(any("wenxinAdapterOverride.mjs" in value for value in imports))
+
+    def test_wenxin_managed_override_loads_new_site_adapter_logic(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js is required for the adapter override integration test")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            crawler_root = Path(tmp) / "crawler"
+            adapter_dir = crawler_root / "src" / "adapters"
+            adapter_dir.mkdir(parents=True)
+            (crawler_root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            (adapter_dir / "baseAdapter.js").write_text(
+                "export class BaseAdapter {\n"
+                "  constructor(name, baseUrl) { this.name = name; this.baseUrl = baseUrl; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            (adapter_dir / "wenxinAdapter.js").write_text(
+                "import { BaseAdapter } from './baseAdapter.js';\n"
+                "export class WenxinAdapter extends BaseAdapter {\n"
+                "  constructor() {\n"
+                "    super('wenxin', 'https://yiyan.baidu.com/');\n"
+                "    this.answerCountBeforeSubmitByPage = new WeakMap();\n"
+                "    this.submittedPromptByPage = new WeakMap();\n"
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            entry = crawler_root / "src" / "verify.js"
+            entry.write_text(
+                "import { WenxinAdapter } from './adapters/wenxinAdapter.js';\n"
+                "const adapter = new WenxinAdapter();\n"
+                "if (!adapter.extractLatestAnswer || !adapter.openLatestSourceSidebar) process.exit(2);\n"
+                "if (!adapter.startNewConversation.toString().includes('开启新对话')) process.exit(3);\n"
+                "const visited = [];\n"
+                "await adapter.gotoHome({\n"
+                "  goto: async (url) => visited.push(url),\n"
+                "  waitForLoadState: async () => {}\n"
+                "});\n"
+                "if (adapter.baseUrl !== 'https://wenxin.baidu.com/') process.exit(4);\n"
+                "if (visited[0] !== 'https://wenxin.baidu.com/') process.exit(5);\n"
+                "console.log('wenxin-override-ready');\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["GEO_NODE_CRAWLER_ROOT"] = str(crawler_root)
+            completed = subprocess.run(
+                _node_command(entry, "wenxin"),
+                cwd=str(crawler_root),
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("[wenxin] Managed adapter override loaded", completed.stdout)
+            self.assertIn("wenxin-override-ready", completed.stdout)
+
+    def test_yuanbao_managed_override_loads_before_external_entry(self):
+        if not shutil.which("node"):
+            self.skipTest("Node.js is required for the adapter override integration test")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            crawler_root = Path(tmp) / "crawler"
+            adapter_dir = crawler_root / "src" / "adapters"
+            adapter_dir.mkdir(parents=True)
+            (crawler_root / "package.json").write_text('{"type":"module"}', encoding="utf-8")
+            (adapter_dir / "yuanbaoAdapter.js").write_text(
+                "export class YuanbaoAdapter {\n"
+                "  normalizeText(value) { return String(value || ''); }\n"
+                "  async getLatestAnswerText() { return 'answer'; }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            entry = crawler_root / "src" / "verify.js"
+            entry.write_text(
+                "import { YuanbaoAdapter } from './adapters/yuanbaoAdapter.js';\n"
+                "const adapter = new YuanbaoAdapter();\n"
+                "if (!adapter.startNewConversation || !adapter.openReferenceSidebar) process.exit(2);\n"
+                "if (!adapter.extractLatestAnswer) process.exit(3);\n"
+                "adapter.openReferenceSidebar = async () => {};\n"
+                "const result = await adapter.extractLatestAnswer({\n"
+                "  evaluate: async () => [\n"
+                "    {title: 'A very long citation title', text: 'source', url: 'https://example.com/a'},\n"
+                "    {title: 'A', text: 'A', url: 'https://example.com/a'}\n"
+                "  ]\n"
+                "});\n"
+                "if (result.answer !== 'answer' || result.citations.length !== 1) process.exit(4);\n"
+                "if (result.citations[0].title !== 'A') process.exit(5);\n"
+                "console.log('override-ready');\n",
+                encoding="utf-8",
+            )
+            env = os.environ.copy()
+            env["GEO_NODE_CRAWLER_ROOT"] = str(crawler_root)
+            completed = subprocess.run(
+                _node_command(entry, "yuanbao"),
+                cwd=str(crawler_root),
+                env=env,
+                text=True,
+                capture_output=True,
+                timeout=15,
+            )
+
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertIn("[yuanbao] Managed adapter override loaded", completed.stdout)
+            self.assertIn("override-ready", completed.stdout)
+            self.assertIn("--import", _node_command(entry, "yuanbao"))
+            self.assertNotIn("--import", _node_command(entry, "qwen"))
+
     def test_progress_stop_request_terminates_running_node_process(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

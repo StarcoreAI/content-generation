@@ -9,6 +9,7 @@ AI_PLATFORM_NAMES = {
     "deepseek": "DeepSeek",
     "yuanbao": "元宝",
     "qwen": "千问",
+    "wenxin": "文心一言",
     "kimi": "Kimi",
     "doubao": "豆包",
 }

@@ -109,10 +109,10 @@ class LocalCrawlWorkerTests(unittest.TestCase):
 
         self.assertEqual(client.get_job_status("job/1"), "expired")
 
-    def test_default_platforms_include_kimi_before_doubao(self):
+    def test_default_platforms_include_wenxin_and_keep_doubao_last(self):
         self.assertEqual(
             local_crawl_worker.parse_platforms("all"),
-            ["deepseek", "yuanbao", "qwen", "kimi", "doubao"],
+            ["deepseek", "yuanbao", "qwen", "wenxin", "kimi", "doubao"],
         )
 
     def test_default_worker_id_uses_hostname_when_computername_is_missing(self):
@@ -312,7 +312,7 @@ class LocalCrawlWorkerTests(unittest.TestCase):
         self.assertEqual(code, 0)
         check_environment.assert_called_once()
         run_auth.assert_called_once()
-        self.assertEqual(run_auth.call_args.args[0], ["deepseek", "yuanbao", "qwen", "kimi", "doubao"])
+        self.assertEqual(run_auth.call_args.args[0], ["deepseek", "yuanbao", "qwen", "wenxin", "kimi", "doubao"])
         self.assertEqual(run_auth.call_args.kwargs["mode"], "soft")
 
     def test_main_check_can_run_manual_login_preflight(self):

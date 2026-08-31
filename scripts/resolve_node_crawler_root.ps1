@@ -45,6 +45,11 @@ foreach ($base in $searchBases) {
     }
     Get-ChildItem -LiteralPath $base -Directory -Filter "ai-search-crawler*" -ErrorAction SilentlyContinue |
         ForEach-Object { Add-Candidate $_.FullName }
+    Get-ChildItem -LiteralPath $base -Directory -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            Get-ChildItem -LiteralPath $_.FullName -Directory -Filter "ai-search-crawler*" -ErrorAction SilentlyContinue
+        } |
+        ForEach-Object { Add-Candidate $_.FullName }
 }
 
 Add-Candidate $env:GEO_NODE_CRAWLER_ROOT

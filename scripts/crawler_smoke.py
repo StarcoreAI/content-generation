@@ -12,7 +12,7 @@ from pathlib import Path
 DEFAULT_BASE_URL = "http://127.0.0.1:5000"
 DEFAULT_CLIENT_ID = "20260701152718423132"
 DEFAULT_GROUP_ID = "20260701152826201973"
-PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "kimi", "doubao"]
+PLATFORM_ORDER = ["deepseek", "yuanbao", "qwen", "wenxin", "kimi", "doubao"]
 
 
 def timestamp():
@@ -169,7 +169,7 @@ def build_arg_parser():
     parser.add_argument("--client-id", default=DEFAULT_CLIENT_ID)
     parser.add_argument("--group-id", default=DEFAULT_GROUP_ID)
     parser.add_argument("--question-index", type=int, default=1)
-    parser.add_argument("--platform", default="qwen", help="qwen, deepseek, yuanbao, doubao, or all")
+    parser.add_argument("--platform", default="qwen", help="qwen, deepseek, yuanbao, wenxin, kimi, doubao, or all")
     parser.add_argument("--repeat-count", type=int, default=1)
     parser.add_argument("--parallel", type=int, default=1)
     parser.add_argument("--timeout", type=int, default=1800)
